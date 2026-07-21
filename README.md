@@ -201,8 +201,13 @@ result_limit: 4000               # 超限结果写临时文件，仅回路径+�
 | 413 | `request_too_large` | 请求体超限 |
 | 415 | `invalid_request` | Content-Type 不是 application/json |
 | 429 | `server_busy` | 全局并发已满（附 Retry-After） |
-| 502 | — / `image_upload_failed` | Dify 调用失败 / 图片预上传失败 |
+| 4xx | （透传上游 code） | Dify 返回 4xx 时原状态码与错误码透传（如 400 `invalid_param`），消息带 `[Dify]` 前缀 |
+| 502 | `upstream_error` 等 / `image_upload_failed` | Dify 5xx 或网络错误 / 图片预上传失败 |
 | 500 | `internal` | 网关内部错误 |
+
+流式传输中途失败（SSE 已开始后）：流内发送 OpenAI 风格错误帧
+`data: {"error":{"code":"upstream_error",...}}` 且**不发** `data: [DONE]`，
+与 OpenAI 官方行为一致（SDK 据此抛错）。
 
 ## 合规提示与使用红线
 

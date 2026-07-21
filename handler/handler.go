@@ -328,15 +328,38 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 	wfReq.ResponseMode = "streaming"
 	events, errCh := client.StreamWorkflow(wfReq)
 
-	// If Dify returned an immediate HTTP error (non-200, connection refused,
-	// etc.) it is already in the buffered errCh.  Report it as JSON before
-	// committing to SSE response headers.
+	// Wait for the FIRST event or an error before committing to SSE
+	// response headers.  This is a blocking wait (not a racy non-blocking
+	// select): an immediate HTTP error from Dify (non-200, connection
+	// refused, …) must be reported as plain JSON with a real status code,
+	// which is impossible once the SSE headers are sent.
+	var firstEvt *dify.StreamEvent
 	select {
+	case evt, ok := <-events:
+		if ok {
+			firstEvt = &evt
+		}
+		// !ok: stream closed without events; fall through — the error
+		// (if any) is picked up from errCh below.
 	case err := <-errCh:
-		g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error")
-		g.writeDifyError(w, err)
-		return
-	default:
+		if err != nil {
+			g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error")
+			g.writeDifyError(w, err)
+			return
+		}
+	}
+	if firstEvt == nil {
+		// Channel closed with no events: check for a late error, else treat
+		// as an empty-but-successful stream.
+		select {
+		case err := <-errCh:
+			if err != nil {
+				g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error")
+				g.writeDifyError(w, err)
+				return
+			}
+		default:
+		}
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -352,27 +375,54 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 
 	conv := translator.NewStreamConverter(modelName)
 
+	if firstEvt != nil {
+		if msg := conv.Convert(*firstEvt); msg != nil {
+			fmt.Fprint(w, msg.Data)
+			flusher.Flush()
+		}
+	}
 	for evt := range events {
 		if msg := conv.Convert(evt); msg != nil {
 			fmt.Fprint(w, msg.Data)
 			flusher.Flush()
 		}
 	}
-	for _, msg := range conv.Finalize() {
-		fmt.Fprint(w, msg.Data)
-		flusher.Flush()
-	}
-	fmt.Fprint(w, "data: [DONE]\n\n")
-	flusher.Flush()
 
+	// Drain errCh after the event channel closes: a transport-level failure
+	// (connection drop, SSE scan error) surfaces here without any Dify
+	// error event having been converted.
 	status, code := "success", ""
+	var streamErr error
 	select {
 	case err := <-errCh:
-		if err != nil {
-			log.Printf("[ERROR] dify stream (user %d): %v", userID, err)
-			status, code = "error", "upstream_error"
-		}
+		streamErr = err
 	default:
+	}
+
+	switch {
+	case conv.Failed():
+		// The converter already emitted an in-stream error frame
+		// (Dify error event or failed workflow_finished).  Per OpenAI
+		// streaming behavior, do NOT send [DONE] after an error frame —
+		// SDK clients treat the error frame as terminal and raise.
+		status, code = "error", "upstream_error"
+		if streamErr != nil {
+			log.Printf("[ERROR] dify stream (user %d): %v", userID, streamErr)
+		}
+	case streamErr != nil:
+		// Transport-level failure with no error event: emit the error
+		// frame ourselves, and likewise skip [DONE].
+		log.Printf("[ERROR] dify stream (user %d): %v", userID, streamErr)
+		fmt.Fprint(w, translator.FormatSSEErrorFrame("[Dify] "+streamErr.Error()))
+		flusher.Flush()
+		status, code = "error", "upstream_error"
+	default:
+		for _, msg := range conv.Finalize() {
+			fmt.Fprint(w, msg.Data)
+			flusher.Flush()
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
 	}
 	g.logRequest(userID, modelName, service, startedAt, status, code)
 }
@@ -538,15 +588,25 @@ func (g *Gateway) serve404Page(w http.ResponseWriter, r *http.Request) {
 // writeDifyError forwards a Dify error to the client, preserving the
 // upstream error code when available.  It builds its own response body
 // with a [Dify] prefix (distinct from writeError's [Dify2API] prefix).
+//
+// Status mapping: upstream 4xx are passed through unchanged (they indicate
+// a caller-side problem, e.g. invalid_param → 400, so client retry logic
+// is not misled); everything else (5xx, network errors) maps to 502.
 func (g *Gateway) writeDifyError(w http.ResponseWriter, err error) {
 	var de *dify.DifyError
 	code := "upstream_error"
 	message := err.Error()
-	if errors.As(err, &de) && de.Code != "" {
-		code = de.Code
+	status := http.StatusBadGateway
+	if errors.As(err, &de) {
+		if de.Code != "" {
+			code = de.Code
+		}
+		if de.Status >= 400 && de.Status < 500 {
+			status = de.Status
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusBadGateway)
+	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"error": map[string]interface{}{
 			"message": "[Dify] " + message,

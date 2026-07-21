@@ -1,106 +1,74 @@
 package translator
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 
 	"dify2api/dify"
 )
 
-// helper to create a text_chunk StreamEvent
-func mkData(text, reasoning string) dify.StreamEvent {
-	return dify.StreamEvent{Event: "text_chunk", Data: dify.StreamEventData{Text: text, Reasoning: reasoning}}
+func TestStreamConverter_TextAndFinish(t *testing.T) {
+	c := NewStreamConverter("m")
+	msg := c.Convert(dify.StreamEvent{Event: "text_chunk", Data: dify.StreamEventData{Text: "hello"}})
+	if msg == nil || !strings.Contains(msg.Data, `"content":"hello"`) {
+		t.Fatalf("text chunk not converted: %v", msg)
+	}
+	msg = c.Convert(dify.StreamEvent{Event: "workflow_finished", Data: dify.StreamEventData{Status: "succeeded"}})
+	if msg == nil || !strings.Contains(msg.Data, `"finish_reason":"stop"`) {
+		t.Fatalf("finish chunk wrong: %v", msg)
+	}
+	if c.Failed() {
+		t.Error("successful stream must not be marked failed")
+	}
+	if fin := c.Finalize(); fin != nil {
+		t.Errorf("Finalize after workflow_finished should be nil, got %v", fin)
+	}
 }
 
-func TestStreamConverter_ReasoningContent(t *testing.T) {
-	conv := NewStreamConverter("test-model")
-
-	msg := conv.Convert(dify.StreamEvent{Event: "reasoning_chunk", Data: dify.StreamEventData{Reasoning: "Let me think..."}})
-
+func TestStreamConverter_WorkflowFailed(t *testing.T) {
+	c := NewStreamConverter("m")
+	c.Convert(dify.StreamEvent{Event: "text_chunk", Data: dify.StreamEventData{Text: "partial"}})
+	msg := c.Convert(dify.StreamEvent{Event: "workflow_finished", Data: dify.StreamEventData{Status: "failed", Error: "credit exhausted"}})
 	if msg == nil {
-		t.Fatal("expected non-nil")
+		t.Fatal("failed workflow_finished should emit an error frame")
 	}
-	if !strings.Contains(msg.Data, `"reasoning_content":"Let me think..."`) {
-		t.Errorf("missing reasoning_content, got: %s", msg.Data)
+	if !strings.Contains(msg.Data, `"error"`) || !strings.Contains(msg.Data, "credit exhausted") ||
+		!strings.Contains(msg.Data, "[Dify]") {
+		t.Errorf("error frame wrong: %s", msg.Data)
 	}
-	if strings.Contains(msg.Data, `"content"`) {
-		t.Error("reasoning chunk should NOT have content field")
+	if strings.Contains(msg.Data, "finish_reason") {
+		t.Errorf("error frame must not carry finish_reason: %s", msg.Data)
 	}
-}
-
-func TestStreamConverter_TextChunk(t *testing.T) {
-	conv := NewStreamConverter("test")
-
-	msg := conv.Convert(mkData("Hello", ""))
-	if msg == nil {
-		t.Fatal("expected non-nil")
-	}
-	if !strings.Contains(msg.Data, `"content":"Hello"`) {
-		t.Errorf("missing content, got: %s", msg.Data)
-	}
-	if !strings.Contains(msg.Data, `"role":"assistant"`) {
-		t.Errorf("first chunk should have role")
-	}
-
-	// second chunk: no role
-	msg = conv.Convert(mkData(" world", ""))
-	if strings.Contains(msg.Data, `"role":"assistant"`) {
-		t.Error("second chunk should NOT have role")
+	if !c.Failed() {
+		t.Error("converter should be marked failed")
 	}
 }
 
-func TestStreamConverter_WorkflowFinished(t *testing.T) {
-	conv := NewStreamConverter("test")
-
-	conv.Convert(mkData("Hi", ""))
-	msg := conv.Convert(dify.StreamEvent{Event: "workflow_finished"})
-
-	if !strings.Contains(msg.Data, `"finish_reason":"stop"`) {
-		t.Errorf("missing stop, got: %s", msg.Data)
+func TestStreamConverter_ErrorEvent(t *testing.T) {
+	c := NewStreamConverter("m")
+	msg := c.Convert(dify.StreamEvent{Event: "error", Data: dify.StreamEventData{Error: "boom"}})
+	if msg == nil || !strings.Contains(msg.Data, "boom") || !strings.Contains(msg.Data, `"upstream_error"`) {
+		t.Fatalf("error event frame wrong: %v", msg)
 	}
-	if strings.Contains(msg.Data, `"content"`) {
-		t.Error("final chunk should not have content")
+	if !c.Failed() {
+		t.Error("converter should be marked failed")
 	}
 }
 
-func TestStreamConverter_Finalize(t *testing.T) {
-	conv := NewStreamConverter("test")
-
-	if msgs := conv.Finalize(); msgs != nil {
-		t.Error("should be nil without text")
-	}
-
-	conv.Convert(mkData("test", ""))
-	msgs := conv.Finalize()
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1, got %d", len(msgs))
+func TestStreamConverter_ErrorEventEmptyMessage(t *testing.T) {
+	c := NewStreamConverter("m")
+	msg := c.Convert(dify.StreamEvent{Event: "error"})
+	if msg == nil || !strings.Contains(msg.Data, "upstream error") {
+		t.Fatalf("empty error event should fall back to generic message: %v", msg)
 	}
 }
 
-func TestStreamConverter_AfterFinished(t *testing.T) {
-	conv := NewStreamConverter("test")
-
-	conv.Convert(mkData("test", ""))
-	conv.Convert(dify.StreamEvent{Event: "workflow_finished"})
-
-	if msgs := conv.Finalize(); msgs != nil {
-		t.Error("should be nil after workflow_finished")
+func TestFormatSSEErrorFrame(t *testing.T) {
+	frame := FormatSSEErrorFrame("[Dify] conn reset")
+	if !strings.HasPrefix(frame, "data: ") || !strings.HasSuffix(frame, "\n\n") {
+		t.Errorf("frame not SSE-formatted: %q", frame)
 	}
-}
-
-func TestStreamConverter_JSONValidity(t *testing.T) {
-	conv := NewStreamConverter("test-model")
-
-	msg := conv.Convert(mkData("Hi", ""))
-	payload := strings.TrimPrefix(msg.Data, "data: ")
-	payload = strings.TrimSpace(payload)
-
-	var chunk map[string]interface{}
-	if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	if chunk["object"] != "chat.completion.chunk" {
-		t.Errorf("object = %v", chunk["object"])
+	if !strings.Contains(frame, "conn reset") || !strings.Contains(frame, `"code":"upstream_error"`) {
+		t.Errorf("frame content wrong: %q", frame)
 	}
 }

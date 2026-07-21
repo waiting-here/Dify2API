@@ -23,7 +23,14 @@ type StreamConverter struct {
 	firstChunk   bool
 	receivedText bool
 	done         bool
+	failed       bool
 }
+
+// Failed reports whether the stream ended in a failure (Dify error event or
+// workflow_finished with status "failed").  When true the handler must NOT
+// send the [DONE] terminator: OpenAI's API signals mid-stream failures with
+// an error frame and no [DONE], which official SDKs turn into an exception.
+func (c *StreamConverter) Failed() bool { return c.failed }
 
 // NewStreamConverter creates a new StreamConverter.
 func NewStreamConverter(modelName string) *StreamConverter {
@@ -59,8 +66,31 @@ func (c *StreamConverter) Convert(evt dify.StreamEvent) *SSEMessage {
 
 	case "workflow_finished":
 		c.done = true
+		if evt.Data.Status == "failed" {
+			// Upstream workflow failed mid-stream.  Emit an OpenAI-style
+			// error frame instead of a normal stop chunk (see Failed()).
+			c.failed = true
+			msg := evt.Data.Error
+			if msg == "" {
+				msg = "workflow failed"
+			}
+			return &SSEMessage{Data: formatSSEError("[Dify] " + msg)}
+		}
 		chunk := buildStreamChunk(c.chunkID, c.modelName, c.created, "", "", false, "stop")
 		return &SSEMessage{Data: formatSSEChunk(chunk)}
+
+	case "error":
+		// Dify emits a dedicated error event on some failure paths.
+		c.done = true
+		c.failed = true
+		msg := evt.Data.Error
+		if msg == "" {
+			msg = evt.Data.Text
+		}
+		if msg == "" {
+			msg = "upstream error"
+		}
+		return &SSEMessage{Data: formatSSEError("[Dify] " + msg)}
 
 	case "node_started", "node_finished", "workflow_started", "ping":
 		return nil
@@ -117,3 +147,22 @@ func formatSSEChunk(chunk map[string]interface{}) string {
 	data, _ := json.Marshal(chunk)
 	return fmt.Sprintf("data: %s\n\n", string(data))
 }
+
+// formatSSEError builds an OpenAI-style in-stream error frame
+// (`data: {"error": {...}}`).  Official OpenAI SDKs recognise this frame
+// and raise an error to the caller.
+func formatSSEError(message string) string {
+	data, _ := json.Marshal(map[string]interface{}{
+		"error": map[string]interface{}{
+			"message": message,
+			"type":    "upstream_error",
+			"code":    "upstream_error",
+		},
+	})
+	return fmt.Sprintf("data: %s\n\n", string(data))
+}
+
+// FormatSSEErrorFrame exposes the in-stream error frame builder to the
+// handler (used when the error surfaces on errCh after headers were sent,
+// e.g. a connection drop mid-stream).
+func FormatSSEErrorFrame(message string) string { return formatSSEError(message) }
