@@ -98,6 +98,8 @@ func (g *Gateway) serveFavicon(w http.ResponseWriter) {
 		ct = "image/x-icon"
 	}
 	w.Header().Set("Content-Type", ct)
-	w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
+	// Long cache but NOT immutable — the deployer may change the icon file
+	// without renaming it, and browsers need to be able to revalidate.
+	w.Header().Set("Cache-Control", "public, max-age=604800")
 	w.Write(data)
 }
