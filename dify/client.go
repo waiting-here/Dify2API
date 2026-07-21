@@ -49,6 +49,43 @@ type StreamEvent struct {
 	Data          StreamEventData `json:"data"`
 }
 
+// DifyError is a structured error returned by the Dify API.  It implements
+// the error interface so it can be passed through existing error channels,
+// while carrying a machine-readable code for the gateway to forward.
+type DifyError struct {
+	Code    string // Dify error code, e.g. "invalid_param"
+	Message string // Dify error message
+	Status  int    // HTTP status from Dify
+}
+
+func (e *DifyError) Error() string {
+	if e.Code != "" {
+		return fmt.Sprintf("[%s] %s", e.Code, e.Message)
+	}
+	return e.Message
+}
+
+// parseDifyErrorBody attempts to extract a structured error from a Dify
+// JSON response body.  Falls back to using the raw body as the message.
+func parseDifyErrorBody(statusCode int, bodyBytes []byte) *DifyError {
+	de := &DifyError{Status: statusCode}
+	var raw struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(bodyBytes, &raw) == nil {
+		de.Code = raw.Code
+		de.Message = raw.Message
+	}
+	if de.Message == "" {
+		de.Message = string(bodyBytes)
+	}
+	if de.Message == "" {
+		de.Message = fmt.Sprintf("HTTP %d", statusCode)
+	}
+	return de
+}
+
 // NewClient creates a new Dify API client. timeout applies to each call to
 // the Dify API (V0.1.0: raised from a hardcoded 300s to a configurable 600s,
 // so long-running workflows for the dify-subagent integration can complete).
@@ -101,7 +138,7 @@ func (c *Client) UploadFile(user, fileName, mimeType string, data []byte) (strin
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return "", fmt.Errorf("dify upload error (status %d): %s", resp.StatusCode, string(bodyBytes))
+		return "", parseDifyErrorBody(resp.StatusCode, bodyBytes)
 	}
 	var result struct {
 		ID string `json:"id"`
@@ -148,7 +185,7 @@ func (c *Client) StreamWorkflow(req *WorkflowRequest) (<-chan StreamEvent, <-cha
 
 		if resp.StatusCode != http.StatusOK {
 			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			errCh <- fmt.Errorf("dify api error (status %d): %s", resp.StatusCode, string(bodyBytes))
+			errCh <- parseDifyErrorBody(resp.StatusCode, bodyBytes)
 			return
 		}
 
@@ -180,7 +217,7 @@ func (c *Client) BlockingWorkflow(req *WorkflowRequest) (string, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return "", fmt.Errorf("dify api error (status %d): %s", resp.StatusCode, string(bodyBytes))
+		return "", parseDifyErrorBody(resp.StatusCode, bodyBytes)
 	}
 
 	// Blocking workflow response
@@ -196,7 +233,7 @@ func (c *Client) BlockingWorkflow(req *WorkflowRequest) (string, error) {
 	}
 
 	if result.Data.Status == "failed" {
-		return "", fmt.Errorf("workflow failed: %s", result.Data.Error)
+		return "", &DifyError{Code: result.Data.Error, Message: result.Data.Error, Status: resp.StatusCode}
 	}
 
 	// Extract text from outputs — Dify end node maps the LLM's text output
@@ -235,7 +272,7 @@ func (c *Client) FetchParameters() (map[string]bool, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("dify api error (status %d): %s", resp.StatusCode, string(bodyBytes))
+		return nil, parseDifyErrorBody(resp.StatusCode, bodyBytes)
 	}
 
 	// user_input_form is a list of single-key objects:

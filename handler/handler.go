@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -285,7 +286,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		if err != nil {
 			log.Printf("[ERROR] image files (user %d): %v", user.ID, err)
 			g.logRequest(user.ID, req.Model, service, startedAt, "error", "image_upload_failed")
-			g.writeError(w, http.StatusBadGateway, "image_upload_failed", fmt.Sprintf("image upload failed: %v", err))
+			g.writeDifyError(w, err)
 			return
 		}
 		wfInputs["input_image_list"] = files
@@ -314,6 +315,17 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time) {
 	wfReq.ResponseMode = "streaming"
 	events, errCh := client.StreamWorkflow(wfReq)
+
+	// If Dify returned an immediate HTTP error (non-200, connection refused,
+	// etc.) it is already in the buffered errCh.  Report it as JSON before
+	// committing to SSE response headers.
+	select {
+	case err := <-errCh:
+		g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error")
+		g.writeDifyError(w, err)
+		return
+	default:
+	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -359,7 +371,7 @@ func (g *Gateway) handleBlocking(w http.ResponseWriter, client *dify.Client, wfR
 	if err != nil {
 		log.Printf("[ERROR] dify blocking (user %d): %v", userID, err)
 		g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error")
-		http.Error(w, fmt.Sprintf("dify api error: %v", err), http.StatusBadGateway)
+		g.writeDifyError(w, err)
 		return
 	}
 	g.logRequest(userID, modelName, service, startedAt, "success", "")
@@ -475,13 +487,35 @@ func (g *Gateway) handleListLogs(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"logs": logs})
 }
 
-// writeError emits an OpenAI-style error body.
+// writeError emits an OpenAI-style error body with a [Dify2API] prefix
+// to distinguish gateway errors from upstream Dify errors.
 func (g *Gateway) writeError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"error": map[string]interface{}{
-			"message": message,
+			"message": "[Dify2API] " + message,
+			"type":    code,
+			"code":    code,
+		},
+	})
+}
+
+// writeDifyError forwards a Dify error to the client, preserving the
+// upstream error code when available.  It builds its own response body
+// with a [Dify] prefix (distinct from writeError's [Dify2API] prefix).
+func (g *Gateway) writeDifyError(w http.ResponseWriter, err error) {
+	var de *dify.DifyError
+	code := "upstream_error"
+	message := err.Error()
+	if errors.As(err, &de) && de.Code != "" {
+		code = de.Code
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadGateway)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"error": map[string]interface{}{
+			"message": "[Dify] " + message,
 			"type":    code,
 			"code":    code,
 		},
