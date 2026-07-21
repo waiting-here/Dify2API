@@ -149,8 +149,11 @@ func withDiscordStub(t *testing.T, srv *httptest.Server) {
 	t.Cleanup(func() { auth.APIBase = old })
 }
 
-func callbackRequest(gw *Gateway, mux *http.ServeMux, code, state string) *httptest.ResponseRecorder {
+func callbackRequest(gw *Gateway, mux *http.ServeMux, code, state, stateCookie string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodGet, "/auth/discord/callback?"+url.Values{"code": {code}, "state": {state}}.Encode(), nil)
+	if stateCookie != "" {
+		req.AddCookie(&http.Cookie{Name: auth.OAuthStateCookieName, Value: stateCookie})
+	}
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	return rec
@@ -160,7 +163,7 @@ func TestDiscordCallback_BadState(t *testing.T) {
 	gw, _ := setupAuthGateway(t, "x")
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
-	rec := callbackRequest(gw, mux, "code", "bad-state")
+	rec := callbackRequest(gw, mux, "code", "bad-state", "bad-state")
 	if rec.Code != http.StatusFound {
 		t.Errorf("status = %d, want 302", rec.Code)
 	}
@@ -180,7 +183,7 @@ func TestDiscordCallback_RegisterWithRole(t *testing.T) {
 	gw.RegisterRoutes(mux)
 
 	state, _ := newOAuthState()
-	rec := callbackRequest(gw, mux, "code", state)
+	rec := callbackRequest(gw, mux, "code", state, state)
 	if rec.Code != http.StatusFound {
 		t.Fatalf("status = %d, want 302; body: %s", rec.Code, rec.Body.String())
 	}
@@ -214,7 +217,7 @@ func TestDiscordCallback_RegisterDenied(t *testing.T) {
 	gw.RegisterRoutes(mux)
 
 	state, _ := newOAuthState()
-	rec := callbackRequest(gw, mux, "code", state)
+	rec := callbackRequest(gw, mux, "code", state, state)
 	if rec.Code != http.StatusFound {
 		t.Errorf("status = %d, want 302", rec.Code)
 	}
@@ -237,7 +240,7 @@ func TestDiscordCallback_NotGuildMember(t *testing.T) {
 	gw.RegisterRoutes(mux)
 
 	state, _ := newOAuthState()
-	rec := callbackRequest(gw, mux, "code", state)
+	rec := callbackRequest(gw, mux, "code", state, state)
 	if rec.Code != http.StatusFound {
 		t.Errorf("status = %d, want 302", rec.Code)
 	}
@@ -258,7 +261,7 @@ func TestDiscordCallback_DisabledUser(t *testing.T) {
 	store.SetUserDisabled(u.ID, true, "test")
 
 	state, _ := newOAuthState()
-	rec := callbackRequest(gw, mux, "code", state)
+	rec := callbackRequest(gw, mux, "code", state, state)
 	if rec.Code != http.StatusFound {
 		t.Errorf("status = %d, want 302 for disabled user", rec.Code)
 	}
@@ -277,12 +280,62 @@ func TestDiscordCallback_NoGuildConfigured(t *testing.T) {
 	gw.RegisterRoutes(mux)
 
 	state, _ := newOAuthState()
-	rec := callbackRequest(gw, mux, "code", state)
+	rec := callbackRequest(gw, mux, "code", state, state)
 	if rec.Code != http.StatusFound {
 		t.Errorf("status = %d, want 302 (registration closed)", rec.Code)
 	}
 	loc := rec.Header().Get("Location")
 	if !strings.HasPrefix(loc, "/403?") {
 		t.Errorf("Location = %q, want prefix /403?", loc)
+	}
+}
+
+func TestDiscordCallback_NoStateCookie(t *testing.T) {
+	stub := discordStub(t, []string{"role-1"}, 200)
+	withDiscordStub(t, stub)
+	gw, store := setupAuthGateway(t, "x")
+	store.SetSetting(db.SettingGuildID, "g1")
+	store.SetSetting(db.SettingRoleID, "role-1")
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	state, _ := newOAuthState()
+	// No cookie — login-CSRF check must fail.
+	rec := callbackRequest(gw, mux, "code", state, "")
+	if rec.Code != http.StatusFound {
+		t.Errorf("status = %d, want 302", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/403?") {
+		t.Errorf("Location = %q, want prefix /403?", loc)
+	}
+	// User must NOT be registered.
+	if u, _ := store.GetUserByDiscordID("42"); u != nil {
+		t.Error("user should not be registered without valid state cookie")
+	}
+}
+
+func TestDiscordCallback_StateCookieMismatch(t *testing.T) {
+	stub := discordStub(t, []string{"role-1"}, 200)
+	withDiscordStub(t, stub)
+	gw, store := setupAuthGateway(t, "x")
+	store.SetSetting(db.SettingGuildID, "g1")
+	store.SetSetting(db.SettingRoleID, "role-1")
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	state, _ := newOAuthState()
+	// Cookie has a different value than query state — login-CSRF check must fail.
+	rec := callbackRequest(gw, mux, "code", state, "attackers-state")
+	if rec.Code != http.StatusFound {
+		t.Errorf("status = %d, want 302", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/403?") {
+		t.Errorf("Location = %q, want prefix /403?", loc)
+	}
+	// User must NOT be registered.
+	if u, _ := store.GetUserByDiscordID("42"); u != nil {
+		t.Error("user should not be registered with mismatched state cookie")
 	}
 }

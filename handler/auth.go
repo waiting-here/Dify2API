@@ -156,6 +156,7 @@ func (g *Gateway) handleDiscordLogin(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusInternalServerError, "internal", "internal error")
 		return
 	}
+	auth.SetOAuthStateCookie(w, state, g.Config.Admin.SiteBaseURL)
 	redirectURI := g.Config.Admin.SiteBaseURL + "/auth/discord/callback"
 	http.Redirect(w, r, auth.AuthorizeURL(g.Config.Admin.DiscordClientID, redirectURI, state), http.StatusFound)
 }
@@ -168,10 +169,22 @@ func (g *Gateway) handleDiscordCallback(w http.ResponseWriter, r *http.Request) 
 		http.Redirect(w, r, "/403?"+q.Encode(), http.StatusFound)
 	}
 
-	if !consumeOAuthState(r.URL.Query().Get("state")) {
+	queryState := r.URL.Query().Get("state")
+	if !consumeOAuthState(queryState) {
 		fail("登录会话已过期，请返回重试。")
 		return
 	}
+	// Login-CSRF hardening: the OAuth state must also match the cookie set
+	// when the login flow started.  This prevents an attacker from
+	// tricking a victim into logging into the attacker's account.
+	cookieState := auth.OAuthStateFromRequest(r)
+	if cookieState == "" || cookieState != queryState {
+		auth.ClearOAuthStateCookie(w, g.Config.Admin.SiteBaseURL)
+		fail("登录会话已过期，请返回重试。")
+		return
+	}
+	auth.ClearOAuthStateCookie(w, g.Config.Admin.SiteBaseURL)
+
 	code := r.URL.Query().Get("code")
 	if code == "" {
 		fail("Discord 授权失败：未收到授权码。")

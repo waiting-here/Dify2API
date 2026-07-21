@@ -44,3 +44,42 @@ func SessionToken(r *http.Request) string {
 	}
 	return c.Value
 }
+
+// OAuthStateCookieName is the name of the OAuth state binding cookie.
+const OAuthStateCookieName = "dify2api_oauth_state"
+
+// SetOAuthStateCookie writes a short-lived cookie that binds the OAuth state
+// parameter to the browser that initiated the login flow (login-CSRF protection).
+func SetOAuthStateCookie(w http.ResponseWriter, state string, siteBaseURL string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     OAuthStateCookieName,
+		Value:    state,
+		Path:     "/",
+		MaxAge:   600, // 10 minutes — matches server-side state TTL
+		HttpOnly: true,
+		Secure:   strings.HasPrefix(strings.ToLower(siteBaseURL), "https://"),
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// OAuthStateFromRequest extracts the OAuth state binding cookie value.
+func OAuthStateFromRequest(r *http.Request) string {
+	c, err := r.Cookie(OAuthStateCookieName)
+	if err != nil {
+		return ""
+	}
+	return c.Value
+}
+
+// ClearOAuthStateCookie expires the OAuth state binding cookie.
+func ClearOAuthStateCookie(w http.ResponseWriter, siteBaseURL string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     OAuthStateCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   strings.HasPrefix(strings.ToLower(siteBaseURL), "https://"),
+		SameSite: http.SameSiteLaxMode,
+	})
+}

@@ -211,3 +211,102 @@ func TestParseSSE_ChannelClose(t *testing.T) {
 		t.Error("timeout waiting for eventCh to close")
 	}
 }
+
+// blockingServer returns a test server that responds to POST /v1/workflows/run
+// with a blocking-mode JSON payload.
+func blockingServer(t *testing.T, body string, status int) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/workflows/run" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(status)
+		fmt.Fprint(w, body)
+	}))
+}
+
+func TestBlockingWorkflow_TextOutput(t *testing.T) {
+	body := `{"data":{"outputs":{"text":"hello world"},"status":"succeeded"}}`
+	srv := blockingServer(t, body, http.StatusOK)
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "app-key", 15*time.Second)
+	result, err := c.BlockingWorkflow(&WorkflowRequest{
+		Inputs:       map[string]interface{}{"prompt": "hi"},
+		ResponseMode: "blocking",
+		User:         "u1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "hello world" {
+		t.Errorf("result = %q, want %q", result, "hello world")
+	}
+}
+
+func TestBlockingWorkflow_NoTextKey_Deterministic(t *testing.T) {
+	// Outputs with no "text" key: should pick the lexicographically first key.
+	body := `{"data":{"outputs":{"z_result":"last","a_result":"first","m_result":"middle"},"status":"succeeded"}}`
+	srv := blockingServer(t, body, http.StatusOK)
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "app-key", 15*time.Second)
+	req := &WorkflowRequest{
+		Inputs:       map[string]interface{}{"prompt": "hi"},
+		ResponseMode: "blocking",
+		User:         "u1",
+	}
+
+	// Run twice — must be deterministic ("a_result" < "m_result" < "z_result").
+	r1, err := c.BlockingWorkflow(req)
+	if err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	r2, err := c.BlockingWorkflow(req)
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if r1 != r2 {
+		t.Errorf("non-deterministic: first=%q second=%q", r1, r2)
+	}
+	if r1 != "first" {
+		t.Errorf("result = %q, want %q (lexicographically first key)", r1, "first")
+	}
+}
+
+func TestBlockingWorkflow_EmptyOutputs(t *testing.T) {
+	body := `{"data":{"outputs":{},"status":"succeeded"}}`
+	srv := blockingServer(t, body, http.StatusOK)
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "app-key", 15*time.Second)
+	_, err := c.BlockingWorkflow(&WorkflowRequest{
+		Inputs:       map[string]interface{}{"prompt": "hi"},
+		ResponseMode: "blocking",
+		User:         "u1",
+	})
+	if err == nil {
+		t.Fatal("expected error for empty outputs")
+	}
+	if !strings.Contains(err.Error(), "no output text") {
+		t.Errorf("error = %v, want 'no output text'", err)
+	}
+}
+
+func TestBlockingWorkflow_FailedStatus(t *testing.T) {
+	body := `{"data":{"outputs":{},"status":"failed","error":"something broke"}}`
+	srv := blockingServer(t, body, http.StatusOK)
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "app-key", 15*time.Second)
+	_, err := c.BlockingWorkflow(&WorkflowRequest{
+		Inputs:       map[string]interface{}{"prompt": "hi"},
+		ResponseMode: "blocking",
+		User:         "u1",
+	})
+	if err == nil {
+		t.Fatal("expected error for failed status")
+	}
+}

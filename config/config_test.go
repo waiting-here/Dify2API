@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -121,5 +123,67 @@ func TestLoadStartup_Required(t *testing.T) {
 	}
 	if _, err := LoadStartup("/nonexistent/admin.env"); err == nil {
 		t.Fatal("expected error for missing file")
+	}
+}
+
+func TestGetIntOr_WarnsOnInvalid(t *testing.T) {
+	// Capture log output.
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	// Non-numeric value: should fall back and warn.
+	result := getIntOr(map[string]string{"BAD_KEY": "not-a-number"}, "BAD_KEY", 42)
+	if result != 42 {
+		t.Errorf("expected fallback 42, got %d", result)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "[CONFIG]") || !strings.Contains(output, "BAD_KEY") ||
+		!strings.Contains(output, "not a positive integer") {
+		t.Errorf("expected [CONFIG] warning in log, got: %s", output)
+	}
+
+	// Negative value: should fall back and warn.
+	buf.Reset()
+	result2 := getIntOr(map[string]string{"NEG_KEY": "-5"}, "NEG_KEY", 99)
+	if result2 != 99 {
+		t.Errorf("expected fallback 99, got %d", result2)
+	}
+	output2 := buf.String()
+	if !strings.Contains(output2, "[CONFIG]") || !strings.Contains(output2, "NEG_KEY") ||
+		!strings.Contains(output2, "not a positive integer") {
+		t.Errorf("expected [CONFIG] warning for negative, got: %s", output2)
+	}
+
+	// Zero value: should fall back and warn.
+	buf.Reset()
+	result3 := getIntOr(map[string]string{"ZERO_KEY": "0"}, "ZERO_KEY", 77)
+	if result3 != 77 {
+		t.Errorf("expected fallback 77, got %d", result3)
+	}
+	output3 := buf.String()
+	if !strings.Contains(output3, "[CONFIG]") || !strings.Contains(output3, "ZERO_KEY") ||
+		!strings.Contains(output3, "not a positive integer") {
+		t.Errorf("expected [CONFIG] warning for zero, got: %s", output3)
+	}
+
+	// Missing key: silent fallback, no warning.
+	buf.Reset()
+	result4 := getIntOr(map[string]string{}, "MISSING", 7)
+	if result4 != 7 {
+		t.Errorf("expected default 7, got %d", result4)
+	}
+	if buf.Len() > 0 {
+		t.Errorf("expected no log for unset key, got: %s", buf.String())
+	}
+
+	// Empty value: silent fallback, no warning.
+	buf.Reset()
+	result5 := getIntOr(map[string]string{"EMPTY_KEY": ""}, "EMPTY_KEY", 11)
+	if result5 != 11 {
+		t.Errorf("expected default 11, got %d", result5)
+	}
+	if buf.Len() > 0 {
+		t.Errorf("expected no log for empty value, got: %s", buf.String())
 	}
 }

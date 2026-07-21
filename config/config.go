@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -165,6 +166,7 @@ func getIntOr(envFile map[string]string, key string, fallback int) int {
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(raw))
 	if err != nil || n <= 0 {
+		log.Printf("[CONFIG] %s=%q is not a positive integer; using default %d", key, raw, fallback)
 		return fallback
 	}
 	return n

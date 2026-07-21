@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -241,9 +243,16 @@ func (c *Client) BlockingWorkflow(req *WorkflowRequest) (string, error) {
 		return fmt.Sprintf("%v", text), nil
 	}
 
-	// Fallback: try to find any text in outputs
-	for _, v := range result.Data.Outputs {
-		return fmt.Sprintf("%v", v), nil
+	// Fallback: sort keys lexicographically for deterministic behaviour.
+	if len(result.Data.Outputs) > 0 {
+		keys := make([]string, 0, len(result.Data.Outputs))
+		for k := range result.Data.Outputs {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		firstKey := keys[0]
+		log.Printf("[WARN] blocking workflow outputs has no \"text\" key; using %q", firstKey)
+		return fmt.Sprintf("%v", result.Data.Outputs[firstKey]), nil
 	}
 
 	return "", fmt.Errorf("no output text in workflow response")
