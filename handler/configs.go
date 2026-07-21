@@ -93,14 +93,14 @@ func (req *configRequest) validate() string {
 	// the UI). Free-form model names are not accepted.
 	svc := translator.ServiceOfModel(req.Model)
 	if svc == "" {
-		return "模型名需以 [服务] 前缀开头,如 [general]claude-opus-4-6"
+		return "模型名需以 [服务] 前缀开头，如 [general]claude-opus-4-6"
 	}
 	if !translator.IsSupportedService(svc) {
 		names := []string{}
 		for _, s := range translator.SupportedServices() {
 			names = append(names, s.Name)
 		}
-		return fmt.Sprintf("不支持的服务 %q;当前支持: %s", svc, strings.Join(names, ", "))
+		return fmt.Sprintf("不支持的服务 %q；当前支持：%s", svc, strings.Join(names, "，"))
 	}
 	if req.BaseURL == "" || !(strings.HasPrefix(req.BaseURL, "http://") || strings.HasPrefix(req.BaseURL, "https://")) {
 		return "dify_base_url must be a non-empty http(s) URL"

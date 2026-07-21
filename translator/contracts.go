@@ -20,12 +20,12 @@ type ServiceInfo struct {
 // (2) add its contract case in TranslateForService and ContractVarsFor,
 // (3) create the corresponding Dify App with matching input variables.
 var serviceRegistry = []ServiceInfo{
-	{Name: "general", Label: "通用单轮问答(仅 user_0)"},
-	{Name: "custom", Label: "自定义单轮问答(user_0 + 可选 system_prompt)"},
-	{Name: "website-summary", Label: "网页总结(request_url + 可选 request_instruction)"},
-	{Name: "image-processing", Label: "图片理解(system_prompt 可选 + user_request + 图片)"},
-	{Name: "sillytavern-main-trimmed", Label: "SillyTavern 主对话(2–8 条严格布局)"},
-	{Name: "sillytavern-SP·数据库-填表", Label: "SillyTavern 数据库·填表(system + 可选 user_0 + assistant 打头交替 + 预填充)"},
+	{Name: "general", Label: "通用单轮问答（仅 user_0）"},
+	{Name: "custom", Label: "自定义单轮问答（user_0 + 可选 system_prompt）"},
+	{Name: "website-summary", Label: "网页总结（request_url + 可选 request_instruction）"},
+	{Name: "image-processing", Label: "图片理解（system_prompt 可选 + user_request + 图片）"},
+	{Name: "sillytavern-main-trimmed", Label: "SillyTavern 主对话（2–8 条严格布局）"},
+	{Name: "sillytavern-SP·数据库-填表", Label: "SillyTavern 数据库·填表（system + 可选 user_0 + assistant 打头交替 + 预填充）"},
 }
 
 // SupportedServices returns the registered services (dashboard dropdown).

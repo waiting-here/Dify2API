@@ -166,7 +166,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		defer func() { <-g.chatSem }()
 	default:
 		w.Header().Set("Retry-After", "3")
-		g.writeError(w, http.StatusTooManyRequests, "server_busy", "当前服务繁忙(并发已达上限),请稍后重试")
+		g.writeError(w, http.StatusTooManyRequests, "server_busy", "当前服务繁忙（并发已达上限），请稍后重试")
 		return
 	}
 
@@ -235,11 +235,11 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			g.Store.DeleteUserSessions(user.ID)
 			log.Printf("[AUTH] user %d auto-banned until %v after %d RPM violations", user.ID, until, violations)
 			g.writeError(w, http.StatusForbidden, "rpm_exceeded",
-				fmt.Sprintf("已超出每分钟请求上限(%d 次/分),且因 24 小时内累计 %d 次超限,账号已被自动封禁 24 小时", rpmLimit, violations))
+				fmt.Sprintf("已超出每分钟请求上限（%d 次/分），且因 24 小时内累计 %d 次超限，账号已被自动封禁 24 小时", rpmLimit, violations))
 			return
 		}
 		g.writeError(w, http.StatusForbidden, "rpm_exceeded",
-			fmt.Sprintf("已超出每分钟请求上限(%d 次/分),请稍后再试(24 小时内第 %d 次超限,累计 5 次将自动封禁 24 小时)", rpmLimit, violations))
+			fmt.Sprintf("已超出每分钟请求上限（%d 次/分），请稍后再试（24 小时内第 %d 次超限，累计 5 次将自动封禁 24 小时）", rpmLimit, violations))
 		return
 	}
 

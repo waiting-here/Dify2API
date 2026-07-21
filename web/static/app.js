@@ -16,8 +16,8 @@ const T = {
   logout: "退出登录",
   welcome: "你好，{name}",
   adminNotice: "当前为管理员账号。管理员无服务配置界面——如需使用服务，请退出后以 Discord 注册普通用户。",
-  keyTitle: "调用方密钥(API Key)",
-  keyHint: "此密钥用于 OpenAI 兼容接口(/v1)鉴权。界面不显示完整密钥，点击按钮复制。",
+  keyTitle: "调用方密钥（API Key）",
+  keyHint: "此密钥用于 OpenAI 兼容接口（/v1）鉴权。界面不显示完整密钥，点击按钮复制。",
   copy: "复制",
   copied: "已复制",
   copyFail: "复制失败（需要 HTTPS 或 localhost 环境）",
@@ -46,7 +46,7 @@ const T = {
   checkError: "参数校验：无法获取 App 参数",
   checkMissing: "App 缺少契约必选变量：{list}",
   checkUncovered: "App 必选变量契约不发送：{list}",
-  checkExtra: "App 多余可选变量（将闲置,不影响使用）：{list}",
+  checkExtra: "App 多余可选变量（将闲置，不影响使用）：{list}",
   logsTitle: "请求日志",
   thTime: "时间",
   thDuration: "耗时",
@@ -57,11 +57,11 @@ const T = {
   thUser: "用户",
   thRPM: "RPM 上限",
   rpmLimit: "全局 RPM 上限（每分钟每用户）",
-  rpmPrompt: "该用户的 RPM 上限（当前: {cur}）。输入数字，或留空/default 恢复跟随全局：",
+  rpmPrompt: "该用户的 RPM 上限（当前：{cur}）。输入数字，或留空/default 恢复跟随全局：",
   thCreated: "注册时间",
   ban: "封禁",
   unban: "解封",
-  banTimedPrompt: "封禁时长（小时）,留空或 0 表示永久封禁：",
+  banTimedPrompt: "封禁时长（小时），留空或 0 表示永久封禁：",
   banReasonPrompt: "封禁原因（可选，将显示给被封禁用户）：",
   banInvalid: "请输入有效小时数",
   resetUserKey: "重置密钥",
@@ -76,9 +76,9 @@ const T = {
   roleID: "身份组 ID (role_id)",
   settingsSaved: "已保存",
   error: "错误：{msg}",
-  unauthorized: "登录已失效,请重新登录",
+  unauthorized: "登录已失效，请重新登录",
   exportData: "导出我的数据",
-  exportDone: "数据已导出,请查看下载文件",
+  exportDone: "数据已导出，请查看下载文件",
   deleteAccount: "删除我的账号",
   deleteAccountWarn1: "此操作不可撤销。将永久删除您的账号及全部数据（包括 App 配置、调用密钥和请求日志）。",
   deleteAccountWarn2: "确认删除？请在此输入 DELETE 进行最终确认：",
@@ -498,7 +498,7 @@ function userStatusBadges(u) {
   }
   if (u.banned_until > 0 && u.banned_until * 1000 > Date.now()) {
     let txt = (u.auto_banned ? "RPM 自动" : "") + T.statusBannedUntil.replace("{time}", fmtT(u.banned_until));
-    if (u.ban_reason) txt += `<br><span class="muted">原因: ${esc(u.ban_reason)}</span>`;
+    if (u.ban_reason) txt += `<br><span class="muted">原因：${esc(u.ban_reason)}</span>`;
     return `<span class="badge warn">${txt}</span>`;
   }
   return `<span class="badge ok">${T.statusNormal}</span>`;
