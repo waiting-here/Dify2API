@@ -58,6 +58,9 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /auth/discord/login", g.handleDiscordLogin)
 	mux.HandleFunc("GET /auth/discord/callback", g.handleDiscordCallback)
 
+	// Admin request log viewer
+	mux.HandleFunc("GET /api/admin/logs", g.handleAdminLogs)
+
 	// Admin user management
 	mux.HandleFunc("GET /api/admin/users", g.handleAdminListUsers)
 	mux.HandleFunc("POST /api/admin/users/{id}/ban", g.handleAdminBanUser)

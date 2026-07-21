@@ -86,6 +86,14 @@ const T = {
   deleteAccountFailed: "请输入 DELETE 以确认删除",
   deleteAccountDone: "您的账号及全部数据已永久删除。感谢使用 Dify2API。",
   adminExport: "导出数据",
+  adminLogsTitle: "请求日志",
+  adminLogsAllUsers: "全部",
+  adminLogsAllServices: "全部",
+  adminLogsAllStatus: "全部",
+  adminLogsSuccess: "成功",
+  adminLogsError: "错误",
+  adminLogsQuery: "查询",
+  adminLogsDeletedUser: "（已删除）",
 };
 
 /* ---------------- helpers ---------------- */
@@ -474,6 +482,19 @@ async function renderAdminDashboard() {
       <h3>${T.usersTitle}</h3>
       <table><thead><tr><th>${T.thUser}</th><th>${T.thRPM}</th><th>${T.thCreated}</th><th>${T.thStatus}</th><th>${T.thActions}</th></tr></thead><tbody id="user-rows"></tbody></table>
       <div class="row-actions" id="user-pager" style="margin-top:.5rem"></div>
+    </section>
+    <section class="card">
+      <h3>${T.adminLogsTitle}</h3>
+      <div id="admin-logs-filter" style="display:grid;grid-template-columns:repeat(6,auto);gap:.5rem;align-items:end;margin-bottom:.8rem">
+        <label>${T.thUser}<select id="alf-user"><option value="">${T.adminLogsAllUsers}</option></select></label>
+        <label>${T.thService}<select id="alf-service"><option value="">${T.adminLogsAllServices}</option></select></label>
+        <label>${T.thStatus}<select id="alf-status"><option value="">${T.adminLogsAllStatus}</option><option value="success">${T.adminLogsSuccess}</option><option value="error">${T.adminLogsError}</option></select></label>
+        <label>开始时间<input id="alf-since" type="datetime-local"></label>
+        <label>结束时间<input id="alf-until" type="datetime-local"></label>
+        <button id="alf-query" style="margin-bottom:0">${T.adminLogsQuery}</button>
+      </div>
+      <table><thead><tr><th>${T.thTime}</th><th>${T.thUser}</th><th>${T.thModel}</th><th>${T.thService}</th><th>${T.thDuration}</th><th>${T.thStatus}</th><th>${T.thErrorCode}</th></tr></thead><tbody id="alf-rows"></tbody></table>
+      <div class="row-actions" id="alf-pager" style="margin-top:.5rem"></div>
     </section>`;
 
   const s = await api("/api/admin/settings");
@@ -488,6 +509,20 @@ async function renderAdminDashboard() {
   };
 
   await loadAdminUsers();
+
+  // Populate admin logs filter dropdowns.
+  const { users } = await api("/api/admin/users");
+  let userOpts = `<option value="">${T.adminLogsAllUsers}</option>`;
+  (users || []).forEach((u) => { userOpts += `<option value="${u.id}">${esc(u.username)} (${esc(u.discord_id)})</option>`; });
+  $("#alf-user").innerHTML = userOpts;
+
+  const { services } = await api("/api/services");
+  let svcOpts = `<option value="">${T.adminLogsAllServices}</option>`;
+  services.forEach((s) => { svcOpts += `<option value="${esc(s.name)}">${esc(s.name)}</option>`; });
+  $("#alf-service").innerHTML = svcOpts;
+
+  $("#alf-query").onclick = () => { adminLogPager.page = 1; loadAdminLogs(); };
+  await loadAdminLogs();
 }
 
 function userStatusBadges(u) {
@@ -505,6 +540,7 @@ function userStatusBadges(u) {
 }
 
 const userPager = newPager(userRow);
+const adminLogPager = newPager(adminLogRow);
 
 function userRow(u) {
   const rpm = u.rpm_limit ? esc(String(u.rpm_limit)) : `<span class="muted">default</span>`;
@@ -602,4 +638,81 @@ async function loadAdminUsers() {
       toast(T.error.replace("{msg}", err.message), 4000);
     }
   }));
+}
+
+/* ---------------- admin site: request logs ---------------- */
+function adminLogRow(l) {
+  const userCell = l.username
+    ? esc(l.username)
+    : esc(String(l.user_id)) + ` <span class="muted">${T.adminLogsDeletedUser}</span>`;
+  const dur = l.ended_at && l.started_at ? ((l.ended_at - l.started_at) * 1000).toFixed(0) + "ms" : "—";
+  const statusClass = l.status === "success" ? "ok" : "err";
+  const statusText = l.status === "success" ? T.adminLogsSuccess : T.adminLogsError;
+  return `
+    <tr>
+      <td class="muted">${fmtT(l.started_at)}</td>
+      <td>${userCell}</td>
+      <td class="mono">${esc(l.model)}</td>
+      <td>${esc(l.service)}</td>
+      <td class="muted">${esc(dur)}</td>
+      <td><span class="badge ${statusClass}">${statusText}</span></td>
+      <td class="mono muted">${esc(l.error_code)}</td>
+    </tr>`;
+}
+
+async function loadAdminLogs() {
+  const params = new URLSearchParams();
+  const uid = $("#alf-user").value;
+  if (uid) params.set("user_id", uid);
+  const svc = $("#alf-service").value;
+  if (svc) params.set("service", svc);
+  const st = $("#alf-status").value;
+  if (st) params.set("status", st);
+  const since = $("#alf-since").value;
+  if (since) params.set("since", String(Math.floor(new Date(since).getTime() / 1000)));
+  const until = $("#alf-until").value;
+  if (until) params.set("until", String(Math.floor(new Date(until).getTime() / 1000)));
+  // Server-side pagination: "全部" maps to the server's max page size (500).
+  const size = adminLogPager.size === Infinity ? 500 : adminLogPager.size;
+  params.set("limit", String(size));
+  params.set("offset", String((adminLogPager.page - 1) * size));
+
+  try {
+    const data = await api(`/api/admin/logs?${params.toString()}`);
+    renderAdminLogs(data);
+  } catch (err) {
+    $("#alf-rows").innerHTML = `<tr><td colspan="7" class="muted">${T.error.replace("{msg}", err.message)}</td></tr>`;
+    $("#alf-pager").innerHTML = "";
+  }
+}
+
+function renderAdminLogs(data) {
+  const { logs, total } = data;
+  if (!logs) return;
+
+  const size = adminLogPager.size;
+  const pages = size === Infinity ? 1 : Math.max(1, Math.ceil(total / size));
+  adminLogPager.page = Math.min(Math.max(1, adminLogPager.page), pages);
+
+  $("#alf-rows").innerHTML = logs.length
+    ? logs.map(adminLogRow).join("")
+    : `<tr><td colspan="7" class="muted">${T.empty}</td></tr>`;
+
+  $("#alf-pager").innerHTML = `
+    <select class="pg-size">
+      ${[5, 10, 20, 50].map((n) => `<option value="${n}" ${size === n ? "selected" : ""}>${n} 条/页</option>`).join("")}
+      <option value="inf" ${size === Infinity ? "selected" : ""}>全部</option>
+    </select>
+    <button class="pg-prev secondary" ${adminLogPager.page <= 1 ? "disabled" : ""}>‹</button>
+    <span class="muted">${adminLogPager.page} / ${pages} 页 · 共 ${total} 条</span>
+    <button class="pg-next secondary" ${adminLogPager.page >= pages ? "disabled" : ""}>›</button>`;
+
+  const c = $("#alf-pager");
+  c.querySelector(".pg-size").onchange = (e) => {
+    adminLogPager.size = e.target.value === "inf" ? Infinity : parseInt(e.target.value, 10);
+    adminLogPager.page = 1;
+    loadAdminLogs();
+  };
+  c.querySelector(".pg-prev").onclick = () => { adminLogPager.page--; loadAdminLogs(); };
+  c.querySelector(".pg-next").onclick = () => { adminLogPager.page++; loadAdminLogs(); };
 }

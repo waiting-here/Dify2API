@@ -69,3 +69,12 @@ func (s *Store) DeleteUserSessions(userID int64) error {
 	_, err := s.db.Exec(`DELETE FROM sessions WHERE user_id=?`, userID)
 	return err
 }
+
+// PurgeExpiredSessions deletes sessions whose expiry has passed.
+func (s *Store) PurgeExpiredSessions() (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM sessions WHERE expires_at < ?`, time.Now().Unix())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}

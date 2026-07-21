@@ -86,6 +86,31 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 
+	// Background cleanup: purge old request logs (>30d) and expired sessions.
+	// Run once at startup then every 24h — because during development the
+	// process may never run for 30 days straight.
+	go func() {
+		runCleanup := func() {
+			n, err := store.PurgeOldRequestLogs()
+			if err != nil {
+				log.Printf("[CLEANUP] request logs: %v", err)
+			}
+			m, err := store.PurgeExpiredSessions()
+			if err != nil {
+				log.Printf("[CLEANUP] sessions: %v", err)
+			}
+			if err == nil {
+				log.Printf("[CLEANUP] purged %d request logs (>30d), %d expired sessions", n, m)
+			}
+		}
+		runCleanup()
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			runCleanup()
+		}
+	}()
+
 	// Graceful shutdown on SIGINT/SIGTERM
 	go func() {
 		sigCh := make(chan os.Signal, 1)
