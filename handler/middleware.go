@@ -43,7 +43,7 @@ func (g *Gateway) hostSeparation(next http.Handler) http.Handler {
 		if g.isAdminHost(r) {
 			if p == "/" || strings.HasPrefix(p, "/static/") || p == "/api/site-info" ||
 				p == "/api/auth/admin/login" || p == "/api/auth/logout" || p == "/api/me" || p == "/privacy" || p == "/terms" || p == "/403" || p == "/404" ||
-				strings.HasPrefix(p, "/api/admin/") || p == "/health" {
+				strings.HasPrefix(p, "/api/admin/") || p == "/health" || p == "/favicon.ico" {
 				next.ServeHTTP(w, r)
 				return
 			}

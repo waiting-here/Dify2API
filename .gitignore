@@ -32,3 +32,10 @@ dify2api.exe
 
 # Exported files
 *.zip
+
+# Runtime files
+*.db
+*.db-shm
+*.db-wal
+*.key
+

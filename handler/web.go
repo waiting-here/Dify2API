@@ -81,11 +81,13 @@ func (g *Gateway) registerWebRoutes(mux *http.ServeMux) {
 func (g *Gateway) serveFavicon(w http.ResponseWriter) {
 	p := g.Config.FaviconPath
 	if p == "" {
+		w.Header().Set("Cache-Control", "public, max-age=3600")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	data, err := os.ReadFile(p)
 	if err != nil {
+		w.Header().Set("Cache-Control", "public, max-age=300")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -99,7 +101,7 @@ func (g *Gateway) serveFavicon(w http.ResponseWriter) {
 	}
 	w.Header().Set("Content-Type", ct)
 	// Long cache but NOT immutable — the deployer may change the icon file
-	// without renaming it, and browsers need to be able to revalidate.
-	w.Header().Set("Cache-Control", "public, max-age=604800")
+	// without renaming it, and browsers/CDN need to be able to revalidate.
+	w.Header().Set("Cache-Control", "public, max-age=86400, s-maxage=86400")
 	w.Write(data)
 }
