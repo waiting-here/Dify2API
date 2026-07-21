@@ -344,3 +344,30 @@ func TestAdminLogs_HostSeparation_UserHost(t *testing.T) {
 		t.Errorf("admin-host logs: status = %d, want 200; body: %s", rec2.Code, rec2.Body.String())
 	}
 }
+
+func TestAdminHost_ServicesAllowed(t *testing.T) {
+	// Regression (VPS deploy 2026-07-22): the admin dashboard's log filter
+	// fetches /api/services, which must be reachable on the admin host —
+	// it was missing from the hostSeparation allowlist and returned 404,
+	// aborting renderAdminDashboard mid-way.
+	gw, store := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+	_ = store
+
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	wrapped := gw.Wrap(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/services", nil)
+	req.AddCookie(adminCookie)
+	req.Host = gw.Config.Admin.AdminHost
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("admin-host /api/services: status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "general") {
+		t.Errorf("services response should list registry entries: %s", rec.Body.String())
+	}
+}

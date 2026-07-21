@@ -34,7 +34,8 @@ func (g *Gateway) forceHTTPS(next http.Handler) http.Handler {
 
 // hostSeparation enforces the split between the user site and the admin site:
 //   - admin site (admin.<site>): ONLY admin login/logout, /api/me,
-//     /api/admin/*, /privacy, /terms — no Discord OAuth, no /v1 API, no user UI.
+//     /api/admin/*, /api/services (read-only registry for the log filter),
+//     /privacy, /terms — no Discord OAuth, no /v1 API, no user UI.
 //   - user site (everything else): Discord OAuth, /v1 API, user UI — but NO
 //     admin login and NO /api/admin/*.
 func (g *Gateway) hostSeparation(next http.Handler) http.Handler {
@@ -43,6 +44,7 @@ func (g *Gateway) hostSeparation(next http.Handler) http.Handler {
 		if g.isAdminHost(r) {
 			if p == "/" || strings.HasPrefix(p, "/static/") || p == "/api/site-info" ||
 				p == "/api/auth/admin/login" || p == "/api/auth/logout" || p == "/api/me" || p == "/privacy" || p == "/terms" || p == "/403" || p == "/404" ||
+				p == "/api/services" ||
 				strings.HasPrefix(p, "/api/admin/") || p == "/health" || p == "/favicon.ico" {
 				next.ServeHTTP(w, r)
 				return

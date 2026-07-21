@@ -94,6 +94,10 @@ const T = {
   adminLogsError: "错误",
   adminLogsQuery: "查询",
   adminLogsDeletedUser: "（已删除）",
+  adminLogsUserSearch: "输入用户名搜索，留空表示全部",
+  adminLogsUserNotFound: "未找到匹配的用户：{name}",
+  adminLogsSince: "开始时间",
+  adminLogsUntil: "结束时间",
 };
 
 /* ---------------- helpers ---------------- */
@@ -485,13 +489,16 @@ async function renderAdminDashboard() {
     </section>
     <section class="card">
       <h3>${T.adminLogsTitle}</h3>
-      <div id="admin-logs-filter" style="display:grid;grid-template-columns:repeat(6,auto);gap:.5rem;align-items:end;margin-bottom:.8rem">
-        <label>${T.thUser}<select id="alf-user"><option value="">${T.adminLogsAllUsers}</option></select></label>
-        <label>${T.thService}<select id="alf-service"><option value="">${T.adminLogsAllServices}</option></select></label>
-        <label>${T.thStatus}<select id="alf-status"><option value="">${T.adminLogsAllStatus}</option><option value="success">${T.adminLogsSuccess}</option><option value="error">${T.adminLogsError}</option></select></label>
-        <label>开始时间<input id="alf-since" type="datetime-local"></label>
-        <label>结束时间<input id="alf-until" type="datetime-local"></label>
-        <button id="alf-query" style="margin-bottom:0">${T.adminLogsQuery}</button>
+      <div id="admin-logs-filter" style="display:flex;flex-wrap:wrap;gap:.75rem;align-items:flex-end;margin-bottom:.8rem">
+        <label style="flex:1 1 16rem;min-width:14rem;margin-bottom:0">${T.thUser}
+          <input id="alf-user" list="alf-user-list" placeholder="${T.adminLogsUserSearch}" autocomplete="off">
+          <datalist id="alf-user-list"></datalist>
+        </label>
+        <label style="flex:0 1 12rem;min-width:10rem;margin-bottom:0">${T.thService}<select id="alf-service"><option value="">${T.adminLogsAllServices}</option></select></label>
+        <label style="flex:0 1 8rem;min-width:7rem;margin-bottom:0">${T.thStatus}<select id="alf-status"><option value="">${T.adminLogsAllStatus}</option><option value="success">${T.adminLogsSuccess}</option><option value="error">${T.adminLogsError}</option></select></label>
+        <label style="flex:0 1 13rem;min-width:11rem;margin-bottom:0">${T.adminLogsSince}<input id="alf-since" type="datetime-local"></label>
+        <label style="flex:0 1 13rem;min-width:11rem;margin-bottom:0">${T.adminLogsUntil}<input id="alf-until" type="datetime-local"></label>
+        <button id="alf-query" style="flex:0 0 auto;width:auto;margin-bottom:0">${T.adminLogsQuery}</button>
       </div>
       <table><thead><tr><th>${T.thTime}</th><th>${T.thUser}</th><th>${T.thModel}</th><th>${T.thService}</th><th>${T.thDuration}</th><th>${T.thStatus}</th><th>${T.thErrorCode}</th></tr></thead><tbody id="alf-rows"></tbody></table>
       <div class="row-actions" id="alf-pager" style="margin-top:.5rem"></div>
@@ -510,11 +517,15 @@ async function renderAdminDashboard() {
 
   await loadAdminUsers();
 
-  // Populate admin logs filter dropdowns.
+  // Populate the admin-logs filter widgets.  The user filter is a
+  // searchable text input backed by a <datalist> (dropdowns are unusable
+  // with 100+ users); typing filters natively in the browser, and the
+  // entered text is resolved to a user id in loadAdminLogs().
   const { users } = await api("/api/admin/users");
-  let userOpts = `<option value="">${T.adminLogsAllUsers}</option>`;
-  (users || []).forEach((u) => { userOpts += `<option value="${u.id}">${esc(u.username)} (${esc(u.discord_id)})</option>`; });
-  $("#alf-user").innerHTML = userOpts;
+  adminLogUsers = users || [];
+  $("#alf-user-list").innerHTML = adminLogUsers
+    .map((u) => `<option value="${esc(u.username)}（${esc(u.discord_id)}）"></option>`)
+    .join("");
 
   const { services } = await api("/api/services");
   let svcOpts = `<option value="">${T.adminLogsAllServices}</option>`;
@@ -541,6 +552,32 @@ function userStatusBadges(u) {
 
 const userPager = newPager(userRow);
 const adminLogPager = newPager(adminLogRow);
+// Users fetched for the admin-log filter (username → id resolution).
+let adminLogUsers = [];
+
+// resolveLogUserFilter maps the free-text user filter to a user id.
+// Returns { id } on success, { id: null } for "all" (empty input), or
+// { error } when the text matches no user.
+function resolveLogUserFilter(text) {
+  const q = text.trim();
+  if (!q) return { id: null };
+  // Exact datalist form: "username（discord_id）".
+  const m = q.match(/^(.*)（([^（）]*)）$/);
+  if (m) {
+    const hit = adminLogUsers.find((u) => u.username === m[1] && u.discord_id === m[2]);
+    if (hit) return { id: hit.id };
+  }
+  // Fallbacks: exact username, exact discord id, numeric user id.
+  const byName = adminLogUsers.filter((u) => u.username === q);
+  if (byName.length === 1) return { id: byName[0].id };
+  const byDiscord = adminLogUsers.find((u) => u.discord_id === q);
+  if (byDiscord) return { id: byDiscord.id };
+  if (/^\d+$/.test(q)) {
+    const byId = adminLogUsers.find((u) => String(u.id) === q);
+    if (byId) return { id: byId.id };
+  }
+  return { error: T.adminLogsUserNotFound.replace("{name}", q) };
+}
 
 function userRow(u) {
   const rpm = u.rpm_limit ? esc(String(u.rpm_limit)) : `<span class="muted">default</span>`;
@@ -662,8 +699,13 @@ function adminLogRow(l) {
 
 async function loadAdminLogs() {
   const params = new URLSearchParams();
-  const uid = $("#alf-user").value;
-  if (uid) params.set("user_id", uid);
+  const resolved = resolveLogUserFilter($("#alf-user").value);
+  if (resolved.error) {
+    $("#alf-rows").innerHTML = `<tr><td colspan="7" class="muted">${esc(resolved.error)}</td></tr>`;
+    $("#alf-pager").innerHTML = "";
+    return;
+  }
+  if (resolved.id !== null) params.set("user_id", String(resolved.id));
   const svc = $("#alf-service").value;
   if (svc) params.set("service", svc);
   const st = $("#alf-status").value;
