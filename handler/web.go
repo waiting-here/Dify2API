@@ -68,8 +68,8 @@ func (g *Gateway) registerWebRoutes(mux *http.ServeMux) {
 		w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", maxAge))
 		w.Write([]byte(body))
 	}
-	mux.HandleFunc("GET /privacy", func(w http.ResponseWriter, r *http.Request) { servePage(w, "privacy.html", 3600) })
-	mux.HandleFunc("GET /terms", func(w http.ResponseWriter, r *http.Request) { servePage(w, "terms.html", 3600) })
+	mux.HandleFunc("GET /privacy", func(w http.ResponseWriter, r *http.Request) { servePage(w, "privacy.html", 0) })
+	mux.HandleFunc("GET /terms", func(w http.ResponseWriter, r *http.Request) { servePage(w, "terms.html", 0) })
 	mux.HandleFunc("GET /403", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(403); servePage(w, "403.html", 0) })
 	mux.HandleFunc("GET /404", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(404); servePage(w, "404.html", 0) })
 }
