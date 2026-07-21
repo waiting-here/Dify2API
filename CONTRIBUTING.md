@@ -75,5 +75,4 @@ The maintainer reviews PRs on a best-effort basis.  To help move things along:
 
 ## Questions?
 
-Open a [GitHub Discussion](https://github.com) or email the project maintainer
-at the address shown in the repository.
+Open a [GitHub Discussion](https://github.com/your-org/dify2api/discussions) in the repository.
