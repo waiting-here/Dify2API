@@ -1,0 +1,198 @@
+package handler
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"dify2api/auth"
+	"dify2api/db"
+)
+
+func userCookie(t *testing.T, gw *Gateway, store *db.Store) *http.Cookie {
+	t.Helper()
+	u, err := store.CreateUser("42", "tester", "")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	token, _, err := store.CreateSession(u.ID)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	return &http.Cookie{Name: auth.SessionCookieName, Value: token}
+}
+
+func TestCallerKey_GetAndReset(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	cookie := userCookie(t, gw, store)
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	// No key yet -> null.
+	req := httptest.NewRequest(http.MethodGet, "/api/caller-key", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	var r1 struct {
+		Key *string `json:"key"`
+	}
+	json.NewDecoder(rec.Body).Decode(&r1)
+	if r1.Key != nil {
+		t.Errorf("expected null key, got %v", *r1.Key)
+	}
+
+	// Reset -> new key returned and works for lookup.
+	req = httptest.NewRequest(http.MethodPost, "/api/caller-key/reset", nil)
+	req.AddCookie(cookie)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	var r2 struct {
+		Key string `json:"key"`
+	}
+	json.NewDecoder(rec.Body).Decode(&r2)
+	if !strings.HasPrefix(r2.Key, db.CallerKeyPrefix) {
+		t.Errorf("key = %q, want d2a_ prefix", r2.Key)
+	}
+	u, _ := store.GetUserByCallerKey(r2.Key)
+	if u == nil {
+		t.Error("new key should resolve to the user")
+	}
+
+	// Get returns the same key; second reset rotates it.
+	req = httptest.NewRequest(http.MethodGet, "/api/caller-key", nil)
+	req.AddCookie(cookie)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	var r3 struct {
+		Key string `json:"key"`
+	}
+	json.NewDecoder(rec.Body).Decode(&r3)
+	if r3.Key != r2.Key {
+		t.Errorf("get = %q, want %q", r3.Key, r2.Key)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/caller-key/reset", nil)
+	req.AddCookie(cookie)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	var r4 struct {
+		Key string `json:"key"`
+	}
+	json.NewDecoder(rec.Body).Decode(&r4)
+	if r4.Key == r2.Key {
+		t.Error("reset should rotate the key")
+	}
+	if u, _ := store.GetUserByCallerKey(r2.Key); u != nil {
+		t.Error("old key should stop working after reset")
+	}
+}
+
+func TestListLogs_SnakeCaseKeys(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	cookie := userCookie(t, gw, store)
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	u, _ := store.GetUserByDiscordID("42")
+	store.AddRequestLog(u.ID, "[general]x", "general", time.Now().Add(-time.Minute), time.Now(), "success", "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/logs", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	body := rec.Body.String()
+	for _, key := range []string{"\"started_at\"", "\"ended_at\"", "\"model\"", "\"status\"", "\"error_code\"", "\"service\""} {
+		if !strings.Contains(body, key) {
+			t.Errorf("logs response missing snake_case key %s: %s", key, body)
+		}
+	}
+	if strings.Contains(body, "StartedAt") {
+		t.Error("response leaked Go field names (missing json tags)")
+	}
+}
+
+func TestAdminListUsersAndSettings(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	store.CreateUser("1", "alice", "")
+	u2, _ := store.CreateUser("2", "bob", "")
+	store.SetUserDisabled(u2.ID, true, "test")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/users", nil)
+	req.AddCookie(adminCookie)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	var resp struct {
+		Users []struct {
+			Username string `json:"username"`
+			Banned   bool   `json:"banned"`
+		} `json:"users"`
+	}
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if len(resp.Users) != 2 {
+		t.Fatalf("users = %v, want 2", resp.Users)
+	}
+	if resp.Users[1].Username != "bob" || !resp.Users[1].Banned {
+		t.Errorf("bob should be banned: %+v", resp.Users)
+	}
+
+	// Settings get/put roundtrip.
+	req = httptest.NewRequest(http.MethodPut, "/api/admin/settings", strings.NewReader(`{"guild_id":"g9","role_id":"r9"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(adminCookie)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put settings: %d", rec.Code)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/admin/settings", nil)
+	req.AddCookie(adminCookie)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	var s map[string]string
+	json.NewDecoder(rec.Body).Decode(&s)
+	if s["guild_id"] != "g9" || s["role_id"] != "r9" {
+		t.Errorf("settings = %v", s)
+	}
+}
+
+func TestSiteInfoAndStatic(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "x")
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/site-info", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	var info map[string]string
+	json.NewDecoder(rec.Body).Decode(&info)
+	if info["admin_host"] != "admin.localhost" || info["site_host"] != "localhost" {
+		t.Errorf("site-info = %v", info)
+	}
+
+	// SPA shell served at /, assets under /static/.
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "app.js") {
+		t.Errorf("GET / should serve the SPA shell (status %d)", rec.Code)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/static/app.js", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "renderUserDashboard") {
+		t.Errorf("GET /static/app.js: status %d", rec.Code)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/static/pico.min.css", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("GET /static/pico.min.css: status %d", rec.Code)
+	}
+}

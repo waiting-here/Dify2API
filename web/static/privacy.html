@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico">
+<title>隐私政策 — __SITE_NAME__</title>
+<link rel="stylesheet" href="/static/pico.min.css">
+<style>
+  body > nav { border-bottom: 1px solid var(--pico-muted-border-color); padding: .5rem 1rem; display: flex; justify-content: space-between; align-items: center; }
+  body > nav .logo { font-weight: 700; color: #4a7ddb; }
+  main.container { max-width: 800px; }
+  footer { text-align: center; padding: 1.5rem 0; color: var(--pico-muted-color); font-size: .85rem; border-top: 1px solid var(--pico-muted-border-color); margin-top: 2rem; }
+  footer a { color: var(--pico-muted-color); }
+</style>
+</head>
+<body>
+<nav>
+  <a href="/" class="logo">__SITE_NAME__</a>
+</nav>
+<main class="container">
+<h1>隐私政策</h1>
+<p><strong>最后更新日期：2026 年 7 月 22 日</strong></p>
+
+<h2>1. 概述</h2>
+<p>__SITE_NAME__（"我们"、"本服务"）致力于保护您的隐私。本隐私政策说明我们如何收集、使用、存储和共享您的个人信息，以及您对这些信息享有的权利。</p>
+<p>本服务是一个自部署的开源网关工具。本隐私政策适用于本服务的部署运营者（"部署者"）通过本服务收集和处理的所有个人信息。</p>
+
+<h2>2. 我们收集的信息</h2>
+
+<h3>2.1 您主动提供的信息</h3>
+<ul>
+  <li><strong>Discord 账户信息</strong>：当您通过 Discord OAuth 登录时，我们会从 Discord 获取您的用户 ID、用户名、头像和公会成员信息。这些信息用于创建和识别您的账户。</li>
+  <li><strong>Dify App 配置</strong>：您在平台上配置的 Dify App API 地址和 API 密钥。API 密钥以 AES-256-GCM 加密存储。</li>
+</ul>
+
+<h3>2.2 自动收集的信息</h3>
+<ul>
+  <li><strong>请求日志</strong>：每次 API 调用，我们会记录调用的时间、使用的模型名称、调用状态（成功/失败）和错误码。<strong>我们不会记录您的请求内容或 AI 模型的返回内容。</strong></li>
+  <li><strong>技术日志</strong>：标准的服务器日志（如 IP 地址、请求时间），仅用于运维排错和滥用防护。</li>
+</ul>
+
+<h2>3. 我们如何使用信息</h2>
+<ul>
+  <li><strong>提供服务</strong>：认证您的身份，将您的 API 请求路由到您配置的 Dify App。</li>
+  <li><strong>滥用防护</strong>：基于请求频率的限流和异常检测，保护服务的稳定性。</li>
+  <li><strong>运维改进</strong>：分析聚合的使用数据以改进服务。</li>
+</ul>
+
+<h2>4. 数据存储与安全</h2>
+<ul>
+  <li>所有数据存储在部署者控制的服务器上（SQLite 数据库）。</li>
+  <li>敏感凭据（Dify API 密钥、调用方密钥）使用 AES-256-GCM 加密存储。</li>
+  <li>请求日志保留 <strong>30 天</strong>，到期后自动清除。</li>
+  <li>我们采取合理的技术和管理措施保护您的数据安全。</li>
+</ul>
+
+<h2>5. 数据共享与披露</h2>
+<p>我们<strong>不会</strong>将您的个人信息出售、出租或分享给第三方，除非：</p>
+<ul>
+  <li>法律要求（如收到有效的法院命令或执法请求）；</li>
+  <li>为保护本服务、用户或公众的权利、财产或安全所必需；</li>
+  <li>您明确同意共享。</li>
+</ul>
+
+<h2>6. 数据泄露通知</h2>
+<p>尽管我们采取了合理的安全措施（包括 AES-256-GCM 凭据加密和独立密钥存储），没有任何系统是绝对安全的。如果我们发现涉及您个人信息的安全事件（如数据库文件被未授权访问），我们将：</p>
+<ul>
+  <li>在合理可行的情况下尽快调查并控制事件影响范围；</li>
+  <li>按照适用法律的要求通知受影响的用户（通过本网站公告、或通过可用的联系方式）；</li>
+  <li>如涉及加密凭据泄露，建议您立即在 Dify 平台轮换相关 API 密钥并在本服务重置调用方密钥；</li>
+  <li>按照适用法律向相关监管机构报告（如适用）。</li>
+</ul>
+
+<h2>7. 您的权利</h2>
+<p>根据适用的数据保护法律（包括欧盟《通用数据保护条例》(GDPR)、《加州消费者隐私法案》(CCPA/CPRA) 以及《中华人民共和国个人信息保护法》(PIPL)），您可能享有以下权利：</p>
+<ul>
+  <li><strong>访问权</strong>：您可以通过网页控制台的"导出我的数据"功能，一键下载我们持有的关于您的所有数据。</li>
+  <li><strong>删除权（被遗忘权）</strong>：您可以在网页控制台选择"删除我的账号"，永久删除您的账户和全部关联数据。</li>
+  <li><strong>更正权</strong>：您可以在控制台更新您的 App 配置。</li>
+  <li><strong>限制处理权</strong>：通过 Discord 账号设置或联系我们来限制处理。</li>
+  <li><strong>数据可携权</strong>：导出功能提供 JSON 格式的完整数据包。</li>
+</ul>
+<p>如需行使上述权利或有任何隐私相关问题，请通过以下方式联系我们：<strong>__REPORT_EMAIL__</strong></p>
+
+<h2>8. 未成年人保护</h2>
+<p>本服务不面向 13 周岁以下的儿童。我们不会故意收集 13 周岁以下儿童的个人信息。如果我们发现无意中收集了此类信息，将立即删除。Discord 平台本身要求用户年满 13 周岁（部分地区年龄要求更高），这为本服务提供了额外的年龄验证层。</p>
+
+<h2>9. 国际数据传输</h2>
+<p>本服务的服务器可能位于美国或其他国家/地区。您的信息可能在您居住地以外的国家/地区存储和处理。我们采取合理措施确保您的数据受到本隐私政策的保护。</p>
+
+<h2>10. Cookie 与追踪</h2>
+<p>本服务使用必要的会话 Cookie 来维持您的登录状态。该 Cookie 不用于追踪或广告目的。我们<strong>不使用</strong>第三方追踪器、分析 Cookie 或广告网络。</p>
+
+<h2>11. 政策更新</h2>
+<p>我们可能不时更新本隐私政策。重大变更将通过网站公告或（在可能的情况下）电子邮件通知。</p>
+
+<h2>12. 联系方式</h2>
+<p>如对本隐私政策有任何疑问或担忧，请联系：<strong>__REPORT_EMAIL__</strong></p>
+</main>
+<footer>
+  <a href="/">首页</a> · <a href="/privacy">隐私政策</a> · <a href="/terms">服务协议</a>
+</footer>
+</body>
+</html>

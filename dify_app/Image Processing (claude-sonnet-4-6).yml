@@ -1,0 +1,229 @@
+app:
+  description: Sample Dify App (Image Processing) for Dify2API
+  icon: 📷
+  icon_background: '#FFEAD5'
+  icon_type: emoji
+  mode: workflow
+  name: Image Processing (claude-sonnet-4-6)
+  use_icon_as_answer_icon: false
+dependencies:
+- current_identifier: null
+  type: marketplace
+  value:
+    marketplace_plugin_unique_identifier: langgenius/anthropic:0.3.24@c5e50da8c13c7ac75348df5ac75b9418c79736eb506064669dd7ca06cbd83537
+    version: null
+kind: app
+version: 0.6.0
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload:
+      allowed_file_extensions:
+      - .JPG
+      - .JPEG
+      - .PNG
+      - .GIF
+      - .WEBP
+      - .SVG
+      allowed_file_types:
+      - image
+      allowed_file_upload_methods:
+      - local_file
+      - remote_url
+      enabled: false
+      fileUploadConfig:
+        attachment_image_file_size_limit: 2
+        audio_file_size_limit: 50
+        batch_count_limit: 5
+        file_size_limit: 15
+        file_upload_limit: 50
+        image_file_batch_limit: 10
+        image_file_size_limit: 10
+        single_chunk_attachment_limit: 10
+        video_file_size_limit: 100
+        workflow_file_upload_limit: 10
+      image:
+        enabled: false
+        number_limits: 3
+        transfer_methods:
+        - local_file
+        - remote_url
+      number_limits: 3
+    opening_statement: ''
+    retriever_resource:
+      enabled: true
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions: []
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+      language: ''
+      voice: ''
+  graph:
+    edges:
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: start
+        targetType: llm
+      id: 1784230714832-source-1784230721087-target
+      selected: false
+      source: '1784230714832'
+      sourceHandle: source
+      target: '1784230721087'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: llm
+        targetType: end
+      id: 1784230721087--1784230928863-target
+      source: '1784230721087'
+      sourceHandle: source
+      target: '1784230928863'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    nodes:
+    - data:
+        desc: 前序信息与用户本轮输入
+        selected: false
+        title: User Input
+        type: start
+        variables:
+        - default: You are a vision subagent in an automated agent pipeline. The main agent cannot
+            see images; your output is its ONLY source of visual information.
+
+            - First, follow the main agent's instruction in the user message. If no
+              instruction is given, describe the image(s) objectively and completely.
+            - Optimize for machine extraction above human readability: lead with the direct
+              answer/result; use compact structured formats (labeled sections, lists,
+              tables) whenever they aid extraction.
+            - Report only what is visible. Explicitly mark anything partial, uncertain, or
+              unreadable ("Uncertain:", "Unreadable:"); never invent content you cannot see.
+            - Be as concise as the task allows; no preamble or meta-commentary.
+            - Respond in the language of the task unless instructed otherwise.
+          hint: ''
+          label: 系统提示词
+          options: []
+          placeholder: ''
+          required: false
+          type: paragraph
+          variable: system_prompt
+        - allowed_file_extensions: []
+          allowed_file_types:
+          - image
+          allowed_file_upload_methods:
+          - local_file
+          default: ''
+          hide: false
+          hint: ''
+          label: 输入图片
+          max_length: 10
+          options: []
+          placeholder: ''
+          required: true
+          type: file-list
+          variable: input_image_list
+        - default: ''
+          hint: ''
+          label: 用户请求
+          options: []
+          placeholder: ''
+          required: true
+          type: paragraph
+          variable: user_request
+      height: 188
+      id: '1784230714832'
+      position:
+        x: 80
+        y: 280
+      positionAbsolute:
+        x: 80
+        y: 280
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    - data:
+        context:
+          enabled: false
+          variable_selector: []
+        desc: 汇总并调用模型生成
+        model:
+          completion_params:
+            context_1m: true
+            temperature: 0.8
+            thinking: true
+            thinking_budget: 32000
+          mode: chat
+          name: claude-sonnet-4-6
+          provider: langgenius/anthropic/anthropic
+        prompt_template:
+        - id: 73ebc186-85a4-41e7-bc6e-35936b7e8907
+          role: system
+          text: '{{#1784230714832.system_prompt#}}'
+        - id: 4908d7ab-a03d-411e-85c4-8e54afc1ee6c
+          role: user
+          text: '{{#1784230714832.user_request#}}'
+        reasoning_format: separated
+        selected: false
+        title: LLM
+        type: llm
+        vision:
+          configs:
+            detail: high
+            variable_selector:
+            - '1784230714832'
+            - input_image_list
+          enabled: true
+      height: 115
+      id: '1784230721087'
+      position:
+        x: 380
+        y: 280
+      positionAbsolute:
+        x: 380
+        y: 280
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 241
+    - data:
+        desc: 返回结果
+        outputs:
+        - value_selector:
+          - '1784230721087'
+          - text
+          value_type: string
+          variable: text
+        selected: false
+        title: Output
+        type: end
+      height: 115
+      id: '1784230928863'
+      position:
+        x: 680
+        y: 280
+      positionAbsolute:
+        x: 680
+        y: 280
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 241
+    viewport:
+      x: 500
+      y: 250
+      zoom: 1
+  rag_pipeline_variables: []

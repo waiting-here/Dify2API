@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico">
+<title>禁止访问 — 403</title>
+<link rel="stylesheet" href="/static/pico.min.css">
+<style>
+  body > nav { border-bottom: 1px solid var(--pico-muted-border-color); padding: .5rem 1rem; display: flex; justify-content: space-between; align-items: center; }
+  body > nav .logo { font-weight: 700; color: #4a7ddb; }
+  main.container { max-width: 800px; }
+  .banner { text-align: center; padding: 3rem 1rem; }
+  .banner h1 { font-size: 3rem; margin-bottom: .5rem; color: var(--pico-muted-color); }
+  .banner p.lead { font-size: 1.1rem; color: var(--pico-muted-color); }
+  .ban-card { border: 1px solid var(--pico-muted-border-color); border-radius: .5rem; padding: 1rem 1.25rem; margin-bottom: 1rem; }
+  .ban-card table { width: 100%; table-layout: fixed; }
+  .ban-card th { width: 8rem; white-space: nowrap; }
+  footer { text-align: center; padding: 1.5rem 0; color: var(--pico-muted-color); font-size: .85rem; border-top: 1px solid var(--pico-muted-border-color); margin-top: 2rem; }
+  footer a { color: var(--pico-muted-color); }
+</style>
+</head>
+<body>
+<nav><a href="/" class="logo">__SITE_NAME__</a></nav>
+<main class="container">
+<div class="banner" id="generic">
+  <h1>403</h1>
+  <p class="lead">您没有访问此页面的权限。</p>
+  <p class="muted">如需帮助，请联系 <a href="mailto:__REPORT_EMAIL__">__REPORT_EMAIL__</a>。</p>
+</div>
+<div class="ban-card" id="ban-info" style="display:none">
+  <h3>账号已被封禁</h3>
+  <table>
+    <tr><th>状态</th><td id="ban-status"></td></tr>
+    <tr id="ban-until-row" style="display:none"><th>解封时间</th><td id="ban-until"></td></tr>
+    <tr id="ban-reason-row" style="display:none"><th>封禁原因</th><td id="ban-reason"></td></tr>
+  </table>
+  <br>
+  <p class="muted">如有疑问或希望申诉，请发送邮件至 <a href="mailto:__REPORT_EMAIL__">__REPORT_EMAIL__</a> 联系我们。</p>
+</div>
+</main>
+<footer>
+  <a href="/">首页</a> · <a href="/privacy">隐私政策</a> · <a href="/terms">服务协议</a>
+</footer>
+<script>
+(function () {
+  var p = new URLSearchParams(location.search);
+  if (!p.has('banned')) { document.getElementById('generic').style.display = ''; return; }
+  document.getElementById('generic').style.display = 'none';
+  document.getElementById('ban-info').style.display = '';
+  document.getElementById('ban-status').textContent = p.get('permanent') === '1' ? '永久封禁' : '暂时封禁';
+  var until = p.get('until');
+  if (until && p.get('permanent') !== '1') {
+    document.getElementById('ban-until-row').style.display = '';
+    document.getElementById('ban-until').textContent = new Date(parseInt(until, 10) * 1000).toLocaleString();
+  }
+  var reason = p.get('reason');
+  if (reason) {
+    document.getElementById('ban-reason-row').style.display = '';
+    document.getElementById('ban-reason').textContent = decodeURIComponent(reason);
+  }
+})();
+</script>
+</body>
+</html>

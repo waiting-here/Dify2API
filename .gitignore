@@ -1,0 +1,34 @@
+# Secrets
+.env
+admin.env
+*.backup
+
+# User-supplied site assets (not part of the open-source repo)
+*.ico
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.svg
+
+# Debug artifacts
+debug.json
+debug_dumps/
+debug/
+
+# Local tooling & personal deployment configs
+.pi/
+nginx/*.local.conf
+dify2api.service
+
+# Local planning docs
+requirements/
+AGENTS.md
+
+# Binaries
+dify2api
+dify2api.exe
+
+# Exported files
+*.zip

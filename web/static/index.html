@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico">
+<title>Dify2API</title>
+<link rel="stylesheet" href="/static/pico.min.css">
+<style>
+  :root { --brand: #4a7ddb; }
+  body > nav { border-bottom: 1px solid var(--pico-muted-border-color); padding: .5rem 1rem; display: flex; justify-content: space-between; align-items: center; }
+  body > nav .logo { font-weight: 700; color: var(--brand); }
+  main.container { max-width: 960px; }
+  .card { border: 1px solid var(--pico-muted-border-color); border-radius: .5rem; padding: 1rem 1.25rem; margin-bottom: 1.25rem; }
+  .card h3 { margin-top: 0; }
+  .badge { display: inline-block; padding: .1rem .5rem; border-radius: 1rem; font-size: .8rem; }
+  .badge.ok { background: #e6f6e6; color: #1a7f1a; }
+  .badge.warn { background: #fdf3d8; color: #8a6d00; }
+  .badge.err { background: #fde6e6; color: #b02020; }
+  .badge.off { background: #eee; color: #666; }
+  table td, table th { vertical-align: middle; }
+  .mono { font-family: ui-monospace, monospace; font-size: .9em; }
+  .row-actions { display: flex; gap: .4rem; flex-wrap: wrap; }
+  .row-actions button, .row-actions a[role=button] { padding: .15rem .6rem; font-size: .85rem; margin: 0; }
+  .muted { color: var(--pico-muted-color); }
+  .note { padding: .6rem .9rem; border-radius: .4rem; margin: .5rem 0; }
+  .note.ok { background: #e6f6e6; }
+  .note.warn { background: #fdf3d8; }
+  .note.err { background: #fde6e6; }
+  .note.info { background: #e8f0fd; }
+  #toast { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%); background: #333; color: #fff; padding: .5rem 1.2rem; border-radius: 2rem; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 99; }
+  form.inline { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: .5rem; align-items: end; }
+  form.inline label { margin: 0; font-size: .85rem; }
+  @media (max-width: 800px) { form.inline { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<nav>
+  <span class="logo" id="nav-logo">Dify2API</span>
+  <span id="nav-user" class="muted"></span>
+</nav>
+<main class="container" id="app">加载中…</main>
+<footer style="text-align:center;padding:1.5rem 0;color:var(--pico-muted-color);font-size:.85rem;border-top:1px solid var(--pico-muted-border-color);margin-top:2rem">
+  <a href="/privacy" target="_blank">隐私政策</a> · <a href="/terms" target="_blank">服务协议</a>
+</footer>
+<div id="toast"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

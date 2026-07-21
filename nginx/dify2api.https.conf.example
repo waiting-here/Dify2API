@@ -1,0 +1,70 @@
+# Dify2API Nginx 反代配置(HTTPS,强制跳转)
+# 适用:公网部署。TLS 由 Nginx 终止,80 端口自动跳转 443。
+#
+# 安装:
+#   sudo cp dify2api.https.conf.example /etc/nginx/sites-available/dify2api.conf
+#   # 按需替换 api.your-domain.com 与证书路径
+#   sudo ln -s /etc/nginx/sites-available/dify2api.conf /etc/nginx/sites-enabled/
+#   sudo nginx -t && sudo nginx -s reload
+
+# HTTP → 全部跳转到 HTTPS
+server {
+    listen 80;
+    server_name api.your-domain.com admin.api.your-domain.com;   # ← 替换为你的域名
+    return 301 https://$host$request_uri;
+}
+
+# HTTPS → 反代到 Dify2API(用户站点:Discord 登录 + 用户台 + OpenAI 兼容 API)
+server {
+    listen 443 ssl;
+    server_name api.your-domain.com;   # ← 替换为你的域名
+
+    ssl_certificate     /etc/nginx/ssl/dify2api.pem;   # ← 替换为证书路径
+    ssl_certificate_key /etc/nginx/ssl/dify2api.key;   # ← 替换为私钥路径
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    location / {
+        proxy_pass http://localhost:10086;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+
+        # SSE 流式必须关闭缓冲
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+    }
+}
+
+# 管理站点:admin.<域名>(管理员密码登录;与主站严格隔离)
+server {
+    listen 443 ssl;
+    server_name admin.api.your-domain.com;   # ← 替换为你的域名
+
+    ssl_certificate     /etc/nginx/ssl/dify2api.pem;   # ← 替换为证书路径
+    ssl_certificate_key /etc/nginx/ssl/dify2api.key;   # ← 替换为私钥路径
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    location / {
+        proxy_pass http://localhost:10086;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+}

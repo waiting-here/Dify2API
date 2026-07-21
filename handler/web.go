@@ -1,0 +1,103 @@
+package handler
+
+import (
+	"encoding/json"
+	"fmt"
+	"io/fs"
+	"mime"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"dify2api/web"
+)
+
+// registerWebRoutes serves the embedded SPA and its static assets.
+// The SPA is host-aware: it renders the user site or the admin site depending
+// on the request host (see hostSeparation).
+func (g *Gateway) registerWebRoutes(mux *http.ServeMux) {
+	staticFS, err := fs.Sub(web.Static, "static")
+	if err != nil {
+		panic(err)
+	}
+	// Favicon: serve the user-supplied image file (if configured), otherwise 204.
+	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		g.serveFavicon(w)
+	})
+	// versions after redeploys (browser and Cloudflare revalidate every load).
+	staticHandler := http.StripPrefix("/static/", http.FileServerFS(staticFS))
+	mux.Handle("GET /static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=0, must-revalidate")
+		staticHandler.ServeHTTP(w, r)
+	}))
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		data, err := fs.ReadFile(staticFS, "index.html")
+		if err != nil {
+			http.Error(w, "frontend missing", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Write(data)
+	})
+
+	// Public site info for the SPA's host-mode detection, branding, and legal pages.
+	mux.HandleFunc("GET /api/site-info", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"site_host":    g.Config.Admin.SiteHost,
+			"admin_host":   g.Config.Admin.AdminHost,
+			"site_name":    g.Config.Admin.SiteName,
+			"report_email": g.Config.Admin.ReportEmail,
+			"site_base_url": g.Config.Admin.SiteBaseURL,
+		})
+	})
+
+	// Legal pages, served as static HTML with server-side placeholder substitution.
+	servePage := func(w http.ResponseWriter, name string, maxAge int) {
+		data, err := fs.ReadFile(staticFS, name)
+		if err != nil {
+			http.Error(w, "page not found", http.StatusNotFound)
+			return
+		}
+		body := strings.ReplaceAll(string(data), "__SITE_NAME__", g.Config.Admin.SiteName)
+		body = strings.ReplaceAll(body, "__REPORT_EMAIL__", g.Config.Admin.ReportEmail)
+		body = strings.ReplaceAll(body, "__SITE_BASE_URL__", g.Config.Admin.SiteBaseURL)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", maxAge))
+		w.Write([]byte(body))
+	}
+	mux.HandleFunc("GET /privacy", func(w http.ResponseWriter, r *http.Request) { servePage(w, "privacy.html", 3600) })
+	mux.HandleFunc("GET /terms", func(w http.ResponseWriter, r *http.Request) { servePage(w, "terms.html", 3600) })
+	mux.HandleFunc("GET /403", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(403); servePage(w, "403.html", 0) })
+	mux.HandleFunc("GET /404", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(404); servePage(w, "404.html", 0) })
+}
+
+// serveFavicon reads the configured favicon file and serves it with a
+// long cache lifetime and a correct Content-Type. When no favicon is
+// configured it returns HTTP 204 (no content) so browsers don't show
+// a broken-image icon.
+func (g *Gateway) serveFavicon(w http.ResponseWriter) {
+	p := g.Config.FaviconPath
+	if p == "" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	ext := filepath.Ext(p)
+	if ext == "" {
+		ext = ".ico"
+	}
+	ct := mime.TypeByExtension(ext)
+	if ct == "" {
+		ct = "image/x-icon"
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
+	w.Write(data)
+}

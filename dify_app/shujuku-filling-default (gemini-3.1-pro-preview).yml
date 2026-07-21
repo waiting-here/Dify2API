@@ -1,0 +1,273 @@
+app:
+  description: Sample Dify App (shujuku-filling-default) for Dify2API
+  icon: 📝
+  icon_background: '#FEF7C3'
+  icon_type: emoji
+  mode: workflow
+  name: shujuku-filling-default (gemini-3.1-pro-preview)
+  use_icon_as_answer_icon: false
+dependencies:
+- current_identifier: null
+  type: marketplace
+  value:
+    marketplace_plugin_unique_identifier: langgenius/gemini:0.9.2@d7070abc8d521d41489fdbc4760887774fbd4a521f03d191b7af4b146f16ba6f
+    version: null
+kind: app
+version: 0.6.0
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload:
+      allowed_file_extensions:
+      - .JPG
+      - .JPEG
+      - .PNG
+      - .GIF
+      - .WEBP
+      - .SVG
+      allowed_file_types:
+      - image
+      allowed_file_upload_methods:
+      - local_file
+      - remote_url
+      enabled: false
+      fileUploadConfig:
+        attachment_image_file_size_limit: 2
+        audio_file_size_limit: 50
+        batch_count_limit: 5
+        file_size_limit: 15
+        file_upload_limit: 50
+        image_file_batch_limit: 10
+        image_file_size_limit: 10
+        single_chunk_attachment_limit: 10
+        video_file_size_limit: 100
+        workflow_file_upload_limit: 10
+      image:
+        enabled: false
+        number_limits: 3
+        transfer_methods:
+        - local_file
+        - remote_url
+      number_limits: 3
+    opening_statement: ''
+    retriever_resource:
+      enabled: true
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions: []
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+      language: ''
+      voice: ''
+  graph:
+    edges:
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: start
+        targetType: llm
+      id: 1784230714832-source-1784230721087-target
+      selected: false
+      source: '1784230714832'
+      sourceHandle: source
+      target: '1784230721087'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: llm
+        targetType: end
+      id: 1784230721087--1784230928863-target
+      source: '1784230721087'
+      sourceHandle: source
+      target: '1784230928863'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    nodes:
+    - data:
+        desc: 前序信息与用户本轮输入
+        selected: false
+        title: User Input
+        type: start
+        variables:
+        - default: ''
+          hint: ''
+          label: 系统提示词
+          options: []
+          placeholder: ''
+          required: true
+          type: paragraph
+          variable: system_prompt
+        - default: ''
+          hint: ''
+          label: 用户0
+          options: []
+          placeholder: ''
+          required: false
+          type: text-input
+          variable: user_0
+        - default: ''
+          hint: ''
+          label: 助手0
+          options: []
+          placeholder: ''
+          required: true
+          type: paragraph
+          variable: assistant_0
+        - default: ''
+          hint: ''
+          label: 用户1
+          options: []
+          placeholder: ''
+          required: true
+          type: paragraph
+          variable: user_1
+        - default: ''
+          hint: ''
+          label: 助手1
+          options: []
+          placeholder: ''
+          required: true
+          type: paragraph
+          variable: assistant_1
+        - default: ''
+          hint: ''
+          label: 用户2
+          options: []
+          placeholder: ''
+          required: true
+          type: paragraph
+          variable: user_2
+        - default: ''
+          hint: ''
+          label: 助手2
+          options: []
+          placeholder: ''
+          required: true
+          type: paragraph
+          variable: assistant_2
+        - default: ''
+          hint: ''
+          label: 用户3
+          options: []
+          placeholder: ''
+          required: true
+          type: paragraph
+          variable: user_3
+        - default: ''
+          hint: ''
+          label: 预填充
+          options: []
+          placeholder: ''
+          required: true
+          type: paragraph
+          variable: assistant_prefill
+      height: 344
+      id: '1784230714832'
+      position:
+        x: 80
+        y: 282
+      positionAbsolute:
+        x: 80
+        y: 282
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    - data:
+        context:
+          enabled: false
+          variable_selector: []
+        desc: 汇总并调用模型生成
+        model:
+          completion_params:
+            include_thoughts: true
+            temperature: 0.8
+          mode: chat
+          name: gemini-3.1-pro-preview
+          provider: langgenius/gemini/google
+        prompt_template:
+        - id: 73ebc186-85a4-41e7-bc6e-35936b7e8907
+          role: system
+          text: '{{#1784230714832.system_prompt#}}'
+        - id: 7cb8f559-6f75-4d15-9cf8-28a8f585fb82
+          role: user
+          text: '{{#1784230714832.user_0#}}'
+        - id: d74d4c7f-48d4-4a59-bc58-25736a1c023f
+          role: assistant
+          text: '{{#1784230714832.assistant_0#}}'
+        - id: be444e2d-5879-4aae-97f0-0073b8e79e44
+          role: user
+          text: '{{#1784230714832.user_1#}}'
+        - id: 476cebf8-74bc-4048-9fcd-8402045f7220
+          role: assistant
+          text: '{{#1784230714832.assistant_1#}}'
+        - id: 9e51b761-a414-46ec-848f-fb2f30010ad7
+          role: user
+          text: '{{#1784230714832.user_2#}}'
+        - id: 93165616-c958-4309-8541-4a69ed2c2111
+          role: assistant
+          text: '{{#1784230714832.assistant_2#}}'
+        - id: c3e69ca2-dc5e-4f71-96e7-eb89487c1cc8
+          role: user
+          text: '{{#1784230714832.user_3#}}'
+        - id: 6692c9d4-942b-4746-b4db-e3501914d195
+          role: assistant
+          text: '{{#1784230714832.assistant_prefill#}}'
+        reasoning_format: tagged
+        selected: true
+        title: LLM
+        type: llm
+        vision:
+          enabled: false
+      height: 115
+      id: '1784230721087'
+      position:
+        x: 381
+        y: 282
+      positionAbsolute:
+        x: 381
+        y: 282
+      selected: true
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 241
+    - data:
+        desc: 返回结果
+        outputs:
+        - value_selector:
+          - '1784230721087'
+          - text
+          value_type: string
+          variable: text
+        selected: false
+        title: Output
+        type: end
+      height: 115
+      id: '1784230928863'
+      position:
+        x: 683
+        y: 282
+      positionAbsolute:
+        x: 683
+        y: 282
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 241
+    viewport:
+      x: 684.5
+      y: 215
+      zoom: 1
+  rag_pipeline_variables: []

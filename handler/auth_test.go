@@ -1,0 +1,268 @@
+package handler
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+
+	"dify2api/auth"
+	"dify2api/config"
+	"dify2api/db"
+	"golang.org/x/crypto/bcrypt"
+)
+
+func setupAuthGateway(t *testing.T, adminPassword string) (*Gateway, *db.Store) {
+	t.Helper()
+	dir := t.TempDir()
+	store, err := db.Open(dir+"/test.db", dir+"/test.key")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	cfg := &config.Config{
+		ListenAddr:         "localhost:10086",
+		DifyHTTPTimeoutMs:  600000,
+		MaxChatInFlight:    64,
+		MaxRequestBodyMB:   4,
+		SSEBufferMB:        1,
+		LoginMaxFailures:   5,
+		LoginWindowMin:     10,
+		LoginLockMin:       60,
+		LoginMinLatencyMs:  0, // keep the shared fixture fast; throttle tests adjust their own
+		Admin: config.AdminConfig{
+			Username:            "root",
+			Password:            adminPassword,
+			DiscordClientID:     "cid",
+			DiscordClientSecret: "csecret",
+			SiteBaseURL:         "http://localhost:10086",
+			SiteHost:            "localhost",
+			AdminHost:           "admin.localhost",
+		},
+	}
+	return NewGateway(cfg, store), store
+}
+
+func loginCookie(t *testing.T, gw *Gateway, username, password string) *http.Cookie {
+	t.Helper()
+	body := fmt.Sprintf(`{"username":%q,"password":%q}`, username, password)
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/admin/login", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin login: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == auth.SessionCookieName {
+			return c
+		}
+	}
+	t.Fatal("no session cookie")
+	return nil
+}
+
+func TestAdminLogin_PlaintextAndBcrypt(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "s3cret")
+	loginCookie(t, gw, "root", "s3cret")
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("s3cret"), bcrypt.MinCost)
+	gw2, _ := setupAuthGateway(t, string(hash))
+	loginCookie(t, gw2, "root", "s3cret")
+}
+
+func TestAdminLogin_WrongPassword(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "s3cret")
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	body := `{"username":"root","password":"wrong"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/admin/login", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestMe_And_Logout(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "s3cret")
+	cookie := loginCookie(t, gw, "root", "s3cret")
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("me: status %d", rec.Code)
+	}
+	var me map[string]interface{}
+	json.NewDecoder(rec.Body).Decode(&me)
+	if me["is_admin"] != true || me["username"] != "root" {
+		t.Errorf("me = %v", me)
+	}
+
+	// Logout invalidates the session.
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	req.AddCookie(cookie)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	req = httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	req.AddCookie(cookie)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("after logout: status = %d, want 401", rec.Code)
+	}
+}
+
+// discordStub fakes the Discord API for OAuth callback tests.
+func discordStub(t *testing.T, roles []string, guildStatus int) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/oauth2/token":
+			json.NewEncoder(w).Encode(map[string]string{"access_token": "tok-123"})
+		case r.URL.Path == "/users/@me":
+			json.NewEncoder(w).Encode(map[string]string{"id": "42", "username": "tester", "avatar": "a1"})
+		case strings.HasPrefix(r.URL.Path, "/users/@me/guilds/"):
+			if guildStatus != 200 {
+				w.WriteHeader(guildStatus)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string][]string{"roles": roles})
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+}
+
+func withDiscordStub(t *testing.T, srv *httptest.Server) {
+	t.Helper()
+	old := auth.APIBase
+	auth.APIBase = srv.URL
+	t.Cleanup(func() { auth.APIBase = old })
+}
+
+func callbackRequest(gw *Gateway, mux *http.ServeMux, code, state string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, "/auth/discord/callback?"+url.Values{"code": {code}, "state": {state}}.Encode(), nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestDiscordCallback_BadState(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "x")
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	rec := callbackRequest(gw, mux, "code", "bad-state")
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestDiscordCallback_RegisterWithRole(t *testing.T) {
+	stub := discordStub(t, []string{"role-1"}, 200)
+	withDiscordStub(t, stub)
+	gw, store := setupAuthGateway(t, "x")
+	store.SetSetting(db.SettingGuildID, "g1")
+	store.SetSetting(db.SettingRoleID, "role-1")
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	state, _ := newOAuthState()
+	rec := callbackRequest(gw, mux, "code", state)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302; body: %s", rec.Code, rec.Body.String())
+	}
+	// User created + session cookie set.
+	u, _ := store.GetUserByDiscordID("42")
+	if u == nil || u.Username != "tester" {
+		t.Fatalf("user not registered: %+v", u)
+	}
+	// Caller key auto-provisioned on registration.
+	if ok, _ := store.CallerKeyExists(u.ID); !ok {
+		t.Error("caller key should be auto-provisioned on registration")
+	}
+	found := false
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == auth.SessionCookieName && c.Value != "" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("no session cookie on successful login")
+	}
+}
+
+func TestDiscordCallback_RegisterDenied(t *testing.T) {
+	stub := discordStub(t, []string{"other-role"}, 200)
+	withDiscordStub(t, stub)
+	gw, store := setupAuthGateway(t, "x")
+	store.SetSetting(db.SettingGuildID, "g1")
+	store.SetSetting(db.SettingRoleID, "role-1")
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	state, _ := newOAuthState()
+	rec := callbackRequest(gw, mux, "code", state)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+	if u, _ := store.GetUserByDiscordID("42"); u != nil {
+		t.Error("user should not be registered")
+	}
+}
+
+func TestDiscordCallback_NotGuildMember(t *testing.T) {
+	stub := discordStub(t, nil, 404)
+	withDiscordStub(t, stub)
+	gw, store := setupAuthGateway(t, "x")
+	store.SetSetting(db.SettingGuildID, "g1")
+	store.SetSetting(db.SettingRoleID, "role-1")
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	state, _ := newOAuthState()
+	rec := callbackRequest(gw, mux, "code", state)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestDiscordCallback_DisabledUser(t *testing.T) {
+	stub := discordStub(t, nil, 200)
+	withDiscordStub(t, stub)
+	gw, store := setupAuthGateway(t, "x")
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	u, _ := store.CreateUser("42", "tester", "")
+	store.SetUserDisabled(u.ID, true, "test")
+
+	state, _ := newOAuthState()
+	rec := callbackRequest(gw, mux, "code", state)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 for disabled user", rec.Code)
+	}
+}
+
+func TestDiscordCallback_NoGuildConfigured(t *testing.T) {
+	stub := discordStub(t, []string{"role-1"}, 200)
+	withDiscordStub(t, stub)
+	gw, _ := setupAuthGateway(t, "x")
+	// No guild/role settings -> registration closed.
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	state, _ := newOAuthState()
+	rec := callbackRequest(gw, mux, "code", state)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 (registration closed)", rec.Code)
+	}
+}
