@@ -26,6 +26,9 @@ dify2api.service
 requirements/
 AGENTS.md
 
+# Local task documents (multi-agent workflow, see AGENTS.md §8)
+tasks/
+
 # Binaries
 dify2api
 dify2api.exe
