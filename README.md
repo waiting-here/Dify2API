@@ -7,7 +7,7 @@
 
 > 本文面向**部署/维护本项目的开发者**。普通终端用户的操作以网页内指引为准。
 
-> **免责声明与商标声明**:本项目为独立的非官方第三方工具，与 LangGenius, Inc. 无任何隶属、背书或赞助关系。
+> **免责声明与商标声明**：本项目为独立的非官方第三方工具，与 LangGenius, Inc. 无任何隶属、背书或赞助关系。
 >
 > 本项目名称中的"Dify"系指 LangGenius, Inc. 的产品"Dify"，仅用于说明本项目的功能目的（通过 OpenAI 兼容接口调用 Dify App），构成 nominative fair use（指示性合理使用）。"Dify"是 LangGenius, Inc. 的商标。
 >
@@ -20,10 +20,10 @@ SillyTavern / Pi ──HTTPS──▶ Nginx ──HTTP──▶ Dify2API ──H
 浏览器（用户/管理员） ──HTTPS──▶ Nginx ──HTTP──▶ Dify2API（内嵌 SPA，go:embed）
 ```
 
-- **单二进制**:Go ≥1.25 构建，无外部服务依赖（SQLite 内嵌，前端 go:embed）；
-- **每用户路由**:`调用方密钥 → 用户 → 模型全名 → 该用户的 App 配置 → Dify App`；
-- **服务契约**:按模型名 `[服务]后端` 前缀选择消息布局（见下表）；
-- **双站点**:主站（用户，Discord OAuth）与 `admin.<域名>`（管理员，账号密码）严格隔离。
+- **单二进制**：Go ≥1.25 构建，无外部服务依赖（SQLite 内嵌，前端 go:embed）；
+- **每用户路由**：`调用方密钥 → 用户 → 模型全名 → 该用户的 App 配置 → Dify App`；
+- **服务契约**：按模型名 `[服务]后端` 前缀选择消息布局（见下表）；
+- **双站点**：主站（用户，Discord OAuth）与 `admin.<域名>`（管理员，账号密码）严格隔离。
 
 ## 项目结构
 
@@ -51,15 +51,15 @@ SillyTavern / Pi ──HTTPS──▶ Nginx ──HTTP──▶ Dify2API ──H
 ### 1. 准备
 
 - Go **≥1.25**（`go build -o dify2api .`）；
-- Dify App:在 Dify 控制台创建 Workflow 应用并发布，于 **API 集成**页创建 `app-…` 密钥
+- Dify App：在 Dify 控制台创建 Workflow 应用并发布，于 **API 集成**页创建 `app-…` 密钥
   （输入变量须匹配服务契约，见下；`dify_app/` 有参考导出）；
-- Discord Application（[Developer Portal](https://discord.com/developers/applications)）:
+- Discord Application（[Developer Portal](https://discord.com/developers/applications)）：
   记录 Client ID/Secret，OAuth2 Redirects 添加 `https://<域名>/auth/discord/callback`；
 - 用于注册放行的 Discord 服务器 ID 与身份组 ID（可稍后在管理台设置）。
 
 ### 2. 启动配置文件（唯一配置来源）
 
-复制 `admin.env.example` 为 `admin.env` 并填写（设 `0600` 权限；同名 OS 环境变量可覆盖任意项）:
+复制 `admin.env.example` 为 `admin.env` 并填写（设 `0600` 权限；同名 OS 环境变量可覆盖任意项）：
 
 ```bash
 # 必填
@@ -91,7 +91,7 @@ LOGIN_MIN_LATENCY_MS=300     # 登录恒定时延（毫秒）
 
 ```bash
 ./dify2api -admin /path/to/admin.env
-# -force-https  公网部署:HTTP → 301 HTTPS（需前置 TLS 终止）
+# -force-https  公网部署：HTTP → 301 HTTPS（需前置 TLS 终止）
 # -debug        调试拦截模式（见下）
 ```
 
@@ -120,33 +120,33 @@ LOGIN_MIN_LATENCY_MS=300     # 登录恒定时延（毫秒）
 
 - 未知服务一律拒绝（严格模式）；多模态图片经 data URI 预上传（`/v1/files/upload`）
   或以 `remote_url` 直传；
-- 绑定校验:契约**必选**变量须在 App 中存在，App **必选**变量须被契约覆盖，
+- 绑定校验：契约**必选**变量须在 App 中存在，App **必选**变量须被契约覆盖，
   App 多余可选变量允许（提示但不阻断）。
 
 ## 自定义服务（开发接口）
 
-新增一个受支持的服务只需三步（`translator/contracts.go` 内有 DEV EXTENSION POINT 注释）:
+新增一个受支持的服务只需三步（`translator/contracts.go` 内有 DEV EXTENSION POINT 注释）：
 
-1. **注册表**:`serviceRegistry` 添加 `{Name, Label}`；
-2. **契约**:在 `TranslateForService` 与 `ContractVarsFor` 添加对应 case
+1. **注册表**：`serviceRegistry` 添加 `{Name, Label}`；
+2. **契约**：在 `TranslateForService` 与 `ContractVarsFor` 添加对应 case
    （消息布局 → Dify App 变量；同时决定绑定校验的必选/可选集）；
-3. **Dify App**:按契约创建对应输入变量的 Workflow 应用。
+3. **Dify App**：按契约创建对应输入变量的 Workflow 应用。
 
 用户端随即在服务下拉框可见；模型名形如 `[新服务]后端模型`。
 
-## 客户端集成:dify-subagent（Pi 插件）
+## 客户端集成：dify-subagent（Pi 插件）
 
 位于 `integrations/pi-dify-subagent/`（随项目 AGPL 发布）。为 Pi 主 Agent 注册
 `dify-subagent` 工具与 `/dify-subagent` 配置命令，把自包含的一次性子任务委托给
 Dify2API 背后的模型。
 
-**部署**:将目录复制到 `~/.pi/agent/extensions/dify-subagent/`；在 Pi 中执行
+**部署**：将目录复制到 `~/.pi/agent/extensions/dify-subagent/`；在 Pi 中执行
 `/dify-subagent setup` 配置网关地址与调用方密钥（自动验证 + 服务模型选择）。
 
-**工具参数**:`task`（按服务必填）、`preset`、`system_prompt`、`url`
+**工具参数**：`task`（按服务必填）、`preset`、`system_prompt`、`url`
 （website-summary）、`image_paths`（image-processing）、`timeout_ms`、`result_limit`。
 
-**预设即文件**（`presets/*.md`，每次调用现读，可会话中编辑；新增=新增文件）:
+**预设即文件**（`presets/*.md`，每次调用现读，可会话中编辑；新增=新增文件）：
 
 ```markdown
 ---
@@ -162,24 +162,24 @@ result_limit: 4000               # 超限结果写临时文件，仅回路径+�
 （正文即 system_prompt；general/image-processing 可无正文）
 ```
 
-首发预设:`general`、`custom`、`website-summary`、`image-processing`。
+首发预设：`general`、`custom`、`website-summary`、`image-processing`。
 
 ## 运维
 
 - **备份** = `dify2api.db` + `dify2api.key`（密钥文件丢失则已存密钥全部不可恢复）；
-- **限流**:管理台设置全局 RPM（默认 3）或按用户覆盖；超限 403 `rpm_exceeded`，
+- **限流**：管理台设置全局 RPM（默认 3）或按用户覆盖；超限 403 `rpm_exceeded`，
   24h 内 5 次超限自动封禁 24h；
-- **封禁 vs 删除**:封禁（定时/永久）保留记录且禁止再注册；删除清空记录并允许再注册；
-- **内置加固**:HTTP 服务超时（Slowloris）、4MB+ 可配请求体上限、并发背压（429）、
+- **封禁 vs 删除**：封禁（定时/永久）保留记录且禁止再注册；删除清空记录并允许再注册；
+- **内置加固**：HTTP 服务超时（Slowloris）、4MB+ 可配请求体上限、并发背压（429）、
   管理员登录爆破锁定（IP+用户名滑窗，5 次/10 分钟 → 锁 1h）、密钥 AES-GCM 加密存储；
-- **日志**:`request_logs` 仅存元数据（时间/模型/状态/错误码），30 天滚动；
+- **日志**：`request_logs` 仅存元数据（时间/模型/状态/错误码），30 天滚动；
   用户台自查，管理台审计；
-- **调试模式**:`-debug` 拦截请求落盘（`request.json` + `dify_inputs.json`）不转发。
-- **数据权利**:用户可在网页控制台自助导出全部个人数据（JSON 下载，含解密凭据），
+- **调试模式**：`-debug` 拦截请求落盘（`request.json` + `dify_inputs.json`）不转发。
+- **数据权利**：用户可在网页控制台自助导出全部个人数据（JSON 下载，含解密凭据），
   或自助删除账号（二次确认，清空全部记录）；管理员可从后台为单个用户导出数据。
-- **法律页面**:内嵌 `/privacy`（隐私政策）和 `/terms`（服务协议，含 DMCA/NCMEC 条款）。
+- **法律页面**：内嵌 `/privacy`（隐私政策）和 `/terms`（服务协议，含 DMCA/NCMEC 条款）。
   部署者通过 `SITE_NAME` / `REPORT_EMAIL` 配置后自动填充。
-- **网站图标**:通过 `FAVICON_PATH` 配置浏览器标签页图标文件路径（支持常见图片格式）。
+- **网站图标**：通过 `FAVICON_PATH` 配置浏览器标签页图标文件路径（支持常见图片格式）。
 
 ## 错误列表
 
@@ -204,7 +204,7 @@ result_limit: 4000               # 超限结果写临时文件，仅回路径+�
 
 ## 合规提示与使用红线
 
-本项目按"现状"提供，仅为中立的协议适配工具。部署运营者须:遵守 [Dify 服务条款](https://dify.ai/legal/terms-of-service)与所绑模型供应商使用政策（如 [Anthropic AUP](https://www.anthropic.com/legal/aup)）；面向终端用户提供服务时提供合规隐私政策并遵守 GDPR、《个人信息保护法》等法规。严禁任何涉及未成年人的性内容、真人非自愿内容；在中国法域须注意《治安管理处罚法》第 68 条、《刑法》第 363–367 条、《网络安全法》第 12 条；向公众提供生成式 AI 服务另须遵守《生成式人工智能服务管理暂行办法》。因违规使用产生的一切后果由部署者/使用者自行承担。
+本项目按"现状"提供，仅为中立的协议适配工具。部署运营者须：遵守 [Dify 服务条款](https://dify.ai/legal/terms-of-service)与所绑模型供应商使用政策（如 [Anthropic AUP](https://www.anthropic.com/legal/aup)）；面向终端用户提供服务时提供合规隐私政策并遵守 GDPR、《个人信息保护法》等法规。严禁任何涉及未成年人的性内容、真人非自愿内容；在中国法域须注意《治安管理处罚法》第 68 条、《刑法》第 363–367 条、《网络安全法》第 12 条；向公众提供生成式 AI 服务另须遵守《生成式人工智能服务管理暂行办法》。因违规使用产生的一切后果由部署者/使用者自行承担。
 
 ## 许可证
 
@@ -214,7 +214,7 @@ result_limit: 4000               # 超限结果写临时文件，仅回路径+�
 
 本软件包含加密功能（AES-256-GCM，用于凭据加密存储），依赖 Go 标准库 `crypto/aes` 和 `golang.org/x/crypto`。
 
-**美国出口管制 （EAR）**:作为以 AGPL-3.0 协议公开发布的开源软件，本项目的源代码及对应目标代码符合 EAR § 734.3(b)(2) 对"publicly available"的定义，依据 License Exception TSU (15 CFR § 740.13(e))，不受 EAR ECCN 5D002 类别的主要出口管制限制。然而，若以非公开方式提供修改版或将其作为闭源商业产品分发，可能需要单独进行出口合规评估。
+**美国出口管制 （EAR）**：作为以 AGPL-3.0 协议公开发布的开源软件，本项目的源代码及对应目标代码符合 EAR § 734.3(b)(2) 对"publicly available"的定义，依据 License Exception TSU (15 CFR § 740.13(e))，不受 EAR ECCN 5D002 类别的主要出口管制限制。然而，若以非公开方式提供修改版或将其作为闭源商业产品分发，可能需要单独进行出口合规评估。
 
 本声明不构成法律建议。如有疑问，请咨询合格的出口管制律师。
 

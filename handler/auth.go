@@ -164,34 +164,35 @@ func (g *Gateway) handleDiscordLogin(w http.ResponseWriter, r *http.Request) {
 func (g *Gateway) handleDiscordCallback(w http.ResponseWriter, r *http.Request) {
 	fail := func(msg string) {
 		log.Printf("[AUTH] discord login failed: %s", msg)
-		g.writeError(w, http.StatusForbidden, "login_failed", msg)
+		q := url.Values{"reason": {msg}}
+		http.Redirect(w, r, "/403?"+q.Encode(), http.StatusFound)
 	}
 
 	if !consumeOAuthState(r.URL.Query().Get("state")) {
-		fail("invalid or expired state")
+		fail("登录会话已过期，请返回重试。")
 		return
 	}
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		fail("missing authorization code")
+		fail("Discord 授权失败：未收到授权码。")
 		return
 	}
 
 	redirectURI := g.Config.Admin.SiteBaseURL + "/auth/discord/callback"
 	token, err := auth.ExchangeCode(g.Config.Admin.DiscordClientID, g.Config.Admin.DiscordClientSecret, redirectURI, code)
 	if err != nil {
-		fail("token exchange failed: " + err.Error())
+		fail("Discord 授权失败，请检查 Discord Application 配置。")
 		return
 	}
 	info, err := auth.FetchUser(token)
 	if err != nil {
-		fail("failed to fetch discord user: " + err.Error())
+		fail("无法获取 Discord 用户信息，请重试。")
 		return
 	}
 
 	user, err := g.Store.GetUserByDiscordID(info.ID)
 	if err != nil {
-		fail("internal error")
+		fail("服务器内部错误，请稍后重试。")
 		return
 	}
 
@@ -201,7 +202,7 @@ func (g *Gateway) handleDiscordCallback(w http.ResponseWriter, r *http.Request) 
 		roleID, _ := g.Store.GetSetting(db.SettingRoleID)
 		ok, err := auth.HasGuildRole(token, guildID, roleID)
 		if err != nil {
-			fail("failed to verify guild membership: " + err.Error())
+			fail("无法验证 Discord 服务器成员身份，请检查配置。")
 			return
 		}
 		if !ok {
@@ -210,7 +211,7 @@ func (g *Gateway) handleDiscordCallback(w http.ResponseWriter, r *http.Request) 
 		}
 		user, err = g.Store.CreateUser(info.ID, info.DisplayName(), info.Avatar)
 		if err != nil {
-			fail("internal error")
+			fail("服务器内部错误，请稍后重试。")
 			return
 		}
 		log.Printf("[AUTH] registered new user %s (%s)", user.Username, user.DiscordID)

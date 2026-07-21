@@ -25,7 +25,7 @@
 <main class="container">
 <div class="banner" id="generic">
   <h1>403</h1>
-  <p class="lead">您没有访问此页面的权限。</p>
+  <p class="lead" id="generic-reason">您没有访问此页面的权限。</p>
   <p class="muted">如需帮助，请联系 <a href="mailto:__REPORT_EMAIL__">__REPORT_EMAIL__</a>。</p>
 </div>
 <div class="ban-card" id="ban-info" style="display:none">
@@ -45,7 +45,13 @@
 <script>
 (function () {
   var p = new URLSearchParams(location.search);
-  if (!p.has('banned')) { document.getElementById('generic').style.display = ''; return; }
+  // Show the reason text in the generic banner if provided (login failures, etc.).
+  var reasonEl = document.getElementById('generic-reason');
+  var reason = p.get('reason');
+  if (reason && reasonEl) {
+    reasonEl.textContent = decodeURIComponent(reason);
+  }
+  if (!p.has('banned')) { return; }
   document.getElementById('generic').style.display = 'none';
   document.getElementById('ban-info').style.display = '';
   document.getElementById('ban-status').textContent = p.get('permanent') === '1' ? '永久封禁' : '暂时封禁';
@@ -54,10 +60,10 @@
     document.getElementById('ban-until-row').style.display = '';
     document.getElementById('ban-until').textContent = new Date(parseInt(until, 10) * 1000).toLocaleString();
   }
-  var reason = p.get('reason');
-  if (reason) {
+  var banReason = p.get('reason');
+  if (banReason) {
     document.getElementById('ban-reason-row').style.display = '';
-    document.getElementById('ban-reason').textContent = decodeURIComponent(reason);
+    document.getElementById('ban-reason').textContent = decodeURIComponent(banReason);
   }
 })();
 </script>
