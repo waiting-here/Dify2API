@@ -161,8 +161,12 @@ func TestDiscordCallback_BadState(t *testing.T) {
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
 	rec := callbackRequest(gw, mux, "code", "bad-state")
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("status = %d, want 403", rec.Code)
+	if rec.Code != http.StatusFound {
+		t.Errorf("status = %d, want 302", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/403?") {
+		t.Errorf("Location = %q, want prefix /403?", loc)
 	}
 }
 
@@ -211,8 +215,12 @@ func TestDiscordCallback_RegisterDenied(t *testing.T) {
 
 	state, _ := newOAuthState()
 	rec := callbackRequest(gw, mux, "code", state)
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("status = %d, want 403", rec.Code)
+	if rec.Code != http.StatusFound {
+		t.Errorf("status = %d, want 302", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/403?") {
+		t.Errorf("Location = %q, want prefix /403?", loc)
 	}
 	if u, _ := store.GetUserByDiscordID("42"); u != nil {
 		t.Error("user should not be registered")
@@ -230,8 +238,12 @@ func TestDiscordCallback_NotGuildMember(t *testing.T) {
 
 	state, _ := newOAuthState()
 	rec := callbackRequest(gw, mux, "code", state)
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("status = %d, want 403", rec.Code)
+	if rec.Code != http.StatusFound {
+		t.Errorf("status = %d, want 302", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/403?") {
+		t.Errorf("Location = %q, want prefix /403?", loc)
 	}
 }
 
@@ -247,8 +259,12 @@ func TestDiscordCallback_DisabledUser(t *testing.T) {
 
 	state, _ := newOAuthState()
 	rec := callbackRequest(gw, mux, "code", state)
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("status = %d, want 403 for disabled user", rec.Code)
+	if rec.Code != http.StatusFound {
+		t.Errorf("status = %d, want 302 for disabled user", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/403?") {
+		t.Errorf("Location = %q, want prefix /403?", loc)
 	}
 }
 
@@ -262,7 +278,11 @@ func TestDiscordCallback_NoGuildConfigured(t *testing.T) {
 
 	state, _ := newOAuthState()
 	rec := callbackRequest(gw, mux, "code", state)
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("status = %d, want 403 (registration closed)", rec.Code)
+	if rec.Code != http.StatusFound {
+		t.Errorf("status = %d, want 302 (registration closed)", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/403?") {
+		t.Errorf("Location = %q, want prefix /403?", loc)
 	}
 }

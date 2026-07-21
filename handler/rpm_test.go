@@ -84,10 +84,13 @@ func TestRPMLimit_GlobalDefaultAndOverride(t *testing.T) {
 	u, _ := store.CreateUser("1", "u1", "")
 	limit := int64(1)
 	store.SetUserRPMLimit(u.ID, &limit)
+	// 生产路径经 handleAdminSetUserRPM 自带缓存失效,此处直写 DB 需手动失效。
+	gw.invalidateRPMCache(u.ID)
 	if got := gw.effectiveRPM(u.ID); got != 1 {
 		t.Errorf("effectiveRPM with override = %d, want 1", got)
 	}
 	store.SetUserRPMLimit(u.ID, nil)
+	gw.invalidateRPMCache(u.ID)
 	if got := gw.effectiveRPM(u.ID); got != 6 {
 		t.Errorf("effectiveRPM after clearing = %d, want 6 (global)", got)
 	}

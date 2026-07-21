@@ -165,6 +165,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	case g.chatSem <- struct{}{}:
 		defer func() { <-g.chatSem }()
 	default:
+		w.Header().Set("Retry-After", "3")
 		g.writeError(w, http.StatusTooManyRequests, "server_busy", "当前服务繁忙(并发已达上限),请稍后重试")
 		return
 	}
