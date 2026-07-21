@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"dify2api/dify"
 	"dify2api/openai"
 	"dify2api/translator"
+	"dify2api/web"
 )
 
 // Gateway handles HTTP requests. The request path is:
@@ -45,16 +47,16 @@ func NewGateway(cfg *config.Config, store *db.Store) *Gateway {
 
 // RegisterRoutes sets up HTTP routes.
 func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/v1/models", g.handleModels)
-	mux.HandleFunc("/v1/chat/completions", g.handleChatCompletions)
+	mux.HandleFunc("GET /v1/models", g.handleModels)
+	mux.HandleFunc("POST /v1/chat/completions", g.handleChatCompletions)
 	mux.HandleFunc("GET /health", g.handleHealth)
 
 	// Auth & web API
-	mux.HandleFunc("/api/auth/admin/login", g.handleAdminLogin)
-	mux.HandleFunc("/api/auth/logout", g.handleLogout)
-	mux.HandleFunc("/api/me", g.handleMe)
-	mux.HandleFunc("/auth/discord/login", g.handleDiscordLogin)
-	mux.HandleFunc("/auth/discord/callback", g.handleDiscordCallback)
+	mux.HandleFunc("POST /api/auth/admin/login", g.handleAdminLogin)
+	mux.HandleFunc("POST /api/auth/logout", g.handleLogout)
+	mux.HandleFunc("GET /api/me", g.handleMe)
+	mux.HandleFunc("GET /auth/discord/login", g.handleDiscordLogin)
+	mux.HandleFunc("GET /auth/discord/callback", g.handleDiscordCallback)
 
 	// Admin user management
 	mux.HandleFunc("GET /api/admin/users", g.handleAdminListUsers)
@@ -68,7 +70,7 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/admin/settings", g.handleAdminPutSettings)
 
 	// User endpoints (session-authenticated)
-	mux.HandleFunc("/api/logs", g.handleListLogs)
+	mux.HandleFunc("GET /api/logs", g.handleListLogs)
 	mux.HandleFunc("GET /api/configs", g.handleListConfigs)
 	mux.HandleFunc("POST /api/configs", g.handleCreateConfig)
 	mux.HandleFunc("PUT /api/configs/{id}", g.handleUpdateConfig)
@@ -82,6 +84,12 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 
 	// Embedded SPA + static assets
 	g.registerWebRoutes(mux)
+
+	// Catch-all: serve the custom 404 page for any GET request not
+	// matched by a more specific pattern.  In Go 1.22+ ServeMux,
+	// "GET /" matches all GET paths (prefix match), but more-specific
+	// patterns like "GET /{$}" or "GET /privacy" take precedence.
+	mux.HandleFunc("GET /", g.serve404Page)
 }
 
 func (g *Gateway) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -499,6 +507,28 @@ func (g *Gateway) writeError(w http.ResponseWriter, status int, code, message st
 			"code":    code,
 		},
 	})
+}
+
+// serve404Page serves the custom 404.html page (from the embedded static
+// filesystem) with placeholder substitution and a 404 status code.
+func (g *Gateway) serve404Page(w http.ResponseWriter, r *http.Request) {
+	staticFS, err := fs.Sub(web.Static, "static")
+	if err != nil {
+		http.Error(w, "404 page not found", http.StatusNotFound)
+		return
+	}
+	data, err := fs.ReadFile(staticFS, "404.html")
+	if err != nil {
+		http.Error(w, "404 page not found", http.StatusNotFound)
+		return
+	}
+	body := strings.ReplaceAll(string(data), "__SITE_NAME__", g.Config.Admin.SiteName)
+	body = strings.ReplaceAll(body, "__REPORT_EMAIL__", g.Config.Admin.ReportEmail)
+	body = strings.ReplaceAll(body, "__SITE_BASE_URL__", g.Config.Admin.SiteBaseURL)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusNotFound)
+	w.Write([]byte(body))
 }
 
 // writeDifyError forwards a Dify error to the client, preserving the

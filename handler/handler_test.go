@@ -134,8 +134,11 @@ func TestHandleChatCompletions_MethodNotAllowed(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Errorf("GET chat: status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	// The catch-all GET / handler serves the custom 404 page for GET
+	// requests to POST-only endpoints — correct from a browser UX
+	// perspective (the page doesn't exist as a GET-able resource).
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("GET chat: status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
 

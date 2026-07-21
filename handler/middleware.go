@@ -47,7 +47,7 @@ func (g *Gateway) hostSeparation(next http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			g.writeError(w, http.StatusNotFound, "not_found", "not found")
+			g.serve404Page(w, r)
 			return
 		}
 		// User site: admin endpoints are not exposed here.
