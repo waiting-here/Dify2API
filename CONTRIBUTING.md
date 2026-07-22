@@ -41,8 +41,20 @@ This is the [Developer Certificate of Origin (DCO)](https://developercertificate
 
 2. **Fork & branch** — create a feature branch from `master`.
 
-3. **Follow the project conventions** described in `AGENTS.md` §4 (service
-   registry, contract validation, error format, API JSON tags, DB migrations).
+3. **Follow the project conventions**:
+   - The service registry (`translator/`) is the single source of truth for
+     supported services; adding a service means registering it, adding its
+     message-contract case, and creating the corresponding Dify App.
+   - Every service contract is strictly validated; invalid message sequences
+     are rejected with `invalid_message_sequence` and never forwarded.
+   - API errors use the unified format
+     `{"error":{"code":code,"type":code,"message":msg}}`; gateway messages
+     carry a `[Dify2API]` prefix, passed-through upstream errors `[Dify]`.
+   - All externally visible JSON structs use `snake_case` tags.
+   - Secrets (Dify API keys, caller keys) are stored AES-GCM encrypted only
+     and must never appear in plaintext in any response.
+   - DB schema evolves by idempotent `ALTER TABLE ... ADD COLUMN` only
+     (ignore "duplicate column" errors); no migration framework.
 
 4. **Write tests** for new functionality.  Run the full suite before pushing:
 

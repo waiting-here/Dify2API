@@ -16,7 +16,7 @@ import (
 )
 
 // Version is the Dify2API release version, printed by the -version flag.
-// 发版时与 git tag 同步（见 AGENTS.md §6）。
+// 发版时与 git tag 同步（tag 格式 v<major.minor.patch>）。
 const Version = "1.0.0-alpha.2"
 
 func main() {
