@@ -665,6 +665,9 @@ func (g *Gateway) charityFailAccounting(userID int64, donation *db.Donation, err
 			log.Printf("[ERROR] auto-inactivate donation %d after %d failures: %v", donation.ID, consecutive, err2)
 		} else {
 			log.Printf("[DONATION] donation %d auto-inactivated after %d consecutive failures", donation.ID, consecutive)
+			if g.mailer != nil {
+				g.mailer.DonationInactive(donation.Service, donation.Model, donation.ID, consecutive)
+			}
 		}
 	}
 }

@@ -192,6 +192,60 @@ result_limit: 4000               # 超限结果写临时文件，仅回路径+�
   **⚠️ 部署前必须审核并修改**：模板中的 DMCA 程序等条款基于美国法律；
   非美国部署者需按当地法律替换相关内容（详见 HTML 注释与 §合规提示）。
 - **网站图标**：通过 `FAVICON_PATH` 配置浏览器标签页图标文件路径（支持常见图片格式）。
+- **邮件提醒**：配置 SMTP 后，以下三类事件自动发送邮件通知——
+  ① 用户因 RPM 违规被自动封禁、② 捐赠条目连续 10 次失败自动转为未激活、
+  ③ 管理员登录被爆破锁定。未配置 `SMTP_HOST` 时邮件功能静默关闭（启动日志
+  显示 `[MAILER] disabled`）。详见下方 §邮件提醒。
+
+## 邮件提醒
+
+邮件系统通过 `admin.env` 中的 SMTP 配置项启用。每类事件独立聚合：
+同一类型事件在 **10 分钟**内只会发送一封邮件，内含该时间段内全部事件的摘要。
+配置项如下（均在 `admin.env.example` 中提供）：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `SMTP_HOST` | （空） | SMTP 服务器地址；为空时邮件功能关闭 |
+| `SMTP_PORT` | `587` | SMTP 端口；465 自动切换为隐含 TLS |
+| `SMTP_USER` | （空） | 登录用户名（通常与发件邮箱相同） |
+| `SMTP_PASS` | （空） | 登录密码或应用专用密码 |
+| `SMTP_FROM` | 回退到 `SMTP_USER` | 发件人地址 |
+| `SMTP_TO` | （空） | 收件人地址（管理员邮箱） |
+| `SMTP_TLS` | （空=自动） | `starttls`（587 等）、`implicit`（465 等）或留空自动检测 |
+
+### 配置示例
+
+**Gmail**（需在 Google 账号中生成"应用专用密码"，不填普通登录密码）：
+```
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=yourname@gmail.com
+SMTP_PASS=您的16位应用专用密码
+SMTP_FROM=yourname@gmail.com
+SMTP_TO=admin@example.com
+SMTP_TLS=starttls
+```
+> 生成应用专用密码：Google 账号 → 安全性 → 两步验证 → 应用专用密码。
+
+**腾讯企业邮**（使用邮箱登录密码）：
+```
+SMTP_HOST=smtp.exmail.qq.com
+SMTP_PORT=465
+SMTP_USER=admin@example.com
+SMTP_PASS=邮箱密码
+SMTP_FROM=admin@example.com
+SMTP_TO=admin@example.com
+SMTP_TLS=implicit
+```
+
+### 排障
+
+| 错误 | 原因与解决 |
+|------|-----------|
+| 535 认证失败 | 核对用户名密码；Gmail 须使用应用专用密码而非普通登录密码 |
+| 550 发件人地址不匹配 | `SMTP_FROM` 必须与登录邮箱一致或有发送权限 |
+| TLS 握手失败 | 检查端口与 `SMTP_TLS` 设置，465 选 `implicit`，587 选 `starttls` |
+| 启动日志 `[MAILER] disabled` | `SMTP_HOST` 为空，邮件功能关闭（正常行为） |
 
 ## 错误列表
 

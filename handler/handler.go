@@ -16,6 +16,7 @@ import (
 	"dify2api/config"
 	"dify2api/db"
 	"dify2api/dify"
+	"dify2api/mailer"
 	"dify2api/openai"
 	"dify2api/translator"
 	"dify2api/web"
@@ -38,11 +39,13 @@ type Gateway struct {
 	// authFailThrottle rate-limits invalid-caller-key /v1/* requests per
 	// source IP (invalid-key flood defence; valid keys are never counted).
 	authFailThrottle *ipThrottle
+	// mailer delivers optional email alerts (nil when SMTP not configured).
+	mailer *mailer.Mailer
 }
 
 // NewGateway creates a new Gateway.
 func NewGateway(cfg *config.Config, store *db.Store) *Gateway {
-	return &Gateway{
+	gw := &Gateway{
 		Config:           cfg,
 		Store:            store,
 		limiter:          newRateLimiter(),
@@ -50,7 +53,12 @@ func NewGateway(cfg *config.Config, store *db.Store) *Gateway {
 		loginThrottle:    newLoginThrottle(cfg),
 		webThrottle:      newIPThrottle(cfg.WebRPMPerIP, cfg.WebThrottleSec),
 		authFailThrottle: newIPThrottle(cfg.AuthFailRPMPerIP, 60),
+		mailer:           mailer.New(cfg.SMTP),
 	}
+	if gw.mailer != nil {
+		gw.mailer.Start()
+	}
+	return gw
 }
 
 // RegisterRoutes sets up HTTP routes.
@@ -313,6 +321,9 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			}
 			g.Store.DeleteUserSessions(user.ID)
 			log.Printf("[AUTH] user %d auto-banned until %v after %d RPM violations (class %s)", user.ID, until, violations, classLabel(violated))
+			if g.mailer != nil {
+				g.mailer.UserAutoBanned(user.Username, user.ID, until, banHours, violations)
+			}
 			g.writeError(w, http.StatusForbidden, "rpm_exceeded",
 				fmt.Sprintf("已超出类别 %s 每分钟上限（%d 次/分），且因 24 小时内累计 %d 次超限，账号已被自动封禁 %d 小时",
 					classLabel(violated), limits[violated], violations, banHours))

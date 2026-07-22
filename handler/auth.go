@@ -99,7 +99,11 @@ func (g *Gateway) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 
 	if req.Username != g.Config.Admin.Username || !auth.VerifyPassword(g.Config.Admin.Password, req.Password) {
 		if justLocked := g.loginThrottle.fail(key, now); justLocked {
-			log.Printf("[AUTH] admin login locked for %s until %v (too many failures)", key, now.Add(g.loginThrottle.lockDur))
+			lockUntil := now.Add(g.loginThrottle.lockDur)
+			log.Printf("[AUTH] admin login locked for %s until %v (too many failures)", key, lockUntil)
+			if g.mailer != nil {
+				g.mailer.AdminLoginLocked(clientIP(r), lockUntil)
+			}
 			g.writeError(w, http.StatusForbidden, "login_locked", "尝试次数过多，请 15 分钟后再试")
 			return
 		}
