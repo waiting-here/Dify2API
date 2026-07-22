@@ -77,9 +77,43 @@ CREATE TABLE IF NOT EXISTS request_logs (
 	started_at  INTEGER NOT NULL,
 	ended_at    INTEGER NOT NULL DEFAULT 0,
 	status      TEXT NOT NULL DEFAULT '',
-	error_code  TEXT NOT NULL DEFAULT ''
+	error_code  TEXT NOT NULL DEFAULT '',
+	donation_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_request_logs_user ON request_logs(user_id, started_at);
+
+CREATE TABLE IF NOT EXISTS donations (
+	id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+	service              TEXT NOT NULL,
+	model                TEXT NOT NULL,
+	dify_base_url        TEXT NOT NULL,
+	dify_api_key_enc     TEXT NOT NULL,
+	source_user_id       INTEGER,
+	source_discord_id    TEXT NOT NULL DEFAULT '',
+	source_username      TEXT NOT NULL DEFAULT '',
+	source_text          TEXT NOT NULL DEFAULT '',
+	deadline             INTEGER NOT NULL,
+	total_count          INTEGER NOT NULL,
+	remaining_count      INTEGER NOT NULL,
+	success_count        INTEGER NOT NULL DEFAULT 0,
+	failure_count        INTEGER NOT NULL DEFAULT 0,
+	consecutive_failures INTEGER NOT NULL DEFAULT 0,
+	status               TEXT NOT NULL DEFAULT 'active',
+	note                 TEXT NOT NULL DEFAULT '',
+	created_at           INTEGER NOT NULL,
+	updated_at           INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_donations_route ON donations(service, model, status);
+
+CREATE TABLE IF NOT EXISTS admin_alerts (
+	id             INTEGER PRIMARY KEY AUTOINCREMENT,
+	type           TEXT NOT NULL,
+	message        TEXT NOT NULL DEFAULT '',
+	request_log_id INTEGER,
+	donation_id    INTEGER,
+	created_at     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_admin_alerts_created ON admin_alerts(created_at);
 `
 
 // Store wraps the SQLite handle and the master encryption key.
@@ -117,8 +151,7 @@ func Open(path, keyPath string) (*Store, error) {
 		sqldb.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
-	// Idempotent column migration for dev databases created before is_admin
-	// existed (V1.0.0 is pre-release; ignore "duplicate column" errors).
+	// Idempotent column migrations (V1.0.0 is pre-release; ignore "duplicate column" errors).
 	for _, m := range []string{
 		`ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE users ADD COLUMN banned_until INTEGER NOT NULL DEFAULT 0`,
@@ -127,10 +160,20 @@ func Open(path, keyPath string) (*Store, error) {
 		`ALTER TABLE users ADD COLUMN rpm_limit INTEGER`,
 		`ALTER TABLE users ADD COLUMN ban_reason TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE users ADD COLUMN auto_banned INTEGER NOT NULL DEFAULT 0`,
+		// alpha.3 S1 — users new columns.
+		`ALTER TABLE users ADD COLUMN credits INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE users ADD COLUMN last_checkin_day TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN rpm_limit_a INTEGER`,
+		`ALTER TABLE users ADD COLUMN rpm_limit_b INTEGER`,
+		`ALTER TABLE users ADD COLUMN rpm_limit_c INTEGER`,
+		`ALTER TABLE users ADD COLUMN donation_credit INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE users ADD COLUMN charity_enabled INTEGER NOT NULL DEFAULT 0`,
+		// alpha.3 S1 — request_logs donation tracking.
+		`ALTER TABLE request_logs ADD COLUMN donation_id INTEGER`,
 	} {
 		if _, err := sqldb.Exec(m); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			sqldb.Close()
-			return nil, fmt.Errorf("migrate users: %w", err)
+			return nil, fmt.Errorf("migrate: %w", err)
 		}
 	}
 

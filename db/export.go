@@ -11,28 +11,39 @@ import (
 // Dify API keys are decrypted so the user can retrieve them; caller keys are
 // also decrypted. Sessions are intentionally NOT included — they are ephemeral
 // authentication tokens, not personal data worth porting.
+//
+// Donations (donations table) are NOT included — donations are registered by
+// the administrator and belong to the public-resource pool, not to any
+// individual user's personal data.
 type ExportBundle struct {
-	ExportedAt time.Time       `json:"exported_at"`
-	User       ExportUser      `json:"user"`
-	Configs    []ExportConfig  `json:"app_configs"`
-	CallerKey  string          `json:"caller_key"`
-	Logs       []ExportLog     `json:"request_logs"`
+	ExportedAt time.Time      `json:"exported_at"`
+	User       ExportUser     `json:"user"`
+	Configs    []ExportConfig `json:"app_configs"`
+	CallerKey  string         `json:"caller_key"`
+	Logs       []ExportLog    `json:"request_logs"`
 }
 
 // ExportUser mirrors the users row without internal sentinel fields.
 type ExportUser struct {
-	ID          int64  `json:"id"`
-	DiscordID   string `json:"discord_id"`
-	Username    string `json:"username"`
-	Avatar      string `json:"avatar"`
-	IsAdmin     bool   `json:"is_admin"`
-	Disabled    bool   `json:"disabled"`
-	BannedUntil int64  `json:"banned_until"`
-	AutoBanned  bool   `json:"auto_banned"`
-	BanReason   string `json:"ban_reason"`
-	RPMLimit    *int64 `json:"rpm_limit"`    // null when using global default
-	CreatedAt   int64  `json:"created_at"`
-	UpdatedAt   int64  `json:"updated_at"`
+	ID             int64  `json:"id"`
+	DiscordID      string `json:"discord_id"`
+	Username       string `json:"username"`
+	Avatar         string `json:"avatar"`
+	IsAdmin        bool   `json:"is_admin"`
+	Disabled       bool   `json:"disabled"`
+	BannedUntil    int64  `json:"banned_until"`
+	AutoBanned     bool   `json:"auto_banned"`
+	BanReason      string `json:"ban_reason"`
+	Credits        int    `json:"credits"`
+	LastCheckinDay string `json:"last_checkin_day"`
+	// RPMLimitA/B/C are per-user three-class RPM overrides; null when using global defaults.
+	RPMLimitA      *int64 `json:"rpm_limit_a"`
+	RPMLimitB      *int64 `json:"rpm_limit_b"`
+	RPMLimitC      *int64 `json:"rpm_limit_c"`
+	DonationCredit int    `json:"donation_credit"`
+	CharityEnabled bool   `json:"charity_enabled"`
+	CreatedAt      int64  `json:"created_at"`
+	UpdatedAt      int64  `json:"updated_at"`
 }
 
 // ExportConfig mirrors one app_configs row with the Dify API key decrypted.
@@ -70,18 +81,24 @@ func (s *Store) ExportUserData(userID int64) (*ExportBundle, error) {
 	bundle := &ExportBundle{
 		ExportedAt: time.Now(),
 		User: ExportUser{
-			ID:          u.ID,
-			DiscordID:   u.DiscordID,
-			Username:    u.Username,
-			Avatar:      u.Avatar,
-			IsAdmin:     u.IsAdmin,
-			Disabled:    u.Disabled,
-			BannedUntil: u.BannedUntil,
-			AutoBanned:  u.AutoBanned,
-			BanReason:   u.BanReason,
-			RPMLimit:    rpmPtr(u.RPMLimit),
-			CreatedAt:   u.CreatedAt,
-			UpdatedAt:   u.UpdatedAt,
+			ID:             u.ID,
+			DiscordID:      u.DiscordID,
+			Username:       u.Username,
+			Avatar:         u.Avatar,
+			IsAdmin:        u.IsAdmin,
+			Disabled:       u.Disabled,
+			BannedUntil:    u.BannedUntil,
+			AutoBanned:     u.AutoBanned,
+			BanReason:      u.BanReason,
+			Credits:        u.Credits,
+			LastCheckinDay: u.LastCheckinDay,
+			RPMLimitA:      nullableIntPtr(u.RPMLimitA),
+			RPMLimitB:      nullableIntPtr(u.RPMLimitB),
+			RPMLimitC:      nullableIntPtr(u.RPMLimitC),
+			DonationCredit: u.DonationCredit,
+			CharityEnabled: u.CharityEnabled,
+			CreatedAt:      u.CreatedAt,
+			UpdatedAt:      u.UpdatedAt,
 		},
 	}
 
@@ -132,8 +149,8 @@ func (s *Store) ExportUserData(userID int64) (*ExportBundle, error) {
 	return bundle, nil
 }
 
-// rpmPtr converts sql.NullInt64 to *int64 for JSON serialisation (null → null).
-func rpmPtr(v sql.NullInt64) *int64 {
+// nullableIntPtr converts sql.NullInt64 to *int64 for JSON serialisation.
+func nullableIntPtr(v sql.NullInt64) *int64 {
 	if v.Valid {
 		return &v.Int64
 	}

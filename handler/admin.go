@@ -107,10 +107,6 @@ func (g *Gateway) handleAdminListUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]map[string]interface{}, 0, len(users))
 	for _, u := range users {
-		var rpm interface{}
-		if u.RPMLimit.Valid {
-			rpm = u.RPMLimit.Int64
-		}
 		out = append(out, map[string]interface{}{
 			"id":           u.ID,
 			"discord_id":   u.DiscordID,
@@ -119,7 +115,6 @@ func (g *Gateway) handleAdminListUsers(w http.ResponseWriter, r *http.Request) {
 			"disabled":     u.Disabled,
 			"banned_until": u.BannedUntil,
 			"banned":       db.IsBanned(u),
-			"rpm_limit":    rpm,
 			"created_at":   u.CreatedAt,
 		})
 	}
@@ -153,51 +148,6 @@ func (g *Gateway) handleAdminResetUserKey(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 }
 
-// --- POST /api/admin/users/{id}/rpm ---
-// Sets (limit >= 1) or clears (default=true) the per-user RPM override.
-func (g *Gateway) handleAdminSetUserRPM(w http.ResponseWriter, r *http.Request) {
-	if g.requireAdmin(r) == nil {
-		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
-		return
-	}
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid user id")
-		return
-	}
-	target, err := g.Store.GetUserByID(id)
-	if err != nil || target == nil || target.IsAdmin {
-		g.writeError(w, http.StatusNotFound, "not_found", "user not found")
-		return
-	}
-	var req struct {
-		Limit   int64 `json:"limit"`
-		Default bool  `json:"default"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
-		return
-	}
-	if req.Default {
-		if err := g.Store.SetUserRPMLimit(id, nil); err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-			return
-		}
-	} else {
-		if req.Limit < 1 {
-			g.writeError(w, http.StatusBadRequest, "invalid_request", "limit must be >= 1 (or default=true)")
-			return
-		}
-		if err := g.Store.SetUserRPMLimit(id, &req.Limit); err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-			return
-		}
-	}
-	g.invalidateRPMCache(id)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
-}
-
 // --- GET /api/admin/settings ---
 func (g *Gateway) handleAdminGetSettings(w http.ResponseWriter, r *http.Request) {
 	if g.requireAdmin(r) == nil {
@@ -208,9 +158,8 @@ func (g *Gateway) handleAdminGetSettings(w http.ResponseWriter, r *http.Request)
 	roleID, _ := g.Store.GetSetting(db.SettingRoleID)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"guild_id":  guildID,
-		"role_id":   roleID,
-		"rpm_limit": g.Store.GetGlobalRPM(),
+		"guild_id": guildID,
+		"role_id":  roleID,
 	})
 }
 
@@ -221,9 +170,8 @@ func (g *Gateway) handleAdminPutSettings(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req struct {
-		GuildID  string `json:"guild_id"`
-		RoleID   string `json:"role_id"`
-		RPMLimit *int   `json:"rpm_limit"`
+		GuildID string `json:"guild_id"`
+		RoleID  string `json:"role_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
@@ -236,21 +184,6 @@ func (g *Gateway) handleAdminPutSettings(w http.ResponseWriter, r *http.Request)
 	if err := g.Store.SetSetting(db.SettingRoleID, req.RoleID); err != nil {
 		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
-	}
-	if req.RPMLimit != nil {
-		if *req.RPMLimit < 1 {
-			g.writeError(w, http.StatusBadRequest, "invalid_request", "rpm_limit must be >= 1")
-			return
-		}
-		if err := g.Store.SetSetting(db.SettingRPMLimit, strconv.Itoa(*req.RPMLimit)); err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-			return
-		}
-		// Global RPM changed — invalidate all cached entries so the next
-		// request for every user re-reads the new default from the DB.
-		g.limiter.rpmCacheMu.Lock()
-		g.limiter.rpmCache = make(map[int64]int)
-		g.limiter.rpmCacheMu.Unlock()
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})

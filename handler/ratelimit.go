@@ -48,41 +48,13 @@ func (l *rateLimiter) allow(userID int64, now time.Time, limit int) bool {
 	return true
 }
 
-// effectiveRPM resolves the cap for a user: per-user override wins over
-// global default.  Results are cached in-memory; call invalidateRPMCache
-// whenever a per-user or global RPM is changed by an admin.
+// effectiveRPM returns a hardcoded RPM cap (3).  This is a temporary stub
+// for alpha.3 S1 — S2 will implement the three-class RPM system with
+// per-user overrides from rpm_limit_a/b/c columns and the new settings keys.
 func (g *Gateway) effectiveRPM(userID int64) int {
-	// Fast path: cache hit.
-	g.limiter.rpmCacheMu.RLock()
-	if v, ok := g.limiter.rpmCache[userID]; ok {
-		g.limiter.rpmCacheMu.RUnlock()
-		if v == -1 {
-			return g.Store.GetGlobalRPM()
-		}
-		return v
-	}
-	g.limiter.rpmCacheMu.RUnlock()
-
-	// Slow path: query DB and populate cache.
-	u, err := g.Store.GetUserByID(userID)
-	v := -1
-	if err == nil && u != nil && u.RPMLimit.Valid {
-		v = int(u.RPMLimit.Int64)
-	}
-	g.limiter.rpmCacheMu.Lock()
-	g.limiter.rpmCache[userID] = v
-	g.limiter.rpmCacheMu.Unlock()
-
-	if v == -1 {
-		return g.Store.GetGlobalRPM()
-	}
-	return v
+	return 3
 }
 
-// invalidateRPMCache clears RPM caches so the next lookup re-reads from
-// the DB.  Call after any admin action that changes per-user or global RPM.
-func (g *Gateway) invalidateRPMCache(userID int64) {
-	g.limiter.rpmCacheMu.Lock()
-	delete(g.limiter.rpmCache, userID)
-	g.limiter.rpmCacheMu.Unlock()
-}
+// invalidateRPMCache is a no-op stub for alpha.3 S1. S2 will reinstate
+// real cache invalidation for the three-class RPM system.
+func (g *Gateway) invalidateRPMCache(userID int64) {}

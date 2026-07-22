@@ -52,6 +52,46 @@ type Config struct {
 
 	// Admin holds the administrator account and Discord OAuth credentials.
 	Admin AdminConfig
+
+	// --- alpha.3: Public-resource credits ---
+	// CreditsName is the name shown to users for the credit statistic.
+	CreditsName string
+	// CreditsLogoText is an emoji or text displayed next to the credits name.
+	CreditsLogoText string
+	// CreditsLogoPath is a local image file path for the credits logo; takes
+	// precedence over CreditsLogoText when non-empty.
+	CreditsLogoPath string
+	// CheckinTZOffset is the UTC offset in hours for the check-in day
+	// boundary. Allowed range is [-12, 14]; out-of-range values are logged
+	// and reset to 0.
+	CheckinTZOffset int
+
+	// --- alpha.3: SMTP (email alerts) ---
+	SMTP SMTPConfig
+
+	// --- alpha.3: Web IP rate-limit (F7) ---
+	// WebRPMPerIP is the per-IP requests-per-minute cap for /api/* endpoints.
+	// 0 disables IP rate-limiting.
+	WebRPMPerIP int
+	// WebThrottleSec is how many seconds the caller gets 429 after exceeding
+	// WebRPMPerIP.
+	WebThrottleSec int
+	// AuthFailRPMPerIP is the per-IP limit for /v1/* invalid-key requests;
+	// 0 disables.
+	AuthFailRPMPerIP int
+}
+
+// SMTPConfig holds the email-delivery settings for operational alerts (F5).
+type SMTPConfig struct {
+	Host string
+	Port int
+	User string
+	Pass string
+	From string
+	To   string
+	// TLS mode: "starttls" or "implicit". Empty means auto-detect by port
+	// (465→implicit, others→starttls).
+	TLS string
 }
 
 // AdminConfig is the administrator/site section of the startup file.
@@ -104,6 +144,28 @@ func LoadStartup(path string) (*Config, error) {
 		LoginWindowMin:    getIntOr(envMap, "LOGIN_WINDOW_MIN", 10),
 		LoginLockMin:      getIntOr(envMap, "LOGIN_LOCK_MIN", 60),
 		LoginMinLatencyMs: getIntOr(envMap, "LOGIN_MIN_LATENCY_MS", 300),
+
+		// alpha.3 — public-resource credits.
+		CreditsName:     getOr(envMap, "CREDITS_NAME", "公益 Dify2API 积分"),
+		CreditsLogoText: getOr(envMap, "CREDITS_LOGO_TEXT", ""),
+		CreditsLogoPath: getOr(envMap, "CREDITS_LOGO_PATH", ""),
+		CheckinTZOffset: getCheckinTZOffset(envMap),
+
+		// alpha.3 — SMTP.
+		SMTP: SMTPConfig{
+			Host: getOr(envMap, "SMTP_HOST", ""),
+			Port: getIntOrAllowZero(envMap, "SMTP_PORT", 587),
+			User: getOr(envMap, "SMTP_USER", ""),
+			Pass: getOr(envMap, "SMTP_PASS", ""),
+			From: getOr(envMap, "SMTP_FROM", ""),
+			To:   getOr(envMap, "SMTP_TO", ""),
+			TLS:  getSMTPTLS(envMap),
+		},
+
+		// alpha.3 — Web IP rate-limit.
+		WebRPMPerIP:      getIntOrAllowZero(envMap, "WEB_RPM_PER_IP", 120),
+		WebThrottleSec:   getIntOr(envMap, "WEB_THROTTLE_SEC", 60),
+		AuthFailRPMPerIP: getIntOrAllowZero(envMap, "AUTH_FAIL_RPM_PER_IP", 30),
 	}
 
 	a := &cfg.Admin
@@ -141,6 +203,12 @@ func LoadStartup(path string) (*Config, error) {
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("startup file %s missing required keys: %s", path, strings.Join(missing, ", "))
 	}
+
+	// SMTP_FROM falls back to SMTP_USER when empty.
+	if cfg.SMTP.From == "" {
+		cfg.SMTP.From = cfg.SMTP.User
+	}
+
 	return cfg, nil
 }
 
@@ -170,6 +238,59 @@ func getIntOr(envFile map[string]string, key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+// getIntOrAllowZero is like getIntOr but accepts 0 as a valid value.
+// Negative values trigger the [CONFIG] warning and fall back to default.
+func getIntOrAllowZero(envFile map[string]string, key string, fallback int) int {
+	raw, ok := os.LookupEnv(key)
+	if !ok {
+		raw, ok = envFile[key]
+	}
+	if !ok || strings.TrimSpace(raw) == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || n < 0 {
+		log.Printf("[CONFIG] %s=%q is not a non-negative integer; using default %d", key, raw, fallback)
+		return fallback
+	}
+	return n
+}
+
+// getCheckinTZOffset parses CHECKIN_TZ_OFFSET with range validation [-12, 14].
+func getCheckinTZOffset(envFile map[string]string) int {
+	raw, ok := os.LookupEnv("CHECKIN_TZ_OFFSET")
+	if !ok {
+		raw, ok = envFile["CHECKIN_TZ_OFFSET"]
+	}
+	if !ok || strings.TrimSpace(raw) == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || n < -12 || n > 14 {
+		log.Printf("[CONFIG] CHECKIN_TZ_OFFSET=%q is out of range [-12,14] or invalid; using default 0", raw)
+		return 0
+	}
+	return n
+}
+
+// getSMTPTLS parses SMTP_TLS with valid-value enforcement.
+func getSMTPTLS(envFile map[string]string) string {
+	raw, ok := os.LookupEnv("SMTP_TLS")
+	if !ok {
+		raw, ok = envFile["SMTP_TLS"]
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "" // auto-detect by port
+	}
+	raw = strings.ToLower(raw)
+	if raw != "starttls" && raw != "implicit" {
+		log.Printf("[CONFIG] SMTP_TLS=%q is not one of 'starttls' or 'implicit'; using auto-detect", raw)
+		return ""
+	}
+	return raw
 }
 
 // loadEnvFile parses a simple KEY=VALUE file into the provided map.

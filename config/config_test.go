@@ -126,6 +126,136 @@ func TestLoadStartup_Required(t *testing.T) {
 	}
 }
 
+func TestLoadStartup_Alpha3Defaults(t *testing.T) {
+	cfg, err := LoadStartup(writeTemp(t, "admin.env", minimalAdmin))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.CreditsName != "公益 Dify2API 积分" {
+		t.Errorf("CREDITS_NAME = %q, want default", cfg.CreditsName)
+	}
+	if cfg.CheckinTZOffset != 0 {
+		t.Errorf("CHECKIN_TZ_OFFSET = %d, want 0", cfg.CheckinTZOffset)
+	}
+	if cfg.SMTP.Port != 587 {
+		t.Errorf("SMTP_PORT = %d, want 587", cfg.SMTP.Port)
+	}
+	if cfg.SMTP.TLS != "" {
+		t.Errorf("SMTP_TLS = %q, want empty (auto)", cfg.SMTP.TLS)
+	}
+	if cfg.WebRPMPerIP != 120 {
+		t.Errorf("WEB_RPM_PER_IP = %d, want 120", cfg.WebRPMPerIP)
+	}
+	if cfg.WebThrottleSec != 60 {
+		t.Errorf("WEB_THROTTLE_SEC = %d, want 60", cfg.WebThrottleSec)
+	}
+	if cfg.AuthFailRPMPerIP != 30 {
+		t.Errorf("AUTH_FAIL_RPM_PER_IP = %d, want 30", cfg.AuthFailRPMPerIP)
+	}
+}
+
+func TestLoadStartup_CheckinTZOffset(t *testing.T) {
+	// Valid negative.
+	p := writeTemp(t, "admin.env", minimalAdmin+"CHECKIN_TZ_OFFSET=-5\n")
+	cfg, err := LoadStartup(p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.CheckinTZOffset != -5 {
+		t.Errorf("CHECKIN_TZ_OFFSET = %d, want -5", cfg.CheckinTZOffset)
+	}
+
+	// Out of range (too low) → fallback to 0 with warning.
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	p2 := writeTemp(t, "admin.env", minimalAdmin+"CHECKIN_TZ_OFFSET=-13\n")
+	cfg2, _ := LoadStartup(p2)
+	if cfg2.CheckinTZOffset != 0 {
+		t.Errorf("CHECKIN_TZ_OFFSET out-of-range low = %d, want 0", cfg2.CheckinTZOffset)
+	}
+	if !strings.Contains(buf.String(), "[CONFIG]") {
+		t.Error("expected [CONFIG] warning for out-of-range offset")
+	}
+}
+
+func TestLoadStartup_SMTPTLS(t *testing.T) {
+	// Valid values.
+	for _, mode := range []string{"starttls", "implicit", "STARTTLS", "IMPLICIT"} {
+		p := writeTemp(t, "admin.env", minimalAdmin+"SMTP_TLS="+mode+"\n")
+		cfg, err := LoadStartup(p)
+		if err != nil {
+			t.Fatalf("unexpected error for %s: %v", mode, err)
+		}
+		want := strings.ToLower(mode)
+		if cfg.SMTP.TLS != want {
+			t.Errorf("SMTP_TLS=%q → %q, want %q", mode, cfg.SMTP.TLS, want)
+		}
+	}
+
+	// Invalid value → fallback to empty with warning.
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	p2 := writeTemp(t, "admin.env", minimalAdmin+"SMTP_TLS=tlsv1\n")
+	cfg2, _ := LoadStartup(p2)
+	if cfg2.SMTP.TLS != "" {
+		t.Errorf("SMTP_TLS invalid = %q, want empty", cfg2.SMTP.TLS)
+	}
+	if !strings.Contains(buf.String(), "[CONFIG]") {
+		t.Error("expected [CONFIG] warning for invalid SMTP_TLS")
+	}
+}
+
+func TestLoadStartup_WebRPMDisabled(t *testing.T) {
+	p := writeTemp(t, "admin.env", minimalAdmin+"WEB_RPM_PER_IP=0\nAUTH_FAIL_RPM_PER_IP=0\n")
+	cfg, err := LoadStartup(p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.WebRPMPerIP != 0 {
+		t.Errorf("WEB_RPM_PER_IP = %d, want 0", cfg.WebRPMPerIP)
+	}
+	if cfg.AuthFailRPMPerIP != 0 {
+		t.Errorf("AUTH_FAIL_RPM_PER_IP = %d, want 0", cfg.AuthFailRPMPerIP)
+	}
+}
+
+func TestGetIntOrAllowZero_WarnsOnNegative(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	// Negative → fallback + warn.
+	result := getIntOrAllowZero(map[string]string{"NEG_KEY": "-1"}, "NEG_KEY", 100)
+	if result != 100 {
+		t.Errorf("expected fallback 100, got %d", result)
+	}
+	if !strings.Contains(buf.String(), "[CONFIG]") || !strings.Contains(buf.String(), "non-negative") {
+		t.Errorf("expected [CONFIG] warning for negative, got: %s", buf.String())
+	}
+
+	// Zero is valid.
+	buf.Reset()
+	result2 := getIntOrAllowZero(map[string]string{"ZERO_KEY": "0"}, "ZERO_KEY", 50)
+	if result2 != 0 {
+		t.Errorf("expected 0, got %d", result2)
+	}
+	if buf.Len() > 0 {
+		t.Errorf("expected no log for valid zero, got: %s", buf.String())
+	}
+
+	// Missing key → silent fallback.
+	buf.Reset()
+	result3 := getIntOrAllowZero(map[string]string{}, "MISSING", 42)
+	if result3 != 42 {
+		t.Errorf("expected 42, got %d", result3)
+	}
+	if buf.Len() > 0 {
+		t.Errorf("expected no log for unset, got: %s", buf.String())
+	}
+}
+
 func TestGetIntOr_WarnsOnInvalid(t *testing.T) {
 	// Capture log output.
 	var buf bytes.Buffer

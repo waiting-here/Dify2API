@@ -67,7 +67,6 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/admin/users/{id}/unban", g.handleAdminUnbanUser)
 	mux.HandleFunc("DELETE /api/admin/users/{id}", g.handleAdminDeleteUser)
 	mux.HandleFunc("POST /api/admin/users/{id}/reset-key", g.handleAdminResetUserKey)
-	mux.HandleFunc("POST /api/admin/users/{id}/rpm", g.handleAdminSetUserRPM)
 	mux.HandleFunc("GET /api/admin/users/{id}/export", g.handleAdminExportUser)
 	mux.HandleFunc("GET /api/admin/settings", g.handleAdminGetSettings)
 	mux.HandleFunc("PUT /api/admin/settings", g.handleAdminPutSettings)

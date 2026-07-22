@@ -17,14 +17,27 @@ type User struct {
 	Avatar      string
 	IsAdmin     bool
 	Disabled    bool
-	BannedUntil int64 `json:"banned_until"` // unix ts; 0 = no timed ban; ban lapses automatically once past
-	AutoBanned  bool  `json:"auto_banned"`  // true when RPM-violation auto-ban
+	BannedUntil int64  `json:"banned_until"` // unix ts; 0 = no timed ban; ban lapses automatically once past
+	AutoBanned  bool   `json:"auto_banned"`  // true when RPM-violation auto-ban
 	BanReason   string `json:"ban_reason"`   // admin-supplied reason (empty for auto-bans)
-	// RPMLimit is the per-user requests-per-minute override; Valid == false
-	// means "use the global default".
-	RPMLimit   sql.NullInt64
-	CreatedAt  int64
-	UpdatedAt  int64
+	// Credits is the user's public-service credit balance (F2).
+	Credits int `json:"credits"`
+	// LastCheckinDay is the normalised date of the last successful check-in
+	// (e.g. "2026-07-24"), used for once-per-day enforcement. Empty when
+	// the user has never checked in.
+	LastCheckinDay string `json:"last_checkin_day"`
+	// Per-user overrides for three-class RPM (S2). nil means "use global".
+	RPMLimitA sql.NullInt64
+	RPMLimitB sql.NullInt64
+	RPMLimitC sql.NullInt64
+	// DonationCredit is the number of successful donations bound to this
+	// user (admin-visible only, see §1.1).
+	DonationCredit int `json:"donation_credit"`
+	// CharityEnabled is the user-side public-resource opt-in switch (§1.3).
+	CharityEnabled bool `json:"charity_enabled"`
+
+	CreatedAt int64
+	UpdatedAt int64
 }
 
 // IsBanned reports whether the user is currently banned: either permanently
@@ -35,18 +48,19 @@ func IsBanned(u *User) bool {
 
 func scanUser(row interface{ Scan(...interface{}) error }) (*User, error) {
 	var u User
-	var isAdmin, disabled, autoBanned int
-	err := row.Scan(&u.ID, &u.DiscordID, &u.Username, &u.Avatar, &isAdmin, &disabled, &u.BannedUntil, &autoBanned, &u.BanReason, &u.RPMLimit, &u.CreatedAt, &u.UpdatedAt)
+	var isAdmin, disabled, autoBanned, charityEnabled int
+	err := row.Scan(&u.ID, &u.DiscordID, &u.Username, &u.Avatar, &isAdmin, &disabled, &u.BannedUntil, &autoBanned, &u.BanReason, &u.Credits, &u.LastCheckinDay, &u.RPMLimitA, &u.RPMLimitB, &u.RPMLimitC, &u.DonationCredit, &charityEnabled, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	u.IsAdmin = isAdmin != 0
 	u.Disabled = disabled != 0
 	u.AutoBanned = autoBanned != 0
+	u.CharityEnabled = charityEnabled != 0
 	return &u, nil
 }
 
-const userCols = "id, discord_id, username, avatar, is_admin, disabled, banned_until, auto_banned, ban_reason, rpm_limit, created_at, updated_at"
+const userCols = "id, discord_id, username, avatar, is_admin, disabled, banned_until, auto_banned, ban_reason, credits, last_checkin_day, rpm_limit_a, rpm_limit_b, rpm_limit_c, donation_credit, charity_enabled, created_at, updated_at"
 
 // GetUserByID fetches a user by primary key. Returns (nil, nil) when absent.
 func (s *Store) GetUserByID(id int64) (*User, error) {
@@ -109,17 +123,6 @@ func (s *Store) EnsureAdminUser(username string) (*User, error) {
 	return u, nil
 }
 
-// SetUserRPMLimit sets (limit >= 1) or clears (limit == nil) the per-user
-// RPM override. Clearing reverts the user to the global default.
-func (s *Store) SetUserRPMLimit(id int64, limit *int64) error {
-	var v interface{}
-	if limit != nil {
-		v = *limit
-	}
-	_, err := s.db.Exec(`UPDATE users SET rpm_limit=?, updated_at=? WHERE id=? AND is_admin=0`, v, time.Now().Unix(), id)
-	return err
-}
-
 // BanUser sets a timed ban with an optional admin-supplied reason.
 // Permanent bans use SetUserDisabled.
 func (s *Store) BanUser(id int64, until time.Time, reason string) error {
@@ -166,6 +169,99 @@ func (s *Store) ListUsers() ([]*User, error) {
 		out = append(out, u)
 	}
 	return out, rows.Err()
+}
+
+// SetUserCredits directly sets the user's credit balance.
+func (s *Store) SetUserCredits(userID int64, credits int) error {
+	_, err := s.db.Exec(`UPDATE users SET credits=?, updated_at=? WHERE id=?`, credits, time.Now().Unix(), userID)
+	return err
+}
+
+// AdjustUserCredits atomically adds delta to credits and returns the new value.
+// Negative values are allowed (admin deduction).
+func (s *Store) AdjustUserCredits(userID int64, delta int) (int, error) {
+	res, err := s.db.Exec(`UPDATE users SET credits=credits+?, updated_at=? WHERE id=?`, delta, time.Now().Unix(), userID)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return 0, fmt.Errorf("user %d not found", userID)
+	}
+	var newVal int
+	if err := s.db.QueryRow(`SELECT credits FROM users WHERE id=?`, userID).Scan(&newVal); err != nil {
+		return 0, err
+	}
+	return newVal, nil
+}
+
+// SetUserCheckin atomically records a check-in for the given day if not
+// already checked in. Returns the new credit balance and whether the
+// check-in was accepted (false = already checked in today).
+func (s *Store) SetUserCheckin(userID int64, day string, newCredits int) (bool, error) {
+	res, err := s.db.Exec(
+		`UPDATE users SET last_checkin_day=?, credits=?, updated_at=? WHERE id=? AND last_checkin_day != ?`,
+		day, newCredits, time.Now().Unix(), userID, day,
+	)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// SetUserRPMLimits sets (non-nil) or clears (nil) the per-user three-class
+// RPM overrides. S2 will use these.
+func (s *Store) SetUserRPMLimits(userID int64, a, b, c *int) error {
+	var va, vb, vc interface{}
+	if a != nil {
+		va = *a
+	}
+	if b != nil {
+		vb = *b
+	}
+	if c != nil {
+		vc = *c
+	}
+	_, err := s.db.Exec(
+		`UPDATE users SET rpm_limit_a=?, rpm_limit_b=?, rpm_limit_c=?, updated_at=? WHERE id=? AND is_admin=0`,
+		va, vb, vc, time.Now().Unix(), userID,
+	)
+	return err
+}
+
+// SetUserDonationCredit directly sets the user's donation-credit counter.
+func (s *Store) SetUserDonationCredit(userID int64, v int) error {
+	_, err := s.db.Exec(`UPDATE users SET donation_credit=?, updated_at=? WHERE id=?`, v, time.Now().Unix(), userID)
+	return err
+}
+
+// AdjustUserDonationCredit atomically adds delta to donation_credit and
+// returns the new value.
+func (s *Store) AdjustUserDonationCredit(userID int64, delta int) (int, error) {
+	res, err := s.db.Exec(`UPDATE users SET donation_credit=donation_credit+?, updated_at=? WHERE id=?`, delta, time.Now().Unix(), userID)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return 0, fmt.Errorf("user %d not found", userID)
+	}
+	var newVal int
+	if err := s.db.QueryRow(`SELECT donation_credit FROM users WHERE id=?`, userID).Scan(&newVal); err != nil {
+		return 0, err
+	}
+	return newVal, nil
+}
+
+// SetUserCharityEnabled sets the user-side public-resource opt-in switch.
+func (s *Store) SetUserCharityEnabled(userID int64, enabled bool) error {
+	v := 0
+	if enabled {
+		v = 1
+	}
+	_, err := s.db.Exec(`UPDATE users SET charity_enabled=?, updated_at=? WHERE id=?`, v, time.Now().Unix(), userID)
+	return err
 }
 
 // DeleteUser removes a user and their dependent rows.
