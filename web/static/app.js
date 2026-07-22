@@ -63,6 +63,10 @@ const T = {
   rpmBanHours: "自动封禁时长（小时）",
   rpmPrompt: "该用户的三类 RPM 覆盖值（当前：{cur}）。\n输入三个数字，用逗号分隔（例：6,12,18）；某项留空表示跟随全局（例：,12, 仅覆盖 B）；\n全部留空或输入 default 恢复全部跟随全局：",
   rpmInvalid: "格式无效：需为三个以逗号分隔的正整数（可留空）",
+  rpmA: "A",
+  rpmB: "B",
+  rpmC: "C",
+  rpmSave: "保存",
   thCreated: "注册时间",
   ban: "封禁",
   unban: "解封",
@@ -903,18 +907,21 @@ function resolveLogUserFilter(text) {
 }
 
 function userRow(u) {
-  const fmtLim = (v) => (v == null ? "–" : String(v));
-  const hasOverride = u.rpm_limit_a != null || u.rpm_limit_b != null || u.rpm_limit_c != null;
-  const rpm = hasOverride
-    ? esc(`${fmtLim(u.rpm_limit_a)}/${fmtLim(u.rpm_limit_b)}/${fmtLim(u.rpm_limit_c)}`)
-    : `<span class="muted">default</span>`;
+  const fmtLim = (v) => (v == null ? "" : String(v));
+  const rpm = `
+    <span style="display:inline-flex;align-items:center;gap:2px">
+      <input class="u-rpm" data-id="${u.id}" data-class="a" type="number" min="1" value="${fmtLim(u.rpm_limit_a)}" placeholder="${T.rpmA}" style="width:3.5rem;padding:0 .25rem;font-size:.75rem">
+      <input class="u-rpm" data-id="${u.id}" data-class="b" type="number" min="1" value="${fmtLim(u.rpm_limit_b)}" placeholder="${T.rpmB}" style="width:3.5rem;padding:0 .25rem;font-size:.75rem">
+      <input class="u-rpm" data-id="${u.id}" data-class="c" type="number" min="1" value="${fmtLim(u.rpm_limit_c)}" placeholder="${T.rpmC}" style="width:3.5rem;padding:0 .25rem;font-size:.75rem">
+      <button class="secondary u-rpm-save" data-id="${u.id}" style="padding:0 .3rem;font-size:.7rem;width:auto">${T.rpmSave}</button>
+    </span>`;
   return `
     <tr data-id="${u.id}">
       <td><input type="checkbox" class="user-chk" data-id="${u.id}"></td>
       <td>${esc(u.username)} <span class="muted mono">(${esc(u.discord_id)})</span></td>
       <td class="mono">${u.credits != null ? String(u.credits) : "0"}</td>
       <td class="mono">${u.donation_credit != null ? String(u.donation_credit) : "0"}</td>
-      <td>${rpm} <button class="secondary u-rpm" style="padding:.1rem .5rem;font-size:.8rem">✎</button></td>
+      <td>${rpm}</td>
       <td class="muted">${fmtT(u.created_at)}</td>
       <td class="wrap">${userStatusBadges(u)}</td>
       <td class="row-actions">
@@ -965,29 +972,6 @@ async function loadAdminUsers() {
     if (!confirm(T.deleteUserConfirm)) return;
     const id = e.target.closest("tr").dataset.id;
     await api(`/api/admin/users/${id}`, { method: "DELETE" });
-    await loadAdminUsers();
-  }));
-  document.querySelectorAll(".u-rpm").forEach((b) => (b.onclick = async (e) => {
-    const id = e.target.closest("tr").dataset.id;
-    const u = userPager.data.find((x) => String(x.id) === id);
-    const curParts = [u?.rpm_limit_a, u?.rpm_limit_b, u?.rpm_limit_c].map((x) => (x == null ? "" : String(x)));
-    const cur = curParts.some((x) => x !== "") ? curParts.join(",") : "";
-    const v = prompt(T.rpmPrompt.replace("{cur}", cur || "default"), cur);
-    if (v === null) return;
-    const raw = v.trim().toLowerCase();
-    let body = { rpm_limit_a: null, rpm_limit_b: null, rpm_limit_c: null };
-    if (raw !== "" && raw !== "default") {
-      const parts = raw.split(",").map((x) => x.trim());
-      if (parts.length !== 3) { toast(T.rpmInvalid); return; }
-      const keys = ["rpm_limit_a", "rpm_limit_b", "rpm_limit_c"];
-      for (let i = 0; i < 3; i++) {
-        if (parts[i] === "") continue; // 留空 = 跟随全局
-        const n = parseInt(parts[i], 10);
-        if (isNaN(n) || n < 1) { toast(T.rpmInvalid); return; }
-        body[keys[i]] = n;
-      }
-    }
-    await api(`/api/admin/users/${id}/rpm`, { method: "POST", body });
     await loadAdminUsers();
   }));
   document.querySelectorAll(".u-export").forEach((b) => (b.onclick = async (e) => {
@@ -1316,8 +1300,31 @@ async function onDonationSubmit(e) {
   }
 }
 
-// Delegate click events for donation actions (toggle/delete).
+// Delegate click events for donation actions (toggle/delete) and RPM save.
 document.addEventListener("click", async (ev) => {
+  const rpmBtn = ev.target.closest(".u-rpm-save");
+  if (rpmBtn) {
+    const id = rpmBtn.dataset.id;
+    const aVal = document.querySelector(`.u-rpm[data-id="${id}"][data-class="a"]`);
+    const bVal = document.querySelector(`.u-rpm[data-id="${id}"][data-class="b"]`);
+    const cVal = document.querySelector(`.u-rpm[data-id="${id}"][data-class="c"]`);
+    const clean = (el) => {
+      const v = el?.value?.trim();
+      if (!v) return null;
+      const n = parseInt(v, 10);
+      return (isNaN(n) || n < 1) ? null : n;
+    };
+    try {
+      await api(`/api/admin/users/${id}/rpm`, { method: "POST", body: {
+        rpm_limit_a: clean(aVal), rpm_limit_b: clean(bVal), rpm_limit_c: clean(cVal),
+      } });
+      toast(T.settingsSaved);
+      await loadAdminUsers();
+    } catch (err) {
+      toast(T.error.replace("{msg}", err.message), 3000);
+    }
+    return;
+  }
   const btn = ev.target.closest(".don-toggle");
   if (btn) {
     const id = btn.dataset.id;
