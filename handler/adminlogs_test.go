@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -67,7 +68,7 @@ func TestAdminLogs_BasicListing(t *testing.T) {
 	}
 
 	var resp struct {
-		Total int                `json:"total"`
+		Total int                  `json:"total"`
 		Logs  []db.AdminRequestLog `json:"logs"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
@@ -104,7 +105,7 @@ func TestAdminLogs_FilterByUserID(t *testing.T) {
 		t.Fatalf("status = %d", rec.Code)
 	}
 	var resp struct {
-		Total int                `json:"total"`
+		Total int                  `json:"total"`
 		Logs  []db.AdminRequestLog `json:"logs"`
 	}
 	json.NewDecoder(rec.Body).Decode(&resp)
@@ -127,7 +128,7 @@ func TestAdminLogs_FilterByService(t *testing.T) {
 
 	rec := adminGet(gw, adminCookie, "/api/admin/logs?service=general")
 	var resp struct {
-		Total int                `json:"total"`
+		Total int                  `json:"total"`
 		Logs  []db.AdminRequestLog `json:"logs"`
 	}
 	json.NewDecoder(rec.Body).Decode(&resp)
@@ -147,7 +148,7 @@ func TestAdminLogs_FilterByStatus(t *testing.T) {
 
 	rec := adminGet(gw, adminCookie, "/api/admin/logs?status=error")
 	var resp struct {
-		Total int                `json:"total"`
+		Total int                  `json:"total"`
 		Logs  []db.AdminRequestLog `json:"logs"`
 	}
 	json.NewDecoder(rec.Body).Decode(&resp)
@@ -178,7 +179,7 @@ func TestAdminLogs_FilterByTimeWindow(t *testing.T) {
 
 	rec := adminGet(gw, adminCookie, fmt.Sprintf("/api/admin/logs?since=%d&until=%d", since, until))
 	var resp struct {
-		Total int                `json:"total"`
+		Total int                  `json:"total"`
 		Logs  []db.AdminRequestLog `json:"logs"`
 	}
 	json.NewDecoder(rec.Body).Decode(&resp)
@@ -200,7 +201,7 @@ func TestAdminLogs_Pagination(t *testing.T) {
 	// Page 1: 3 items (offset 0, limit 3).
 	rec := adminGet(gw, adminCookie, "/api/admin/logs?limit=3&offset=0")
 	var resp struct {
-		Total int                `json:"total"`
+		Total int                  `json:"total"`
 		Logs  []db.AdminRequestLog `json:"logs"`
 	}
 	json.NewDecoder(rec.Body).Decode(&resp)
@@ -222,6 +223,95 @@ func TestAdminLogs_Pagination(t *testing.T) {
 	}
 }
 
+func TestAdminLogs_FilterByModel(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+
+	u, _ := store.CreateUser("42", "alice", "")
+	now := time.Now()
+	addTestLog(store, u.ID, "[general]claude", "general", "success", "", now.Add(-10*time.Minute), now.Add(-9*time.Minute))
+	addTestLog(store, u.ID, "[general]gemini", "general", "success", "", now.Add(-5*time.Minute), now.Add(-4*time.Minute))
+
+	rec := adminGet(gw, adminCookie, "/api/admin/logs?model="+url.QueryEscape("[general]claude"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var resp struct {
+		Total int                  `json:"total"`
+		Logs  []db.AdminRequestLog `json:"logs"`
+	}
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.Total != 1 || len(resp.Logs) != 1 {
+		t.Errorf("model filter: total=%d len=%d, want 1/1", resp.Total, len(resp.Logs))
+	}
+	if len(resp.Logs) > 0 && resp.Logs[0].Model != "[general]claude" {
+		t.Errorf("wrong model filtered: %s", resp.Logs[0].Model)
+	}
+}
+
+func TestAdminLogs_DonationSourceDisplay(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+
+	u, _ := store.CreateUser("42", "alice", "")
+	now := time.Now()
+
+	// Create a donation and a bound log.
+	d := &db.Donation{
+		Service:         "general",
+		Model:           "test",
+		DifyBaseURL:     "https://api.example.com",
+		Deadline:        now.Add(7 * 24 * time.Hour).Unix(),
+		TotalCount:      5,
+		SourceDiscordID: "999",
+		SourceUsername:  "donor",
+	}
+	created, err := store.CreateDonation(d, "k1")
+	if err != nil {
+		t.Fatalf("CreateDonation: %v", err)
+	}
+	store.AddRequestLogDonation(u.ID, "[公益][general]test", "general", now.Add(-10*time.Minute), now.Add(-9*time.Minute), "success", "", created.ID)
+
+	rec := adminGet(gw, adminCookie, "/api/admin/logs?limit=10")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+
+	var resp struct {
+		Total int               `json:"total"`
+		Logs  []json.RawMessage `json:"logs"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Total != 1 || len(resp.Logs) != 1 {
+		t.Fatalf("total=%d len=%d, want 1/1", resp.Total, len(resp.Logs))
+	}
+
+	// Check source_display is present in the JSON.
+	var logEntry map[string]interface{}
+	if err := json.Unmarshal(resp.Logs[0], &logEntry); err != nil {
+		t.Fatalf("unmarshal log entry: %v", err)
+	}
+	src, ok := logEntry["source_display"].(string)
+	if !ok || src == "" {
+		t.Errorf("source_display missing or empty: %v", logEntry)
+	}
+	t.Logf("source_display = %q", src)
+
+	// After deleting the donation, source_display should show "（条目已删除）".
+	store.DeleteDonation(created.ID)
+	rec = adminGet(gw, adminCookie, "/api/admin/logs?limit=10")
+	json.NewDecoder(rec.Body).Decode(&resp)
+
+	var logEntry2 map[string]interface{}
+	json.Unmarshal(resp.Logs[0], &logEntry2)
+	src2, _ := logEntry2["source_display"].(string)
+	if src2 != "（条目已删除）" {
+		t.Errorf("after deletion source_display = %q, want \"（条目已删除）\"", src2)
+	}
+}
+
 func TestAdminLogs_DeletedUser(t *testing.T) {
 	gw, store := setupAuthGateway(t, "s3cret")
 	adminCookie := loginCookie(t, gw, "root", "s3cret")
@@ -237,7 +327,7 @@ func TestAdminLogs_DeletedUser(t *testing.T) {
 
 	rec := adminGet(gw, adminCookie, "/api/admin/logs")
 	var resp struct {
-		Total int                `json:"total"`
+		Total int                  `json:"total"`
 		Logs  []db.AdminRequestLog `json:"logs"`
 	}
 	json.NewDecoder(rec.Body).Decode(&resp)

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"dify2api/db"
 )
@@ -28,6 +29,7 @@ func (g *Gateway) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 		filter.UserID = &v
 	}
 	filter.Service = q.Get("service")
+	filter.Model = strings.TrimSpace(q.Get("model"))
 
 	if s := q.Get("status"); s != "" {
 		if s != "success" && s != "error" {
@@ -79,9 +81,69 @@ func (g *Gateway) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Enrich logs with donation source_display.
+	type enrichedLog struct {
+		ID            int64  `json:"id"`
+		UserID        int64  `json:"user_id"`
+		Username      string `json:"username"`
+		Model         string `json:"model"`
+		Service       string `json:"service"`
+		StartedAt     int64  `json:"started_at"`
+		EndedAt       int64  `json:"ended_at"`
+		Status        string `json:"status"`
+		ErrorCode     string `json:"error_code"`
+		HTTPStatus    int    `json:"http_status"`
+		ErrorDetail   string `json:"error_detail"`
+		DonationID    *int64 `json:"donation_id"`
+		SourceDisplay string `json:"source_display,omitempty"`
+	}
+
+	// Build a cache of donation source displays for this batch.
+	donCache := make(map[int64]string)
+	for _, l := range logs {
+		if l.DonationID != nil {
+			if _, ok := donCache[*l.DonationID]; !ok {
+				donCache[*l.DonationID] = g.resolveDonationSourceForLog(*l.DonationID)
+			}
+		}
+	}
+
+	out := make([]enrichedLog, 0, len(logs))
+	for _, l := range logs {
+		el := enrichedLog{
+			ID:          l.ID,
+			UserID:      l.UserID,
+			Username:    l.Username,
+			Model:       l.Model,
+			Service:     l.Service,
+			StartedAt:   l.StartedAt,
+			EndedAt:     l.EndedAt,
+			Status:      l.Status,
+			ErrorCode:   l.ErrorCode,
+			HTTPStatus:  l.HTTPStatus,
+			ErrorDetail: l.ErrorDetail,
+			DonationID:  l.DonationID,
+		}
+		if l.DonationID != nil {
+			el.SourceDisplay = donCache[*l.DonationID]
+		}
+		out = append(out, el)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"total": total,
-		"logs":  logs,
+		"logs":  out,
 	})
+}
+
+// resolveDonationSourceForLog resolves the source_display string for a
+// donation id in the context of admin log display.  If the donation has
+// been deleted (GetDonation returns nil), it returns "（条目已删除）".
+func (g *Gateway) resolveDonationSourceForLog(donationID int64) string {
+	d, err := g.Store.GetDonation(donationID)
+	if err != nil || d == nil {
+		return "（条目已删除）"
+	}
+	return g.resolveSourceDisplay(d)
 }

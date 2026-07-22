@@ -105,6 +105,16 @@ const T = {
   adminLogsUntil: "结束时间",
   thHTTPStatus: "HTTP",
   thErrorDetail: "错误详情",
+  // Admin alert centre
+  alertTitle: "告警中心",
+  alertType: "类型",
+  alertMessage: "消息",
+  alertTypeBlockingFailed200: "阻塞调用 200 但失败",
+  alertDeleteSelected: "删除选中",
+  alertDeleteConfirm: "确定删除选中的 {n} 条告警？",
+  alertDeleted: "已删除 {n} 条告警",
+  alertLinkedRequest: "查看关联请求",
+
   // Charity / donations
   charityTitle: "公益资源",
   charityGlobalLabel: "全局公益开关",
@@ -167,6 +177,10 @@ const T = {
   batchConfirm: "确定要对 {n} 个用户执行 {action} {amount} 吗？",
   batchDone: "操作完成，已更新 {n} 个用户",
   batchNoSelection: "请先选择用户",
+
+  // Admin log model filter + donation source column
+  adminLogsModel: "模型名",
+  thDonationSource: "捐赠来源",
 };
 
 /* ---------------- helpers ---------------- */
@@ -718,13 +732,22 @@ async function renderAdminDashboard() {
           <datalist id="alf-user-list"></datalist>
         </label>
         <label style="flex:0 1 12rem;min-width:10rem;margin-bottom:0">${T.thService}<select id="alf-service"><option value="">${T.adminLogsAllServices}</option></select></label>
+        <label style="flex:0 1 12rem;min-width:10rem;margin-bottom:0">${T.adminLogsModel}<input id="alf-model" placeholder="[公益][general]x" style="margin-bottom:0"></label>
         <label style="flex:0 1 8rem;min-width:7rem;margin-bottom:0">${T.thStatus}<select id="alf-status"><option value="">${T.adminLogsAllStatus}</option><option value="success">${T.adminLogsSuccess}</option><option value="error">${T.adminLogsError}</option></select></label>
         <label style="flex:0 1 13rem;min-width:11rem;margin-bottom:0">${T.adminLogsSince}<input id="alf-since" type="datetime-local"></label>
         <label style="flex:0 1 13rem;min-width:11rem;margin-bottom:0">${T.adminLogsUntil}<input id="alf-until" type="datetime-local"></label>
         <button id="alf-query" style="flex:0 0 auto;width:auto;margin-bottom:0">${T.adminLogsQuery}</button>
       </div>
-      <div class="table-wrap"><table><thead><tr><th>${T.thTime}</th><th>${T.thUser}</th><th>${T.thModel}</th><th>${T.thService}</th><th>${T.thDuration}</th><th>${T.thStatus}</th><th>${T.thHTTPStatus}</th><th>${T.thErrorCode}</th><th>${T.thErrorDetail}</th></tr></thead><tbody id="alf-rows"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>${T.thTime}</th><th>${T.thUser}</th><th>${T.thModel}</th><th>${T.thService}</th><th>${T.thDuration}</th><th>${T.thStatus}</th><th>${T.thHTTPStatus}</th><th>${T.thErrorCode}</th><th>${T.thErrorDetail}</th><th>${T.thDonationSource}</th></tr></thead><tbody id="alf-rows"></tbody></table></div>
       <div class="row-actions" id="alf-pager" style="margin-top:.5rem"></div>
+    </section>
+    <section class="card" id="alerts-card">
+      <h3>${T.alertTitle}</h3>
+      <div class="table-wrap"><table><thead><tr><th><input type="checkbox" id="alert-select-all" title="全选"></th><th>${T.thTime}</th><th>${T.alertType}</th><th>${T.alertMessage}</th><th>${T.thActions}</th></tr></thead><tbody id="alert-rows"></tbody></table></div>
+      <div class="row-actions" style="margin:.5rem 0">
+        <button id="alert-delete-btn" class="contrast outline">${T.alertDeleteSelected}</button>
+      </div>
+      <div class="row-actions" id="alert-pager" style="margin-top:.5rem"></div>
     </section>
     <section class="card" id="donations-card">
       <h3>${T.charityTitle}</h3>
@@ -816,6 +839,23 @@ async function renderAdminDashboard() {
     .join("");
   $("#donation-form").onsubmit = onDonationSubmit;
   await loadAdminDonations();
+
+  // Alert centre init.
+  await loadAdminAlerts();
+  $("#alert-delete-btn").onclick = async () => {
+    const chks = document.querySelectorAll(".alert-chk:checked");
+    if (chks.length === 0) return;
+    if (!confirm(T.alertDeleteConfirm.replace("{n}", String(chks.length)))) return;
+    const ids = Array.from(chks).map((c) => parseInt(c.dataset.id, 10));
+    try {
+      const resp = await api("/api/admin/alerts", { method: "DELETE", body: { ids } });
+      toast(T.alertDeleted.replace("{n}", String(resp.deleted || 0)));
+      alertPager.page = 1;
+      await loadAdminAlerts();
+    } catch (err) {
+      toast(T.error.replace("{msg}", err.message), 3000);
+    }
+  };
 }
 
 function userStatusBadges(u) {
@@ -834,6 +874,7 @@ function userStatusBadges(u) {
 
 const userPager = newPager(userRow);
 const adminLogPager = newPager(adminLogRow);
+const alertPager = newPager(alertRow);
 // Users fetched for the admin-log filter (username → id resolution).
 let adminLogUsers = [];
 
@@ -1029,6 +1070,7 @@ function adminLogRow(l) {
   const dur = l.ended_at && l.started_at ? ((l.ended_at - l.started_at) * 1000).toFixed(0) + "ms" : "—";
   const statusClass = l.status === "success" ? "ok" : "err";
   const statusText = l.status === "success" ? T.adminLogsSuccess : T.adminLogsError;
+  const donationSrc = l.source_display || (l.donation_id ? "—" : "");
   return `
     <tr>
       <td class="muted">${fmtT(l.started_at)}</td>
@@ -1040,6 +1082,7 @@ function adminLogRow(l) {
       <td class="mono muted">${l.http_status ? esc(String(l.http_status)) : "—"}</td>
       <td class="mono muted">${esc(l.error_code)}</td>
       <td class="muted wrap" style="max-width:24rem">${esc(l.error_detail || "")}</td>
+      <td class="muted">${esc(donationSrc)}</td>
     </tr>`;
 }
 
@@ -1047,13 +1090,15 @@ async function loadAdminLogs() {
   const params = new URLSearchParams();
   const resolved = resolveLogUserFilter($("#alf-user").value);
   if (resolved.error) {
-    $("#alf-rows").innerHTML = `<tr><td colspan="9" class="muted">${esc(resolved.error)}</td></tr>`;
+    $("#alf-rows").innerHTML = `<tr><td colspan="10" class="muted">${esc(resolved.error)}</td></tr>`;
     $("#alf-pager").innerHTML = "";
     return;
   }
   if (resolved.id !== null) params.set("user_id", String(resolved.id));
   const svc = $("#alf-service").value;
   if (svc) params.set("service", svc);
+  const model = $("#alf-model").value.trim();
+  if (model) params.set("model", model);
   const st = $("#alf-status").value;
   if (st) params.set("status", st);
   const since = $("#alf-since").value;
@@ -1069,7 +1114,7 @@ async function loadAdminLogs() {
     const data = await api(`/api/admin/logs?${params.toString()}`);
     renderAdminLogs(data);
   } catch (err) {
-    $("#alf-rows").innerHTML = `<tr><td colspan="9" class="muted">${T.error.replace("{msg}", err.message)}</td></tr>`;
+    $("#alf-rows").innerHTML = `<tr><td colspan="10" class="muted">${T.error.replace("{msg}", err.message)}</td></tr>`;
     $("#alf-pager").innerHTML = "";
   }
 }
@@ -1084,7 +1129,7 @@ function renderAdminLogs(data) {
 
   $("#alf-rows").innerHTML = logs.length
     ? logs.map(adminLogRow).join("")
-    : `<tr><td colspan="9" class="muted">${T.empty}</td></tr>`;
+    : `<tr><td colspan="10" class="muted">${T.empty}</td></tr>`;
 
   $("#alf-pager").innerHTML = `
     <select class="pg-size">
@@ -1103,6 +1148,100 @@ function renderAdminLogs(data) {
   };
   c.querySelector(".pg-prev").onclick = () => { adminLogPager.page--; loadAdminLogs(); };
   c.querySelector(".pg-next").onclick = () => { adminLogPager.page++; loadAdminLogs(); };
+}
+
+/* ---------------- admin site: alert centre ---------------- */
+const alertTypeLabels = {
+  blocking_failed_200: T.alertTypeBlockingFailed200,
+  donation_exhausted_race: "公益资源竞争耗尽",
+};
+
+function alertRow(a) {
+  const typeLabel = alertTypeLabels[a.type] || esc(a.type);
+  let actionsHtml = "";
+  if (a.request_log_id) {
+    actionsHtml = `<button class="secondary alert-goto" data-log-id="${a.request_log_id}" data-user-id="${a.user_id || ""}" style="width:auto;margin:0">${T.alertLinkedRequest}</button>`;
+  }
+  return `
+    <tr data-id="${a.id}">
+      <td><input type="checkbox" class="alert-chk" data-id="${a.id}"></td>
+      <td class="muted">${fmtT(a.created_at)}</td>
+      <td><span class="badge warn">${typeLabel}</span></td>
+      <td class="wrap" style="max-width:24rem">${esc(a.message)}</td>
+      <td class="row-actions">${actionsHtml}</td>
+    </tr>`;
+}
+
+async function loadAdminAlerts() {
+  const size = alertPager.size === Infinity ? 500 : alertPager.size;
+  const params = new URLSearchParams({
+    limit: String(size),
+    offset: String((alertPager.page - 1) * size),
+  });
+  try {
+    const data = await api(`/api/admin/alerts?${params.toString()}`);
+    renderAdminAlerts(data);
+  } catch (err) {
+    $("#alert-rows").innerHTML = `<tr><td colspan="5" class="muted">${T.error.replace("{msg}", err.message)}</td></tr>`;
+    $("#alert-pager").innerHTML = "";
+  }
+}
+
+function renderAdminAlerts(data) {
+  const { alerts, total } = data;
+  if (!alerts) return;
+
+  const size = alertPager.size;
+  const pages = size === Infinity ? 1 : Math.max(1, Math.ceil(total / size));
+  alertPager.page = Math.min(Math.max(1, alertPager.page), pages);
+
+  $("#alert-rows").innerHTML = alerts.length
+    ? alerts.map(alertRow).join("")
+    : `<tr><td colspan="5" class="muted">${T.empty}</td></tr>`;
+
+  $("#alert-pager").innerHTML = `
+    <select class="pg-size">
+      ${[5, 10, 20, 50].map((n) => `<option value="${n}" ${size === n ? "selected" : ""}>${n} 条/页</option>`).join("")}
+      <option value="inf" ${size === Infinity ? "selected" : ""}>全部</option>
+    </select>
+    <button class="pg-prev secondary" ${alertPager.page <= 1 ? "disabled" : ""}>‹</button>
+    <span class="muted">${alertPager.page} / ${pages} 页 · 共 ${total} 条</span>
+    <button class="pg-next secondary" ${alertPager.page >= pages ? "disabled" : ""}>›</button>`;
+
+  const c = $("#alert-pager");
+  c.querySelector(".pg-size").onchange = (e) => {
+    alertPager.size = e.target.value === "inf" ? Infinity : parseInt(e.target.value, 10);
+    alertPager.page = 1;
+    loadAdminAlerts();
+  };
+  c.querySelector(".pg-prev").onclick = () => { alertPager.page--; loadAdminAlerts(); };
+  c.querySelector(".pg-next").onclick = () => { alertPager.page++; loadAdminAlerts(); };
+
+  // Select-all checkbox.
+  const selectAll = $("#alert-select-all");
+  if (selectAll) {
+    selectAll.onclick = () => {
+      const chks = document.querySelectorAll(".alert-chk");
+      chks.forEach((c2) => (c2.checked = selectAll.checked));
+    };
+  }
+
+  // Link-to-request buttons.
+  document.querySelectorAll(".alert-goto").forEach((btn) => {
+    btn.onclick = () => {
+      // Switch to the log tab and pre-fill the model/service/user filters.
+      if (btn.dataset.logId) {
+        $("#alf-user").value = "";
+        $("#alf-service").value = "";
+        $("#alf-model").value = "";
+        // We scroll to the log section and trigger a query.
+      }
+      // Fallback: just trigger a fresh query on the log section.
+      $("#admin-logs-filter").scrollIntoView({ behavior: "smooth" });
+      adminLogPager.page = 1;
+      loadAdminLogs();
+    };
+  });
 }
 
 /* ---------------- admin site: donations (公益资源) ---------------- */

@@ -80,6 +80,10 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/settings", g.handleAdminGetSettings)
 	mux.HandleFunc("PUT /api/admin/settings", g.handleAdminPutSettings)
 
+	// Alert centre (admin)
+	mux.HandleFunc("GET /api/admin/alerts", g.handleListAlerts)
+	mux.HandleFunc("DELETE /api/admin/alerts", g.handleDeleteAlerts)
+
 	// Charity / donation admin endpoints
 	mux.HandleFunc("POST /api/admin/donations", g.handleCreateDonation)
 	mux.HandleFunc("GET /api/admin/donations", g.handleListDonations)
@@ -89,6 +93,13 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	// User charity toggle
 	mux.HandleFunc("GET /api/me/charity", g.handleGetCharity)
 	mux.HandleFunc("PUT /api/me/charity", g.handlePutCharity)
+
+	// User check-in (credits system)
+	mux.HandleFunc("POST /api/me/checkin", g.handleCheckin)
+
+	// Admin batch credits & donation-credit operations
+	mux.HandleFunc("POST /api/admin/users/credits", g.handleAdminBatchCredits)
+	mux.HandleFunc("POST /api/admin/users/donation_credit", g.handleAdminBatchDonationCredit)
 
 	// User endpoints (session-authenticated)
 	mux.HandleFunc("GET /api/logs", g.handleListLogs)

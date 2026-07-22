@@ -90,19 +90,30 @@ func main() {
 	// Background cleanup: purge old request logs (>30d) and expired sessions.
 	// Run once at startup then every 24h — because during development the
 	// process may never run for 30 days straight.
+	//
+	// Donation-bound logs use a per-donation gate (latest request >30d);
+	// regular logs (no donation_id) use the simple age cutoff.  Alerts
+	// bound to cleaned logs are cascaded.
 	go func() {
 		runCleanup := func() {
-			n, err := store.PurgeOldRequestLogs()
-			if err != nil {
-				log.Printf("[CLEANUP] request logs: %v", err)
+			now := time.Now().Unix()
+			n1, err1 := store.PurgeExpiredDonationLogs(now)
+			if err1 != nil {
+				log.Printf("[CLEANUP] donation-bound logs: %v", err1)
 			}
-			m, err := store.PurgeExpiredSessions()
-			if err != nil {
-				log.Printf("[CLEANUP] sessions: %v", err)
+			n2, err2 := store.PurgeAlertsForExpiredLogs(now)
+			if err2 != nil {
+				log.Printf("[CLEANUP] stale alerts: %v", err2)
 			}
-			if err == nil {
-				log.Printf("[CLEANUP] purged %d request logs (>30d), %d expired sessions", n, m)
+			n3, err3 := store.PurgeOldRequestLogs()
+			if err3 != nil {
+				log.Printf("[CLEANUP] request logs: %v", err3)
 			}
+			n4, err4 := store.PurgeExpiredSessions()
+			if err4 != nil {
+				log.Printf("[CLEANUP] sessions: %v", err4)
+			}
+			log.Printf("[CLEANUP] purged %d donation-bound logs, %d stale alerts, %d regular logs, %d sessions", n1, n2, n3, n4)
 		}
 		runCleanup()
 		ticker := time.NewTicker(24 * time.Hour)

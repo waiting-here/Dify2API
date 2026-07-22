@@ -105,6 +105,7 @@ type AdminRequestLog struct {
 type LogFilter struct {
 	UserID  *int64
 	Service string
+	Model   string
 	Status  string
 	Since   int64
 	Until   int64
@@ -123,6 +124,10 @@ func (s *Store) ListAllRequestLogs(f LogFilter, limit, offset int) ([]*AdminRequ
 	if f.Service != "" {
 		conds = append(conds, "l.service = ?")
 		args = append(args, f.Service)
+	}
+	if f.Model != "" {
+		conds = append(conds, "l.model = ?")
+		args = append(args, f.Model)
 	}
 	if f.Status != "" {
 		conds = append(conds, "l.status = ?")
@@ -187,10 +192,72 @@ func (s *Store) ListAllRequestLogs(f LogFilter, limit, offset int) ([]*AdminRequ
 	return out, total, rows.Err()
 }
 
-// PurgeOldRequestLogs deletes logs older than the retention window.
+// PurgeOldRequestLogs deletes logs older than the retention window that are
+// NOT bound to a donation (donation_id IS NULL). Donation-bound logs are
+// cleaned by PurgeExpiredDonationLogs which uses a per-donation gate.
 func (s *Store) PurgeOldRequestLogs() (int64, error) {
 	cutoff := time.Now().Add(-RequestLogRetention).Unix()
-	res, err := s.db.Exec(`DELETE FROM request_logs WHERE started_at < ?`, cutoff)
+	res, err := s.db.Exec(`DELETE FROM request_logs WHERE started_at < ? AND donation_id IS NULL`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// PurgeExpiredDonationLogs deletes ALL request_logs bound to a donation when
+// that donation's most recent request is older than the retention window.
+// Only non-expired donations are considered (expired ones have their own
+// cleanup path). Returns the total number of deleted rows.
+func (s *Store) PurgeExpiredDonationLogs(now int64) (int64, error) {
+	cutoff := now - int64(RequestLogRetention.Seconds())
+
+	// Step 1: find donation ids whose latest request_log is old enough.
+	rows, err := s.db.Query(
+		`SELECT d.id FROM donations d
+		 WHERE (SELECT MAX(rl.started_at) FROM request_logs rl
+		        WHERE rl.donation_id = d.id) <= ?`, cutoff,
+	)
+	if err != nil {
+		return 0, err
+	}
+	var ids []interface{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	// Step 2: delete logs and cascade-delete alerts bound to those logs.
+	// Build a parameterized IN clause for the donation ids.
+	placeholders := make([]string, len(ids))
+	for i := range placeholders {
+		placeholders[i] = "?"
+	}
+	inClause := strings.Join(placeholders, ",")
+
+	// Cascade: delete alerts whose request_log_id points to a log we're about to delete.
+	_, err = s.db.Exec(
+		`DELETE FROM admin_alerts WHERE request_log_id IN (
+			SELECT id FROM request_logs WHERE donation_id IN (`+inClause+`)
+		)`, ids...,
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	// Delete the logs.
+	res, err := s.db.Exec(
+		`DELETE FROM request_logs WHERE donation_id IN (`+inClause+`) AND started_at <= ?`,
+		append(ids, cutoff)...,
+	)
 	if err != nil {
 		return 0, err
 	}

@@ -1,0 +1,294 @@
+package handler
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"dify2api/auth"
+	"dify2api/db"
+)
+
+func TestAlertList_NonAdmin(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	u, _ := store.CreateUser("42", "tester", "")
+	token, _, _ := store.CreateSession(u.ID)
+	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: token}
+
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/alerts", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("non-admin: status = %d, want 403", rec.Code)
+	}
+}
+
+func TestAlertList_Unauthenticated(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "s3cret")
+
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/alerts", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("no session: status = %d, want 403", rec.Code)
+	}
+}
+
+func TestAlertList_Basic(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+
+	// Add some alerts.
+	for i := 0; i < 3; i++ {
+		if err := store.AddAdminAlert(&db.AdminAlert{
+			Type:    db.AlertBlockingFailed200,
+			Message: "test alert",
+		}); err != nil {
+			t.Fatalf("AddAdminAlert: %v", err)
+		}
+	}
+
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/alerts?limit=10", nil)
+	req.AddCookie(adminCookie)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Alerts []db.AdminAlert `json:"alerts"`
+		Total  int             `json:"total"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Total != 3 || len(resp.Alerts) != 3 {
+		t.Errorf("total=%d len=%d, want 3/3", resp.Total, len(resp.Alerts))
+	}
+}
+
+func TestAlertList_Pagination(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+
+	for i := 0; i < 5; i++ {
+		store.AddAdminAlert(&db.AdminAlert{
+			Type:    db.AlertBlockingFailed200,
+			Message: "test",
+		})
+	}
+
+	// Page 1: 3 items.
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/alerts?limit=3&offset=0", nil)
+	req.AddCookie(adminCookie)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	var resp struct {
+		Alerts []db.AdminAlert `json:"alerts"`
+		Total  int             `json:"total"`
+	}
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.Total != 5 || len(resp.Alerts) != 3 {
+		t.Errorf("page1: total=%d len=%d, want 5/3", resp.Total, len(resp.Alerts))
+	}
+
+	// Page 2: 2 items.
+	req = httptest.NewRequest(http.MethodGet, "/api/admin/alerts?limit=3&offset=3", nil)
+	req.AddCookie(adminCookie)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.Total != 5 || len(resp.Alerts) != 2 {
+		t.Errorf("page2: total=%d len=%d, want 5/2", resp.Total, len(resp.Alerts))
+	}
+}
+
+func TestAlertDelete_EmptySlice(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	req := httptest.NewRequest(http.MethodDelete, "/api/admin/alerts",
+		strings.NewReader(`{"ids":[]}`))
+	req.AddCookie(adminCookie)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("empty ids: status = %d, want 200", rec.Code)
+	}
+}
+
+func TestAlertDelete_Batch(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+
+	// Add 3 alerts.
+	for i := 0; i < 3; i++ {
+		a := &db.AdminAlert{
+			Type:    db.AlertBlockingFailed200,
+			Message: "to delete",
+		}
+		if err := store.AddAdminAlert(a); err != nil {
+			t.Fatalf("AddAdminAlert: %v", err)
+		}
+	}
+
+	// Get alert ids.
+	list, total, _ := store.ListAdminAlerts(10, 0)
+	if total != 3 {
+		t.Fatalf("expected 3 alerts, got %d", total)
+	}
+	ids := make([]int64, len(list))
+	for i, a := range list {
+		ids[i] = a.ID
+	}
+
+	body, _ := json.Marshal(map[string]interface{}{"ids": ids})
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	req := httptest.NewRequest(http.MethodDelete, "/api/admin/alerts", strings.NewReader(string(body)))
+	req.AddCookie(adminCookie)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		OK      bool  `json:"ok"`
+		Deleted int64 `json:"deleted"`
+	}
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.Deleted != 3 {
+		t.Errorf("deleted = %d, want 3", resp.Deleted)
+	}
+
+	// Verify alerts are gone.
+	list2, total2, _ := store.ListAdminAlerts(10, 0)
+	if total2 != 0 || len(list2) != 0 {
+		t.Errorf("remaining: total=%d len=%d, want 0", total2, len(list2))
+	}
+}
+
+func TestAlertDelete_NonAdmin(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	u, _ := store.CreateUser("42", "tester", "")
+	token, _, _ := store.CreateSession(u.ID)
+	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: token}
+
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	req := httptest.NewRequest(http.MethodDelete, "/api/admin/alerts",
+		strings.NewReader(`{"ids":[1]}`))
+	req.AddCookie(cookie)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("non-admin delete: status = %d, want 403", rec.Code)
+	}
+}
+
+func TestAlertList_HostSeparation_UserHost(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	wrapped := gw.Wrap(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/alerts", nil)
+	req.AddCookie(adminCookie)
+	req.Host = gw.Config.Admin.SiteHost
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("user-host alerts: status = %d, want 404", rec.Code)
+	}
+}
+
+func TestAlertList_HostSeparation_AdminHost(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+
+	// Seed one alert.
+	store.AddAdminAlert(&db.AdminAlert{
+		Type:    db.AlertBlockingFailed200,
+		Message: "host test",
+	})
+
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	wrapped := gw.Wrap(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/alerts?limit=1", nil)
+	req.AddCookie(adminCookie)
+	req.Host = gw.Config.Admin.AdminHost
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("admin-host alerts: status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAlertList_IncludeRequestLogID(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+
+	// Create a user and a log entry.
+	u, _ := store.CreateUser("42", "alertuser", "")
+	store.AddRequestLog(u.ID, "[general]x", "general", time.Now().Add(-10*time.Minute), time.Now().Add(-9*time.Minute), "success", "")
+	logs, _ := store.ListRequestLogs(u.ID, 10)
+	logID := logs[0].ID
+
+	// Add an alert with request_log_id.
+	store.AddAdminAlert(&db.AdminAlert{
+		Type:         db.AlertBlockingFailed200,
+		Message:      "linked alert",
+		RequestLogID: &logID,
+	})
+
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/alerts?limit=10", nil)
+	req.AddCookie(adminCookie)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	var resp struct {
+		Alerts []db.AdminAlert `json:"alerts"`
+		Total  int             `json:"total"`
+	}
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.Total != 1 {
+		t.Fatalf("total = %d, want 1", resp.Total)
+	}
+	if resp.Alerts[0].RequestLogID == nil || *resp.Alerts[0].RequestLogID != logID {
+		t.Errorf("request_log_id = %v, want %d", resp.Alerts[0].RequestLogID, logID)
+	}
+}
