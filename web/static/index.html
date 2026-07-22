@@ -10,9 +10,16 @@
   :root { --brand: #4a7ddb; }
   body > nav { border-bottom: 1px solid var(--pico-muted-border-color); padding: .5rem 1rem; display: flex; justify-content: space-between; align-items: center; }
   body > nav .logo { font-weight: 700; color: var(--brand); }
-  main.container { max-width: 960px; }
+  /* Wide-screen friendly: use most of the viewport on desktop instead of
+     a fixed 960px column (tables like the admin request log need room). */
+  main.container { max-width: 1440px; width: 96%; }
   .card { border: 1px solid var(--pico-muted-border-color); border-radius: .5rem; padding: 1rem 1.25rem; margin-bottom: 1.25rem; }
   .card h3 { margin-top: 0; }
+  /* Tables scroll horizontally inside their card instead of overflowing it. */
+  .card .table-wrap { overflow-x: auto; }
+  .card .table-wrap > table { margin-bottom: 0; }
+  table td, table th { white-space: nowrap; }
+  table td.wrap, table th.wrap { white-space: normal; }
   .badge { display: inline-block; padding: .1rem .5rem; border-radius: 1rem; font-size: .8rem; }
   .badge.ok { background: #e6f6e6; color: #1a7f1a; }
   .badge.warn { background: #fdf3d8; color: #8a6d00; }
@@ -21,7 +28,8 @@
   table td, table th { vertical-align: middle; }
   .mono { font-family: ui-monospace, monospace; font-size: .9em; }
   .row-actions { display: flex; gap: .4rem; flex-wrap: wrap; }
-  .row-actions button, .row-actions a[role=button] { padding: .15rem .6rem; font-size: .85rem; margin: 0; }
+  .row-actions button, .row-actions a[role=button] { padding: .15rem .6rem; font-size: .85rem; margin: 0; white-space: nowrap; width: auto; }
+  td .row-actions { flex-wrap: nowrap; }
   .muted { color: var(--pico-muted-color); }
   .note { padding: .6rem .9rem; border-radius: .4rem; margin: .5rem 0; }
   .note.ok { background: #e6f6e6; }

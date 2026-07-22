@@ -258,7 +258,7 @@ async function renderUserDashboard() {
     <section class="card" id="configs">
       <h3>${T.configsTitle}</h3>
       <div id="check-note"></div>
-      <table><thead><tr><th>${T.thModel}</th><th>${T.thNote}</th><th>${T.thEnabled}</th><th>${T.thActions}</th></tr></thead><tbody id="cfg-rows"></tbody></table>
+      <div class="table-wrap"><table><thead><tr><th>${T.thModel}</th><th>${T.thNote}</th><th>${T.thEnabled}</th><th>${T.thActions}</th></tr></thead><tbody id="cfg-rows"></tbody></table></div>
       <div class="row-actions" id="cfg-pager" style="margin:.5rem 0 1rem"></div>
       <form id="cfg-form">
         <div style="display:grid;grid-template-columns:auto 1fr;gap:.5rem;align-items:end">
@@ -273,7 +273,7 @@ async function renderUserDashboard() {
     </section>
     <section class="card" id="logs">
       <h3>${T.logsTitle}</h3>
-      <table><thead><tr><th>${T.thTime}</th><th>${T.thDuration}</th><th>${T.thModel}</th><th>${T.thStatus}</th><th>${T.thErrorCode}</th></tr></thead><tbody id="log-rows"></tbody></table>
+      <div class="table-wrap"><table><thead><tr><th>${T.thTime}</th><th>${T.thDuration}</th><th>${T.thModel}</th><th>${T.thStatus}</th><th>${T.thErrorCode}</th></tr></thead><tbody id="log-rows"></tbody></table></div>
       <div class="row-actions" id="log-pager" style="margin-top:.5rem"></div>
     </section>`;
 
@@ -338,7 +338,7 @@ function cfgRow(c) {
   return `
     <tr data-id="${c.id}">
       <td class="mono">${esc(c.model)}</td>
-      <td class="muted">${esc(c.note || "—")}</td>
+      <td class="muted wrap">${esc(c.note || "—")}</td>
       <td><input type="checkbox" class="cfg-toggle" ${c.enabled ? "checked" : ""} role="switch"></td>
       <td class="row-actions">
         <button class="secondary cfg-edit">${T.editConfig}</button>
@@ -484,7 +484,7 @@ async function renderAdminDashboard() {
     </section>
     <section class="card">
       <h3>${T.usersTitle}</h3>
-      <table><thead><tr><th>${T.thUser}</th><th>${T.thRPM}</th><th>${T.thCreated}</th><th>${T.thStatus}</th><th>${T.thActions}</th></tr></thead><tbody id="user-rows"></tbody></table>
+      <div class="table-wrap"><table><thead><tr><th>${T.thUser}</th><th>${T.thRPM}</th><th>${T.thCreated}</th><th>${T.thStatus}</th><th>${T.thActions}</th></tr></thead><tbody id="user-rows"></tbody></table></div>
       <div class="row-actions" id="user-pager" style="margin-top:.5rem"></div>
     </section>
     <section class="card">
@@ -500,7 +500,7 @@ async function renderAdminDashboard() {
         <label style="flex:0 1 13rem;min-width:11rem;margin-bottom:0">${T.adminLogsUntil}<input id="alf-until" type="datetime-local"></label>
         <button id="alf-query" style="flex:0 0 auto;width:auto;margin-bottom:0">${T.adminLogsQuery}</button>
       </div>
-      <table><thead><tr><th>${T.thTime}</th><th>${T.thUser}</th><th>${T.thModel}</th><th>${T.thService}</th><th>${T.thDuration}</th><th>${T.thStatus}</th><th>${T.thErrorCode}</th></tr></thead><tbody id="alf-rows"></tbody></table>
+      <div class="table-wrap"><table><thead><tr><th>${T.thTime}</th><th>${T.thUser}</th><th>${T.thModel}</th><th>${T.thService}</th><th>${T.thDuration}</th><th>${T.thStatus}</th><th>${T.thErrorCode}</th></tr></thead><tbody id="alf-rows"></tbody></table></div>
       <div class="row-actions" id="alf-pager" style="margin-top:.5rem"></div>
     </section>`;
 
@@ -586,7 +586,7 @@ function userRow(u) {
       <td>${esc(u.username)} <span class="muted mono">(${esc(u.discord_id)})</span></td>
       <td>${rpm} <button class="secondary u-rpm" style="padding:.1rem .5rem;font-size:.8rem">✎</button></td>
       <td class="muted">${fmtT(u.created_at)}</td>
-      <td>${userStatusBadges(u)}</td>
+      <td class="wrap">${userStatusBadges(u)}</td>
       <td class="row-actions">
         <button class="secondary u-ban">${T.ban}</button>
         <button class="secondary u-unban">${T.unban}</button>
