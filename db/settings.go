@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"strconv"
 	"time"
 )
 
@@ -19,6 +20,29 @@ const (
 	SettingCheckinMax        = "checkin_max"         // check-in credit upper bound (default 20)
 	SettingCreditsCap        = "credits_cap"         // check-in credits ceiling (default 50)
 )
+
+// Global defaults for the three-class RPM system (alpha.3 F4).
+const (
+	DefaultRPMLimitA         = 6  // class A: transfer complete (excluding failures)
+	DefaultRPMLimitB         = 12 // class B: request success (§1.2 口径)
+	DefaultRPMLimitC         = 18 // class C: request received (post-auth)
+	DefaultRPMViolationLimit = 5  // violations within 24h before auto-ban
+	DefaultRPMBanHours       = 24 // auto-ban duration in hours
+)
+
+// GetSettingInt returns the setting parsed as a positive integer, falling
+// back to the given default when unset, invalid, or < 1.
+func (s *Store) GetSettingInt(key string, fallback int) int {
+	v, err := s.GetSetting(key)
+	if err != nil || v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		return fallback
+	}
+	return n
+}
 
 // GetSetting returns a setting value ("" when unset).
 func (s *Store) GetSetting(key string) (string, error) {

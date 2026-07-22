@@ -55,9 +55,14 @@ const T = {
   empty: "（暂无）",
   usersTitle: "用户管理",
   thUser: "用户",
-  thRPM: "RPM 上限",
-  rpmLimit: "全局 RPM 上限（每分钟每用户）",
-  rpmPrompt: "该用户的 RPM 上限（当前：{cur}）。输入数字，或留空/default 恢复跟随全局：",
+  thRPM: "RPM 上限（A/B/C）",
+  rpmLimitA: "全局 RPM 上限 A（传输完成，次/分）",
+  rpmLimitB: "全局 RPM 上限 B（请求成功，次/分）",
+  rpmLimitC: "全局 RPM 上限 C（请求接收，次/分）",
+  rpmViolationLimit: "自动封禁阈值（24 小时内超限次数）",
+  rpmBanHours: "自动封禁时长（小时）",
+  rpmPrompt: "该用户的三类 RPM 覆盖值（当前：{cur}）。\n输入三个数字，用逗号分隔（例：6,12,18）；某项留空表示跟随全局（例：,12, 仅覆盖 B）；\n全部留空或输入 default 恢复全部跟随全局：",
+  rpmInvalid: "格式无效：需为三个以逗号分隔的正整数（可留空）",
   thCreated: "注册时间",
   ban: "封禁",
   unban: "解封",
@@ -478,7 +483,15 @@ async function renderAdminDashboard() {
       <form id="settings-form">
         <label>${T.guildID}<input name="guild_id"></label>
         <label>${T.roleID}<input name="role_id"></label>
-        <label>${T.rpmLimit}<input name="rpm_limit" type="number" min="1" required></label>
+        <div style="display:flex;flex-wrap:wrap;gap:.75rem">
+          <label style="flex:1 1 12rem">${T.rpmLimitA}<input name="rpm_limit_a" type="number" min="1" required></label>
+          <label style="flex:1 1 12rem">${T.rpmLimitB}<input name="rpm_limit_b" type="number" min="1" required></label>
+          <label style="flex:1 1 12rem">${T.rpmLimitC}<input name="rpm_limit_c" type="number" min="1" required></label>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:.75rem">
+          <label style="flex:1 1 12rem">${T.rpmViolationLimit}<input name="rpm_violation_limit" type="number" min="1" required></label>
+          <label style="flex:1 1 12rem">${T.rpmBanHours}<input name="rpm_ban_hours" type="number" min="1" required></label>
+        </div>
         <button type="submit">${T.save}</button>
       </form>
     </section>
@@ -508,10 +521,22 @@ async function renderAdminDashboard() {
   const sf = $("#settings-form");
   sf.guild_id.value = s.guild_id || "";
   sf.role_id.value = s.role_id || "";
-  sf.rpm_limit.value = s.rpm_limit;
+  sf.rpm_limit_a.value = s.rpm_limit_a;
+  sf.rpm_limit_b.value = s.rpm_limit_b;
+  sf.rpm_limit_c.value = s.rpm_limit_c;
+  sf.rpm_violation_limit.value = s.rpm_violation_limit;
+  sf.rpm_ban_hours.value = s.rpm_ban_hours;
   sf.onsubmit = async (e) => {
     e.preventDefault();
-    await api("/api/admin/settings", { method: "PUT", body: { guild_id: sf.guild_id.value.trim(), role_id: sf.role_id.value.trim(), rpm_limit: parseInt(sf.rpm_limit.value, 10) } });
+    await api("/api/admin/settings", { method: "PUT", body: {
+      guild_id: sf.guild_id.value.trim(),
+      role_id: sf.role_id.value.trim(),
+      rpm_limit_a: parseInt(sf.rpm_limit_a.value, 10),
+      rpm_limit_b: parseInt(sf.rpm_limit_b.value, 10),
+      rpm_limit_c: parseInt(sf.rpm_limit_c.value, 10),
+      rpm_violation_limit: parseInt(sf.rpm_violation_limit.value, 10),
+      rpm_ban_hours: parseInt(sf.rpm_ban_hours.value, 10),
+    } });
     toast(T.settingsSaved);
   };
 
@@ -580,7 +605,11 @@ function resolveLogUserFilter(text) {
 }
 
 function userRow(u) {
-  const rpm = u.rpm_limit ? esc(String(u.rpm_limit)) : `<span class="muted">default</span>`;
+  const fmtLim = (v) => (v == null ? "–" : String(v));
+  const hasOverride = u.rpm_limit_a != null || u.rpm_limit_b != null || u.rpm_limit_c != null;
+  const rpm = hasOverride
+    ? esc(`${fmtLim(u.rpm_limit_a)}/${fmtLim(u.rpm_limit_b)}/${fmtLim(u.rpm_limit_c)}`)
+    : `<span class="muted">default</span>`;
   return `
     <tr data-id="${u.id}">
       <td>${esc(u.username)} <span class="muted mono">(${esc(u.discord_id)})</span></td>
@@ -640,17 +669,24 @@ async function loadAdminUsers() {
   document.querySelectorAll(".u-rpm").forEach((b) => (b.onclick = async (e) => {
     const id = e.target.closest("tr").dataset.id;
     const u = userPager.data.find((x) => String(x.id) === id);
-    const cur = u?.rpm_limit ? String(u.rpm_limit) : "";
+    const curParts = [u?.rpm_limit_a, u?.rpm_limit_b, u?.rpm_limit_c].map((x) => (x == null ? "" : String(x)));
+    const cur = curParts.some((x) => x !== "") ? curParts.join(",") : "";
     const v = prompt(T.rpmPrompt.replace("{cur}", cur || "default"), cur);
     if (v === null) return;
     const raw = v.trim().toLowerCase();
-    if (raw === "" || raw === "default") {
-      await api(`/api/admin/users/${id}/rpm`, { method: "POST", body: { default: true } });
-    } else {
-      const n = parseInt(raw, 10);
-      if (isNaN(n) || n < 1) { toast(T.banInvalid); return; }
-      await api(`/api/admin/users/${id}/rpm`, { method: "POST", body: { limit: n } });
+    let body = { rpm_limit_a: null, rpm_limit_b: null, rpm_limit_c: null };
+    if (raw !== "" && raw !== "default") {
+      const parts = raw.split(",").map((x) => x.trim());
+      if (parts.length !== 3) { toast(T.rpmInvalid); return; }
+      const keys = ["rpm_limit_a", "rpm_limit_b", "rpm_limit_c"];
+      for (let i = 0; i < 3; i++) {
+        if (parts[i] === "") continue; // 留空 = 跟随全局
+        const n = parseInt(parts[i], 10);
+        if (isNaN(n) || n < 1) { toast(T.rpmInvalid); return; }
+        body[keys[i]] = n;
+      }
     }
+    await api(`/api/admin/users/${id}/rpm`, { method: "POST", body });
     await loadAdminUsers();
   }));
   document.querySelectorAll(".u-export").forEach((b) => (b.onclick = async (e) => {

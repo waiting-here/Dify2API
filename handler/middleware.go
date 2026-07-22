@@ -3,15 +3,39 @@ package handler
 import (
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Wrap applies gateway-wide middleware, outermost first:
 //  1. HTTPS enforcement (when -force-https is on: plain-HTTP requests get a
 //     301 redirect to https://…)
 //  2. Host-based separation between the user site and the admin site
+//  3. Per-IP rate limiting for /api/* web endpoints (F7)
 func (g *Gateway) Wrap(next http.Handler) http.Handler {
-	return g.forceHTTPS(g.hostSeparation(next))
+	return g.forceHTTPS(g.hostSeparation(g.webRateLimit(next)))
+}
+
+// webRateLimit applies the per-IP sliding-window limit to /api/* session
+// endpoints only (F7). Static assets and pages are exempt (a normal page
+// load fetches many resources), and the /v1/* OpenAI-compatible API is
+// governed by its own defences (caller-key auth + three-class RPM +
+// invalid-key throttle). Exceeding the cap yields temporary 429 responses
+// (with Retry-After) — no ban, no effect on /v1/*.
+func (g *Gateway) webRateLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			now := time.Now()
+			ip := clientIP(r)
+			if !g.webThrottle.allow(ip, now) {
+				w.Header().Set("Retry-After", strconv.Itoa(g.webThrottle.retryAfterSec(ip, now)))
+				g.writeError(w, http.StatusTooManyRequests, "rate_limited", "请求过于频繁，请稍后再试")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // forceHTTPS redirects HTTP requests to HTTPS when enabled. Behind a

@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,16 +33,23 @@ type Gateway struct {
 	chatSem chan struct{}
 	// loginThrottle guards the admin login against brute force (L2).
 	loginThrottle *loginThrottle
+	// webThrottle rate-limits /api/* session endpoints per source IP (F7).
+	webThrottle *ipThrottle
+	// authFailThrottle rate-limits invalid-caller-key /v1/* requests per
+	// source IP (invalid-key flood defence; valid keys are never counted).
+	authFailThrottle *ipThrottle
 }
 
 // NewGateway creates a new Gateway.
 func NewGateway(cfg *config.Config, store *db.Store) *Gateway {
 	return &Gateway{
-		Config:        cfg,
-		Store:         store,
-		limiter:       newRateLimiter(),
-		chatSem:       make(chan struct{}, cfg.MaxChatInFlight),
-		loginThrottle: newLoginThrottle(cfg),
+		Config:           cfg,
+		Store:            store,
+		limiter:          newRateLimiter(),
+		chatSem:          make(chan struct{}, cfg.MaxChatInFlight),
+		loginThrottle:    newLoginThrottle(cfg),
+		webThrottle:      newIPThrottle(cfg.WebRPMPerIP, cfg.WebThrottleSec),
+		authFailThrottle: newIPThrottle(cfg.AuthFailRPMPerIP, 60),
 	}
 }
 
@@ -67,6 +75,7 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/admin/users/{id}/unban", g.handleAdminUnbanUser)
 	mux.HandleFunc("DELETE /api/admin/users/{id}", g.handleAdminDeleteUser)
 	mux.HandleFunc("POST /api/admin/users/{id}/reset-key", g.handleAdminResetUserKey)
+	mux.HandleFunc("POST /api/admin/users/{id}/rpm", g.handleAdminSetUserRPM)
 	mux.HandleFunc("GET /api/admin/users/{id}/export", g.handleAdminExportUser)
 	mux.HandleFunc("GET /api/admin/settings", g.handleAdminGetSettings)
 	mux.HandleFunc("PUT /api/admin/settings", g.handleAdminPutSettings)
@@ -124,6 +133,13 @@ func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 	user := g.userFromCallerKey(r)
 	if user == nil {
+		ip := clientIP(r)
+		now := time.Now()
+		if !g.authFailThrottle.allow(ip, now) {
+			w.Header().Set("Retry-After", strconv.Itoa(g.authFailThrottle.retryAfterSec(ip, now)))
+			g.writeError(w, http.StatusTooManyRequests, "rate_limited", "认证失败过于频繁，请稍后再试")
+			return
+		}
 		g.writeError(w, http.StatusUnauthorized, "unauthorized", "invalid or missing API key")
 		return
 	}
@@ -214,36 +230,53 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// 1. Caller key -> user.
+	// 1. Caller key -> user. Invalid keys feed the per-IP auth-failure
+	// throttle (flood defence); valid keys are never counted there.
 	user := g.userFromCallerKey(r)
 	if user == nil {
+		ip := clientIP(r)
+		if !g.authFailThrottle.allow(ip, startedAt) {
+			w.Header().Set("Retry-After", strconv.Itoa(g.authFailThrottle.retryAfterSec(ip, startedAt)))
+			g.writeError(w, http.StatusTooManyRequests, "rate_limited", "认证失败过于频繁，请稍后再试")
+			return
+		}
 		g.writeError(w, http.StatusUnauthorized, "unauthorized", "invalid or missing API key")
 		return
 	}
 
 	service := translator.ServiceOfModel(req.Model)
 
-	// 2. RPM limiting (per-user override or global default). Violations are
-	// logged; 5 violations within 24h trigger an automatic 24h ban.
-	rpmLimit := g.effectiveRPM(user.ID)
-	if !g.limiter.allow(user.ID, startedAt, rpmLimit) {
+	// 2. Three-class RPM gate (F4). The check runs once here — after auth,
+	// before anything is sent to Dify — against all three windows:
+	//   A (transfer complete) and B (request success) are recorded at
+	//   request end; C (request received) is recorded now.
+	// Violations are logged; N violations within 24h trigger an automatic
+	// timed ban (threshold and duration are admin-tunable settings).
+	limits := g.effectiveRPMLimits(user.ID)
+	if ok, violated := g.limiter.check(user.ID, startedAt, limits); !ok {
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "rpm_exceeded")
+		violationLimit := g.Store.GetSettingInt(db.SettingRPMViolationLimit, db.DefaultRPMViolationLimit)
+		banHours := g.Store.GetSettingInt(db.SettingRPMBanHours, db.DefaultRPMBanHours)
 		violations, _ := g.Store.CountRecentErrors(user.ID, "rpm_exceeded", startedAt.Add(-24*time.Hour))
-		if violations >= 5 {
-			until := time.Now().Add(24 * time.Hour)
+		if violations >= violationLimit {
+			until := time.Now().Add(time.Duration(banHours) * time.Hour)
 			if err := g.Store.AutoBanUser(user.ID, until); err != nil {
 				log.Printf("[ERROR] auto-ban user %d: %v", user.ID, err)
 			}
 			g.Store.DeleteUserSessions(user.ID)
-			log.Printf("[AUTH] user %d auto-banned until %v after %d RPM violations", user.ID, until, violations)
+			log.Printf("[AUTH] user %d auto-banned until %v after %d RPM violations (class %s)", user.ID, until, violations, classLabel(violated))
 			g.writeError(w, http.StatusForbidden, "rpm_exceeded",
-				fmt.Sprintf("已超出每分钟请求上限（%d 次/分），且因 24 小时内累计 %d 次超限，账号已被自动封禁 24 小时", rpmLimit, violations))
+				fmt.Sprintf("已超出类别 %s 每分钟上限（%d 次/分），且因 24 小时内累计 %d 次超限，账号已被自动封禁 %d 小时",
+					classLabel(violated), limits[violated], violations, banHours))
 			return
 		}
 		g.writeError(w, http.StatusForbidden, "rpm_exceeded",
-			fmt.Sprintf("已超出每分钟请求上限（%d 次/分），请稍后再试（24 小时内第 %d 次超限，累计 5 次将自动封禁 24 小时）", rpmLimit, violations))
+			fmt.Sprintf("已超出类别 %s 每分钟上限（%d 次/分），请稍后再试（24 小时内第 %d 次超限，累计 %d 次将自动封禁 %d 小时）",
+				classLabel(violated), limits[violated], violations, violationLimit, banHours))
 		return
 	}
+	// Class C (request received) counts immediately after passing the gate.
+	g.limiter.record(rpmClassC, user.ID, startedAt)
 
 	// 3. Model full name -> the user's enabled App config.
 	appCfg, err := g.Store.GetEnabledAppConfigByModel(user.ID, req.Model)
@@ -361,6 +394,11 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 		}
 	}
 
+	// The stream has started (Dify returned HTTP 200): this is a "success"
+	// per the §1.2 definition — class B records here, even if the stream is
+	// truncated later.
+	g.limiter.record(rpmClassB, userID, time.Now())
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -422,6 +460,8 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 		}
 		fmt.Fprint(w, "data: [DONE]\n\n")
 		flusher.Flush()
+		// Class A (transfer complete) only counts fully-relayed streams.
+		g.limiter.record(rpmClassA, userID, time.Now())
 	}
 	g.logRequest(userID, modelName, service, startedAt, status, code)
 }
@@ -430,11 +470,19 @@ func (g *Gateway) handleBlocking(w http.ResponseWriter, client *dify.Client, wfR
 	wfReq.ResponseMode = "blocking"
 	text, err := client.BlockingWorkflow(wfReq)
 	if err != nil {
+		// Per the §1.2 definition, an upstream HTTP 200 counts as a
+		// "success" for class B even when the workflow status is "failed"
+		// (rare; surfaced to the admin alert centre in S3).
+		var de *dify.DifyError
+		if errors.As(err, &de) && de.Status == http.StatusOK {
+			g.limiter.record(rpmClassB, userID, time.Now())
+		}
 		log.Printf("[ERROR] dify blocking (user %d): %v", userID, err)
 		g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error")
 		g.writeDifyError(w, err)
 		return
 	}
+	g.limiter.record(rpmClassB, userID, time.Now())
 	g.logRequest(userID, modelName, service, startedAt, "success", "")
 
 	resp := map[string]interface{}{
@@ -456,6 +504,8 @@ func (g *Gateway) handleBlocking(w http.ResponseWriter, client *dify.Client, wfR
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+	// Class A (transfer complete): the response has been written.
+	g.limiter.record(rpmClassA, userID, time.Now())
 }
 
 // wfReq_User formats the Dify user id.
