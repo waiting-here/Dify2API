@@ -146,6 +146,27 @@ const T = {
   userCharityOff: "公益资源已关闭",
   userCharityBanner: "捐赠与公益系统尚未被管理员启用",
   insufficientCredits: "积分不足",
+  // Credits & check-in (alpha.3 F2)
+  creditsTitle: "公益积分",
+  creditsBalance: "当前余额：{n}",
+  creditsCheckin: "签到",
+  creditsCheckinDone: "签到成功！获得 {name} +{bonus}，当前余额 {total}",
+  creditsCheckedIn: "今日已签到",
+  creditsCheckinFailed: "签到失败",
+  creditsNameLabel: "积分名称",
+  thCredits: "积分",
+  thDonationCredit: "捐赠有效值",
+  batchCredits: "批量积分操作",
+  batchDonationCredit: "批量捐赠有效值",
+  batchAction: "操作",
+  batchAmount: "数值",
+  batchSubmit: "执行",
+  batchSet: "设定",
+  batchAdd: "增加",
+  batchSub: "减少",
+  batchConfirm: "确定要对 {n} 个用户执行 {action} {amount} 吗？",
+  batchDone: "操作完成，已更新 {n} 个用户",
+  batchNoSelection: "请先选择用户",
 };
 
 /* ---------------- helpers ---------------- */
@@ -304,6 +325,13 @@ async function renderUserDashboard() {
       </div>
     </section>
     <section class="card" id="charity-card"></section>
+    <section class="card" id="credits-card">
+      <h3>${T.creditsTitle}</h3>
+      <div id="credits-info"><p class="muted">${T.loading}</p></div>
+      <div class="row-actions" style="margin-top:.5rem">
+        <button id="checkin-btn" class="secondary">${T.creditsCheckin}</button>
+      </div>
+    </section>
     <section class="card" id="configs">
       <h3>${T.configsTitle}</h3>
       <div id="check-note"></div>
@@ -380,6 +408,66 @@ async function renderUserDashboard() {
 
   // Charity toggle and banner.
   renderCharityCard();
+  // Credits card and check-in.
+  renderCreditsCard();
+}
+
+async function renderCreditsCard() {
+  const card = $("#credits-card");
+  if (!card) return;
+  try {
+    // Fetch latest user data to get credits.
+    const me = await api("/api/me");
+    const creditsName = state.site.credits_name || T.creditsTitle;
+    // Logo: CREDITS_LOGO_PATH (image) takes precedence over
+    // CREDITS_LOGO_TEXT (emoji/text). If neither is configured the
+    // image falls back to text, or text is empty, and onerror hides it.
+    const logoText = state.site.credits_logo_text || "";
+    const logoHTML = logoText
+      ? `<span style="font-size:1.5rem;margin-right:.5rem">${esc(logoText)}</span>`
+      : "";
+    // Image as primary source (PATH priority): always render.  When
+    // PATH is not configured the endpoint returns 204 → onerror fires
+    // → the text span is shown (via a separate onerror callback).
+    const hasPath = true; // unknown — we try and let onerror deal
+    const logoImg = `<img src="/credits-logo" alt="" style="height:2rem;vertical-align:middle;margin-right:.5rem" onerror="var t=this.parentElement.querySelector('.cr-text');if(t)t.style.display='';this.style.display='none'">`;
+    $("#credits-info").innerHTML = `
+      ${logoImg}<span class="cr-text" style="${logoText ? 'display:none' : ''};font-size:1.5rem;margin-right:.5rem">${esc(logoText)}</span>
+      <strong>${esc(creditsName)}</strong>
+      <span class="badge ok" style="margin-left:.75rem">${T.creditsBalance.replace("{n}", String(me.credits || 0))}</span>`;
+
+    const btn = $("#checkin-btn");
+    if (!btn) return;
+    // Check if already checked in today: we only know after the first attempt.
+    // For UI hint, we could track via state, but the simplest approach:
+    // the server returns 400 "今日已签到" — we handle it in the click handler.
+    btn.onclick = async () => {
+      btn.disabled = true;
+      btn.textContent = T.loading;
+      try {
+        const resp = await api("/api/me/checkin", { method: "POST" });
+        toast(T.creditsCheckinDone
+          .replace("{name}", creditsName)
+          .replace("{bonus}", String(resp.bonus))
+          .replace("{total}", String(resp.credits)));
+        // Refresh the card to show new balance.
+        renderCreditsCard();
+      } catch (err) {
+        if (err.message && err.message.includes("今日已签到")) {
+          toast(T.creditsCheckedIn);
+          btn.textContent = T.creditsCheckedIn;
+          btn.disabled = true;
+        } else {
+          toast(T.creditsCheckinFailed + "：" + err.message, 3000);
+          btn.disabled = false;
+          btn.textContent = T.creditsCheckin;
+        }
+        return;
+      }
+    };
+  } catch {
+    $("#credits-info").innerHTML = `<p class="muted">${T.error.replace("{msg}", "无法加载积分信息")}</p>`;
+  }
 }
 
 async function renderCharityCard() {
@@ -590,6 +678,12 @@ async function renderAdminDashboard() {
           <label style="flex:1 1 12rem">${T.rpmViolationLimit}<input name="rpm_violation_limit" type="number" min="1" required></label>
           <label style="flex:1 1 12rem">${T.rpmBanHours}<input name="rpm_ban_hours" type="number" min="1" required></label>
         </div>
+        <h4 style="margin-top:1rem">${T.creditsTitle}（签到）</h4>
+        <div style="display:flex;flex-wrap:wrap;gap:.75rem">
+          <label style="flex:1 1 10rem">签到最低积分<input name="checkin_min" type="number" min="1" required></label>
+          <label style="flex:1 1 10rem">签到最高积分<input name="checkin_max" type="number" min="1" required></label>
+          <label style="flex:1 1 10rem">积分上限<input name="credits_cap" type="number" min="1" required></label>
+        </div>
         <label style="display:flex;align-items:center;gap:.5rem;margin-top:.5rem">
           <input name="charity_global_enabled" type="checkbox" role="switch">
           <span>${T.charityGlobalLabel}</span>
@@ -600,7 +694,20 @@ async function renderAdminDashboard() {
     </section>
     <section class="card">
       <h3>${T.usersTitle}</h3>
-      <div class="table-wrap"><table><thead><tr><th>${T.thUser}</th><th>${T.thRPM}</th><th>${T.thCreated}</th><th>${T.thStatus}</th><th>${T.thActions}</th></tr></thead><tbody id="user-rows"></tbody></table></div>
+      <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:.75rem" id="batch-ops">
+        <select id="batch-action" style="width:auto;margin-bottom:0">
+          <option value="">— ${T.batchAction} —</option>
+          <option value="credits-set">${T.batchSet} ${T.creditsTitle}</option>
+          <option value="credits-add">${T.batchAdd} ${T.creditsTitle}</option>
+          <option value="credits-sub">${T.batchSub} ${T.creditsTitle}</option>
+          <option value="dc-set">${T.batchSet} ${T.thDonationCredit}</option>
+          <option value="dc-add">${T.batchAdd} ${T.thDonationCredit}</option>
+          <option value="dc-sub">${T.batchSub} ${T.thDonationCredit}</option>
+        </select>
+        <input id="batch-amount" type="number" min="0" placeholder="${T.batchAmount}" style="width:6rem;margin-bottom:0">
+        <button id="batch-submit" class="secondary" style="width:auto;margin-bottom:0">${T.batchSubmit}</button>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th><input type="checkbox" id="select-all" title="全选"></th><th>${T.thUser}</th><th>${T.thCredits}</th><th>${T.thDonationCredit}</th><th>${T.thRPM}</th><th>${T.thCreated}</th><th>${T.thStatus}</th><th>${T.thActions}</th></tr></thead><tbody id="user-rows"></tbody></table></div>
       <div class="row-actions" id="user-pager" style="margin-top:.5rem"></div>
     </section>
     <section class="card">
@@ -657,6 +764,9 @@ async function renderAdminDashboard() {
   sf.rpm_violation_limit.value = s.rpm_violation_limit;
   sf.rpm_ban_hours.value = s.rpm_ban_hours;
   sf.charity_global_enabled.checked = s.charity_global_enabled;
+  sf.checkin_min.value = s.checkin_min;
+  sf.checkin_max.value = s.checkin_max;
+  sf.credits_cap.value = s.credits_cap;
   sf.onsubmit = async (e) => {
     e.preventDefault();
     await api("/api/admin/settings", { method: "PUT", body: {
@@ -667,6 +777,9 @@ async function renderAdminDashboard() {
       rpm_limit_c: parseInt(sf.rpm_limit_c.value, 10),
       rpm_violation_limit: parseInt(sf.rpm_violation_limit.value, 10),
       rpm_ban_hours: parseInt(sf.rpm_ban_hours.value, 10),
+      checkin_min: parseInt(sf.checkin_min.value, 10),
+      checkin_max: parseInt(sf.checkin_max.value, 10),
+      credits_cap: parseInt(sf.credits_cap.value, 10),
       charity_global_enabled: sf.charity_global_enabled.checked,
     } });
     toast(T.settingsSaved);
@@ -756,7 +869,10 @@ function userRow(u) {
     : `<span class="muted">default</span>`;
   return `
     <tr data-id="${u.id}">
+      <td><input type="checkbox" class="user-chk" data-id="${u.id}"></td>
       <td>${esc(u.username)} <span class="muted mono">(${esc(u.discord_id)})</span></td>
+      <td class="mono">${u.credits != null ? String(u.credits) : "0"}</td>
+      <td class="mono">${u.donation_credit != null ? String(u.donation_credit) : "0"}</td>
       <td>${rpm} <button class="secondary u-rpm" style="padding:.1rem .5rem;font-size:.8rem">✎</button></td>
       <td class="muted">${fmtT(u.created_at)}</td>
       <td class="wrap">${userStatusBadges(u)}</td>
@@ -773,7 +889,7 @@ function userRow(u) {
 async function loadAdminUsers() {
   const { users } = await api("/api/admin/users");
   userPager.data = users || [];
-  renderPaged(userPager, "#user-rows", "#user-pager", 5);
+  renderPaged(userPager, "#user-rows", "#user-pager", 8);
 
   document.querySelectorAll(".u-ban").forEach((b) => (b.onclick = async (e) => {
     const id = e.target.closest("tr").dataset.id;
@@ -855,6 +971,54 @@ async function loadAdminUsers() {
       toast(T.error.replace("{msg}", err.message), 4000);
     }
   }));
+
+  // Select-all checkbox.
+  const selectAll = $("#select-all");
+  if (selectAll) {
+    selectAll.onclick = () => {
+      const chks = document.querySelectorAll(".user-chk");
+      chks.forEach((c) => (c.checked = selectAll.checked));
+    };
+  }
+
+  // Batch operation submit.
+  const batchSubmit = $("#batch-submit");
+  if (batchSubmit) {
+    batchSubmit.onclick = async () => {
+      const action = $("#batch-action").value;
+      const amount = parseInt($("#batch-amount").value, 10);
+      if (!action) { toast(T.batchNoSelection); return; }
+      if (isNaN(amount) || amount < 0) { toast("请输入有效数值"); return; }
+      const chks = document.querySelectorAll(".user-chk:checked");
+      if (chks.length === 0) { toast(T.batchNoSelection); return; }
+      const actionLabels = {
+        "credits-set": T.batchSet + " " + T.creditsTitle,
+        "credits-add": T.batchAdd + " " + T.creditsTitle,
+        "credits-sub": T.batchSub + " " + T.creditsTitle,
+        "dc-set": T.batchSet + " " + T.thDonationCredit,
+        "dc-add": T.batchAdd + " " + T.thDonationCredit,
+        "dc-sub": T.batchSub + " " + T.thDonationCredit,
+      };
+      const label = actionLabels[action] || action;
+      if (!confirm(T.batchConfirm.replace("{n}", String(chks.length)).replace("{action}", label).replace("{amount}", String(amount)))) return;
+      const userIDs = Array.from(chks).map((c) => parseInt(c.dataset.id, 10));
+      let endpoint, bodyAction;
+      if (action.startsWith("credits-")) {
+        endpoint = "/api/admin/users/credits";
+        bodyAction = action.replace("credits-", "");
+      } else {
+        endpoint = "/api/admin/users/donation_credit";
+        bodyAction = action.replace("dc-", "");
+      }
+      try {
+        const resp = await api(endpoint, { method: "POST", body: { user_ids: userIDs, action: bodyAction, amount } });
+        toast(T.batchDone.replace("{n}", String(resp.updated || 0)));
+        await loadAdminUsers();
+      } catch (err) {
+        toast(T.error.replace("{msg}", err.message), 3000);
+      }
+    };
+  }
 }
 
 /* ---------------- admin site: request logs ---------------- */
