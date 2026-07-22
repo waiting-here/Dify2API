@@ -31,7 +31,7 @@ func TestLoadStartup_Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.ListenAddr != "localhost:10086" || cfg.DifyHTTPTimeoutMs != 600000 ||
+	if cfg.ListenAddr != "localhost:10086" || cfg.DifyHTTPTimeoutMs != 900000 ||
 		cfg.DBPath != "dify2api.db" || cfg.MasterKeyPath != "dify2api.key" {
 		t.Errorf("base defaults wrong: %+v", cfg)
 	}

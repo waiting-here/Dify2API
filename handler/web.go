@@ -27,6 +27,10 @@ func (g *Gateway) registerWebRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		g.serveFavicon(w)
 	})
+	// Credits logo: serve the user-supplied image/emoji for the credits card.
+	mux.HandleFunc("GET /credits-logo", func(w http.ResponseWriter, r *http.Request) {
+		g.serveCreditsLogo(w)
+	})
 	// versions after redeploys (browser and Cloudflare revalidate every load).
 	staticHandler := http.StripPrefix("/static/", http.FileServerFS(staticFS))
 	mux.Handle("GET /static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -56,6 +60,7 @@ func (g *Gateway) registerWebRoutes(mux *http.ServeMux) {
 			"site_base_url":          g.Config.Admin.SiteBaseURL,
 			"charity_global_enabled": charityGlobal,
 			"credits_name":           g.Config.CreditsName,
+			"credits_logo_text":      g.Config.CreditsLogoText,
 		})
 	})
 
@@ -77,6 +82,31 @@ func (g *Gateway) registerWebRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /terms", func(w http.ResponseWriter, r *http.Request) { servePage(w, "terms.html", 0) })
 	mux.HandleFunc("GET /403", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(403); servePage(w, "403.html", 0) })
 	mux.HandleFunc("GET /404", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(404); servePage(w, "404.html", 0) })
+}
+
+// serveCreditsLogo reads the configured credits logo file and serves it,
+// mirroring serveFavicon's semantics (204 when unconfigured).
+func (g *Gateway) serveCreditsLogo(w http.ResponseWriter) {
+	p := g.Config.CreditsLogoPath
+	if p == "" {
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		w.Header().Set("Cache-Control", "public, max-age=300")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	ext := filepath.Ext(p)
+	ct := mime.TypeByExtension(ext)
+	if ct == "" {
+		ct = "image/png"
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Cache-Control", "public, max-age=86400, s-maxage=86400")
+	w.Write(data)
 }
 
 // serveFavicon reads the configured favicon file and serves it with a

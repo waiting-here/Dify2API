@@ -77,7 +77,7 @@ FAVICON_PATH=                  # 浏览器标签页图标文件路径（可选,�
 LISTEN_ADDR=localhost:10086
 DIFY2API_DB_PATH=dify2api.db
 DIFY2API_MASTER_KEY_PATH=dify2api.key
-DIFY_HTTP_TIMEOUT_MS=600000
+DIFY_HTTP_TIMEOUT_MS=900000
 MAX_CHAT_IN_FLIGHT=64        # 全局并发聊天上限（超出 429）
 MAX_REQUEST_BODY_MB=10       # 请求体上限 MB（超出 413）
 SSE_BUFFER_MB=10             # 每流 SSE 初始缓冲 MB
@@ -96,7 +96,7 @@ LOGIN_MIN_LATENCY_MS=300     # 登录恒定时延（毫秒）
 ```
 
 - 双域名（`<域名>` 与 `admin.<域名>`）均需解析与证书，参考 `nginx/` 两份示例；
-- SSE 流式必须 `proxy_buffering off`；超时建议 ≥600s；
+- SSE 流式必须 `proxy_buffering off`；超时建议 ≥900s；
 - 未加 `-force-https` 时启动日志会警告 HTTP 风险（本机部署可忽略）。
 
 ### 4. 首次使用
@@ -256,6 +256,8 @@ SMTP_TLS=implicit
 | 401 | `unauthorized` | 调用方密钥缺失/无效，或网页会话失效 |
 | 403 | `forbidden` | 管理接口非管理员 |
 | 403 | `rpm_exceeded` | 超出三类 RPM 任一上限（文案含类别、阈值与封禁提示） |
+| 403 | `insufficient_credits` | 调用公益模型时积分不足（含可配置积分名） |
+| 403 | `charity_disabled` | 全局公益开关已被管理员关闭 |
 | 403 | `login_locked` | 管理员登录失败过多，锁定中 |
 | 403 | `login_failed` | OAuth 登录失败（注册条件/封禁等） |
 | 404 | `model_not_found` | 模型未配置或已停用 |
@@ -266,6 +268,7 @@ SMTP_TLS=implicit
 | 415 | `invalid_request` | Content-Type 不是 application/json |
 | 429 | `server_busy` | 全局并发已满（附 Retry-After） |
 | 429 | `rate_limited` | 源 IP 被限流（Web 接口超频或无效密钥过多，附 Retry-After） |
+| 503 | `service_unavailable` | 当前该公益模型无可用捐赠条目 |
 | 4xx | （透传上游 code） | Dify 返回 4xx 时原状态码与错误码透传（如 400 `invalid_param`），消息带 `[Dify]` 前缀 |
 | 502 | `upstream_error` 等 / `image_upload_failed` | Dify 5xx 或网络错误 / 图片预上传失败 |
 | 500 | `internal` | 网关内部错误 |

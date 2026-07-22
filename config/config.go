@@ -15,7 +15,7 @@ import (
 type Config struct {
 	// ListenAddr is the address the HTTP server listens on (default localhost:10086).
 	ListenAddr string
-	// DifyHTTPTimeoutMs is the per-request timeout for calls to Dify Apps (default 600000).
+	// DifyHTTPTimeoutMs is the per-request timeout for calls to Dify Apps (default 900000).
 	DifyHTTPTimeoutMs int
 	// DBPath is the SQLite database file path (default ./dify2api.db).
 	DBPath string
@@ -142,7 +142,7 @@ func LoadStartup(path string) (*Config, error) {
 
 	cfg := &Config{
 		ListenAddr:        getOr(envMap, "LISTEN_ADDR", "localhost:10086"),
-		DifyHTTPTimeoutMs: getIntOr(envMap, "DIFY_HTTP_TIMEOUT_MS", 600000),
+		DifyHTTPTimeoutMs: getIntOr(envMap, "DIFY_HTTP_TIMEOUT_MS", 900000),
 		DBPath:            getOr(envMap, "DIFY2API_DB_PATH", "dify2api.db"),
 		MasterKeyPath:     getOr(envMap, "DIFY2API_MASTER_KEY_PATH", "dify2api.key"),
 		FaviconPath:       getOr(envMap, "FAVICON_PATH", ""),
@@ -156,7 +156,7 @@ func LoadStartup(path string) (*Config, error) {
 
 		// alpha.3 — public-resource credits.
 		CreditsName:     getOr(envMap, "CREDITS_NAME", "公益 Dify2API 积分"),
-		CreditsLogoText: getOr(envMap, "CREDITS_LOGO_TEXT", ""),
+		CreditsLogoText: getOr(envMap, "CREDITS_LOGO_TEXT", "🌟"),
 		CreditsLogoPath: getOr(envMap, "CREDITS_LOGO_PATH", ""),
 		CheckinTZOffset: getCheckinTZOffset(envMap),
 
