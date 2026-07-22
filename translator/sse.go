@@ -24,6 +24,7 @@ type StreamConverter struct {
 	receivedText bool
 	done         bool
 	failed       bool
+	failMsg      string
 }
 
 // Failed reports whether the stream ended in a failure (Dify error event or
@@ -32,12 +33,16 @@ type StreamConverter struct {
 // an error frame and no [DONE], which official SDKs turn into an exception.
 func (c *StreamConverter) Failed() bool { return c.failed }
 
+// FailMessage returns the upstream error message when Failed() is true
+// ("" otherwise). Used for admin log diagnostics.
+func (c *StreamConverter) FailMessage() string { return c.failMsg }
+
 // NewStreamConverter creates a new StreamConverter.
 func NewStreamConverter(modelName string) *StreamConverter {
 	return &StreamConverter{
-		chunkID:   fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()/1000%1000000000000),
-		modelName: modelName,
-		created:   time.Now().Unix(),
+		chunkID:    fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()/1000%1000000000000),
+		modelName:  modelName,
+		created:    time.Now().Unix(),
 		firstChunk: true,
 	}
 }
@@ -74,6 +79,7 @@ func (c *StreamConverter) Convert(evt dify.StreamEvent) *SSEMessage {
 			if msg == "" {
 				msg = "workflow failed"
 			}
+			c.failMsg = msg
 			return &SSEMessage{Data: formatSSEError("[Dify] " + msg)}
 		}
 		chunk := buildStreamChunk(c.chunkID, c.modelName, c.created, "", "", false, "stop")
@@ -90,6 +96,7 @@ func (c *StreamConverter) Convert(evt dify.StreamEvent) *SSEMessage {
 		if msg == "" {
 			msg = "upstream error"
 		}
+		c.failMsg = msg
 		return &SSEMessage{Data: formatSSEError("[Dify] " + msg)}
 
 	case "node_started", "node_finished", "workflow_started", "ping":

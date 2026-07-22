@@ -103,6 +103,8 @@ const T = {
   adminLogsUserNotFound: "未找到匹配的用户：{name}",
   adminLogsSince: "开始时间",
   adminLogsUntil: "结束时间",
+  thHTTPStatus: "HTTP",
+  thErrorDetail: "错误详情",
 };
 
 /* ---------------- helpers ---------------- */
@@ -513,7 +515,7 @@ async function renderAdminDashboard() {
         <label style="flex:0 1 13rem;min-width:11rem;margin-bottom:0">${T.adminLogsUntil}<input id="alf-until" type="datetime-local"></label>
         <button id="alf-query" style="flex:0 0 auto;width:auto;margin-bottom:0">${T.adminLogsQuery}</button>
       </div>
-      <div class="table-wrap"><table><thead><tr><th>${T.thTime}</th><th>${T.thUser}</th><th>${T.thModel}</th><th>${T.thService}</th><th>${T.thDuration}</th><th>${T.thStatus}</th><th>${T.thErrorCode}</th></tr></thead><tbody id="alf-rows"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>${T.thTime}</th><th>${T.thUser}</th><th>${T.thModel}</th><th>${T.thService}</th><th>${T.thDuration}</th><th>${T.thStatus}</th><th>${T.thHTTPStatus}</th><th>${T.thErrorCode}</th><th>${T.thErrorDetail}</th></tr></thead><tbody id="alf-rows"></tbody></table></div>
       <div class="row-actions" id="alf-pager" style="margin-top:.5rem"></div>
     </section>`;
 
@@ -729,7 +731,9 @@ function adminLogRow(l) {
       <td>${esc(l.service)}</td>
       <td class="muted">${esc(dur)}</td>
       <td><span class="badge ${statusClass}">${statusText}</span></td>
+      <td class="mono muted">${l.http_status ? esc(String(l.http_status)) : "—"}</td>
       <td class="mono muted">${esc(l.error_code)}</td>
+      <td class="muted wrap" style="max-width:24rem">${esc(l.error_detail || "")}</td>
     </tr>`;
 }
 
@@ -737,7 +741,7 @@ async function loadAdminLogs() {
   const params = new URLSearchParams();
   const resolved = resolveLogUserFilter($("#alf-user").value);
   if (resolved.error) {
-    $("#alf-rows").innerHTML = `<tr><td colspan="7" class="muted">${esc(resolved.error)}</td></tr>`;
+    $("#alf-rows").innerHTML = `<tr><td colspan="9" class="muted">${esc(resolved.error)}</td></tr>`;
     $("#alf-pager").innerHTML = "";
     return;
   }
@@ -759,7 +763,7 @@ async function loadAdminLogs() {
     const data = await api(`/api/admin/logs?${params.toString()}`);
     renderAdminLogs(data);
   } catch (err) {
-    $("#alf-rows").innerHTML = `<tr><td colspan="7" class="muted">${T.error.replace("{msg}", err.message)}</td></tr>`;
+    $("#alf-rows").innerHTML = `<tr><td colspan="9" class="muted">${T.error.replace("{msg}", err.message)}</td></tr>`;
     $("#alf-pager").innerHTML = "";
   }
 }
@@ -774,7 +778,7 @@ function renderAdminLogs(data) {
 
   $("#alf-rows").innerHTML = logs.length
     ? logs.map(adminLogRow).join("")
-    : `<tr><td colspan="7" class="muted">${T.empty}</td></tr>`;
+    : `<tr><td colspan="9" class="muted">${T.empty}</td></tr>`;
 
   $("#alf-pager").innerHTML = `
     <select class="pg-size">

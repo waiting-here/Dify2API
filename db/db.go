@@ -78,7 +78,9 @@ CREATE TABLE IF NOT EXISTS request_logs (
 	ended_at    INTEGER NOT NULL DEFAULT 0,
 	status      TEXT NOT NULL DEFAULT '',
 	error_code  TEXT NOT NULL DEFAULT '',
-	donation_id INTEGER
+	donation_id INTEGER,
+	http_status INTEGER NOT NULL DEFAULT 0,
+	error_detail TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_request_logs_user ON request_logs(user_id, started_at);
 
@@ -170,6 +172,9 @@ func Open(path, keyPath string) (*Store, error) {
 		`ALTER TABLE users ADD COLUMN charity_enabled INTEGER NOT NULL DEFAULT 0`,
 		// alpha.3 S1 — request_logs donation tracking.
 		`ALTER TABLE request_logs ADD COLUMN donation_id INTEGER`,
+		// alpha.3 — admin log detail (HTTP status + error message).
+		`ALTER TABLE request_logs ADD COLUMN http_status INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE request_logs ADD COLUMN error_detail TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := sqldb.Exec(m); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			sqldb.Close()

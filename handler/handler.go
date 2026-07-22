@@ -254,7 +254,8 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	// timed ban (threshold and duration are admin-tunable settings).
 	limits := g.effectiveRPMLimits(user.ID)
 	if ok, violated := g.limiter.check(user.ID, startedAt, limits); !ok {
-		g.logRequest(user.ID, req.Model, service, startedAt, "error", "rpm_exceeded")
+		g.logRequest(user.ID, req.Model, service, startedAt, "error", "rpm_exceeded",
+			http.StatusForbidden, fmt.Sprintf("超出类别 %s 上限（%d 次/分）", classLabel(violated), limits[violated]))
 		violationLimit := g.Store.GetSettingInt(db.SettingRPMViolationLimit, db.DefaultRPMViolationLimit)
 		banHours := g.Store.GetSettingInt(db.SettingRPMBanHours, db.DefaultRPMBanHours)
 		violations, _ := g.Store.CountRecentErrors(user.ID, "rpm_exceeded", startedAt.Add(-24*time.Hour))
@@ -285,7 +286,8 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if appCfg == nil {
-		g.logRequest(user.ID, req.Model, service, startedAt, "error", "model_not_found")
+		g.logRequest(user.ID, req.Model, service, startedAt, "error", "model_not_found",
+			http.StatusNotFound, fmt.Sprintf("model %q not found", req.Model))
 		g.writeError(w, http.StatusNotFound, "model_not_found",
 			fmt.Sprintf("model %q not found in your configs (check the dashboard or /v1/models)", req.Model))
 		return
@@ -294,7 +296,8 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	// 4. Per-service contract validation & mapping.
 	inputs, images, err := translator.TranslateForService(service, req.Messages)
 	if err != nil {
-		g.logRequest(user.ID, req.Model, service, startedAt, "error", "invalid_message_sequence")
+		g.logRequest(user.ID, req.Model, service, startedAt, "error", "invalid_message_sequence",
+			http.StatusBadRequest, err.Error())
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -311,7 +314,8 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	apiKey, err := g.Store.Decrypt(appCfg.DifyAPIKeyEnc)
 	if err != nil {
 		log.Printf("[ERROR] decrypt app key (user %d, config %d): %v", user.ID, appCfg.ID, err)
-		g.logRequest(user.ID, req.Model, service, startedAt, "error", "internal")
+		g.logRequest(user.ID, req.Model, service, startedAt, "error", "internal",
+			http.StatusInternalServerError, "credential decryption error")
 		g.writeError(w, http.StatusInternalServerError, "internal", "credential error")
 		return
 	}
@@ -329,7 +333,8 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		files, err := g.buildImageFiles(client, wfReq_User(user.ID), images)
 		if err != nil {
 			log.Printf("[ERROR] image files (user %d): %v", user.ID, err)
-			g.logRequest(user.ID, req.Model, service, startedAt, "error", "image_upload_failed")
+			g.logRequest(user.ID, req.Model, service, startedAt, "error", "image_upload_failed",
+				difyErrorStatus(err), err.Error())
 			g.writeDifyError(w, err)
 			return
 		}
@@ -375,7 +380,7 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 		// (if any) is picked up from errCh below.
 	case err := <-errCh:
 		if err != nil {
-			g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error")
+			g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error())
 			g.writeDifyError(w, err)
 			return
 		}
@@ -386,7 +391,7 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 		select {
 		case err := <-errCh:
 			if err != nil {
-				g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error")
+				g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error())
 				g.writeDifyError(w, err)
 				return
 			}
@@ -405,7 +410,7 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 	w.Header().Set("X-Accel-Buffering", "no")
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		g.logRequest(userID, modelName, service, startedAt, "error", "stream_unsupported")
+		g.logRequest(userID, modelName, service, startedAt, "error", "stream_unsupported", http.StatusInternalServerError, "response writer does not support streaming")
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
 		return
 	}
@@ -428,7 +433,7 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 	// Drain errCh after the event channel closes: a transport-level failure
 	// (connection drop, SSE scan error) surfaces here without any Dify
 	// error event having been converted.
-	status, code := "success", ""
+	status, code, detail := "success", "", ""
 	var streamErr error
 	select {
 	case err := <-errCh:
@@ -443,8 +448,12 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 		// streaming behavior, do NOT send [DONE] after an error frame —
 		// SDK clients treat the error frame as terminal and raise.
 		status, code = "error", "upstream_error"
+		detail = conv.FailMessage()
 		if streamErr != nil {
 			log.Printf("[ERROR] dify stream (user %d): %v", userID, streamErr)
+			if detail == "" {
+				detail = streamErr.Error()
+			}
 		}
 	case streamErr != nil:
 		// Transport-level failure with no error event: emit the error
@@ -453,6 +462,7 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 		fmt.Fprint(w, translator.FormatSSEErrorFrame("[Dify] "+streamErr.Error()))
 		flusher.Flush()
 		status, code = "error", "upstream_error"
+		detail = streamErr.Error()
 	default:
 		for _, msg := range conv.Finalize() {
 			fmt.Fprint(w, msg.Data)
@@ -463,7 +473,10 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 		// Class A (transfer complete) only counts fully-relayed streams.
 		g.limiter.record(rpmClassA, userID, time.Now())
 	}
-	g.logRequest(userID, modelName, service, startedAt, status, code)
+	// Streaming responses always went out with HTTP 200 (headers were
+	// committed before the body); mid-stream failures surface via the
+	// error frame, not the status code.
+	g.logRequest(userID, modelName, service, startedAt, status, code, http.StatusOK, detail)
 }
 
 func (g *Gateway) handleBlocking(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time) {
@@ -478,12 +491,12 @@ func (g *Gateway) handleBlocking(w http.ResponseWriter, client *dify.Client, wfR
 			g.limiter.record(rpmClassB, userID, time.Now())
 		}
 		log.Printf("[ERROR] dify blocking (user %d): %v", userID, err)
-		g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error")
+		g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error())
 		g.writeDifyError(w, err)
 		return
 	}
 	g.limiter.record(rpmClassB, userID, time.Now())
-	g.logRequest(userID, modelName, service, startedAt, "success", "")
+	g.logRequest(userID, modelName, service, startedAt, "success", "", http.StatusOK, "")
 
 	resp := map[string]interface{}{
 		"id":      fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()/1000%1000000000000),
@@ -571,9 +584,14 @@ func parseDataURI(uri string) (mime string, data []byte, err error) {
 	return mime, data, nil
 }
 
-// logRequest records one completed call (metadata only).
-func (g *Gateway) logRequest(userID int64, model, service string, startedAt time.Time, status, errorCode string) {
-	if err := g.Store.AddRequestLog(userID, model, service, startedAt, time.Now(), status, errorCode); err != nil {
+// logRequest records one completed call (metadata only). httpStatus is the
+// status returned to the caller; detail is a short error message for admin
+// diagnostics (never request/response content — see db.RequestLog).
+func (g *Gateway) logRequest(userID int64, model, service string, startedAt time.Time, status, errorCode string, httpStatus int, detail string) {
+	if len(detail) > 500 {
+		detail = detail[:500] + "…"
+	}
+	if err := g.Store.AddRequestLogFull(userID, model, service, startedAt, time.Now(), status, errorCode, httpStatus, detail, 0); err != nil {
 		log.Printf("[WARN] write request log: %v", err)
 	}
 }
@@ -632,6 +650,16 @@ func (g *Gateway) serve404Page(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusNotFound)
 	w.Write([]byte(body))
+}
+
+// difyErrorStatus returns the HTTP status writeDifyError would send for
+// the given error (used to record the same value in request logs).
+func difyErrorStatus(err error) int {
+	var de *dify.DifyError
+	if errors.As(err, &de) && de.Status >= 400 && de.Status < 500 {
+		return de.Status
+	}
+	return http.StatusBadGateway
 }
 
 // writeDifyError forwards a Dify error to the client, preserving the
