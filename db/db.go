@@ -159,7 +159,6 @@ func Open(path, keyPath string) (*Store, error) {
 		`ALTER TABLE users ADD COLUMN banned_until INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE caller_keys ADD COLUMN key_hash TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE app_configs ADD COLUMN note TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE users ADD COLUMN rpm_limit INTEGER`,
 		`ALTER TABLE users ADD COLUMN ban_reason TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE users ADD COLUMN auto_banned INTEGER NOT NULL DEFAULT 0`,
 		// alpha.3 S1 — users new columns.
