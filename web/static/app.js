@@ -1105,8 +1105,8 @@ async function loadAdminLogs() {
   if (since) params.set("since", String(Math.floor(new Date(since).getTime() / 1000)));
   const until = $("#alf-until").value;
   if (until) params.set("until", String(Math.floor(new Date(until).getTime() / 1000)));
-  // Server-side pagination: "全部" maps to the server's max page size (500).
-  const size = adminLogPager.size === Infinity ? 500 : adminLogPager.size;
+  // Server-side pagination: "全部" uses a large value (no server cap).
+  const size = adminLogPager.size === Infinity ? 10000 : adminLogPager.size;
   params.set("limit", String(size));
   params.set("offset", String((adminLogPager.page - 1) * size));
 
@@ -1173,7 +1173,7 @@ function alertRow(a) {
 }
 
 async function loadAdminAlerts() {
-  const size = alertPager.size === Infinity ? 500 : alertPager.size;
+  const size = alertPager.size === Infinity ? 10000 : alertPager.size;
   const params = new URLSearchParams({
     limit: String(size),
     offset: String((alertPager.page - 1) * size),

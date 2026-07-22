@@ -24,15 +24,18 @@ func setupAuthGateway(t *testing.T, adminPassword string) (*Gateway, *db.Store) 
 	}
 	t.Cleanup(func() { store.Close() })
 	cfg := &config.Config{
-		ListenAddr:         "localhost:10086",
-		DifyHTTPTimeoutMs:  600000,
-		MaxChatInFlight:    64,
-		MaxRequestBodyMB:   4,
-		SSEBufferMB:        1,
-		LoginMaxFailures:   5,
-		LoginWindowMin:     10,
-		LoginLockMin:       60,
-		LoginMinLatencyMs:  0, // keep the shared fixture fast; throttle tests adjust their own
+		ListenAddr:          "localhost:10086",
+		DifyHTTPTimeoutMs:   600000,
+		MaxChatInFlight:     64,
+		MaxRequestBodyMB:    4,
+		SSEBufferMB:         1,
+		LoginMaxFailures:    5,
+		LoginWindowMin:      10,
+		LoginLockMin:        60,
+		LoginMinLatencyMs:   0, // keep the shared fixture fast; throttle tests adjust their own
+		RPMWindowSec:        60,
+		IPThrottleWindowSec: 60,
+		LogDetailMaxChars:   500,
 		Admin: config.AdminConfig{
 			Username:            "root",
 			Password:            adminPassword,

@@ -644,8 +644,9 @@ func (g *Gateway) charitySuccessAccounting(userID int64, donation *db.Donation, 
 		}
 	}
 
-	// 3. Deduct 1 credit from the calling user
-	if _, err := g.Store.AdjustUserCredits(userID, -1); err != nil {
+	// 3. Deduct charity cost from the calling user.
+	cost := g.Store.GetSettingInt(db.SettingCharityCost, db.DefaultCharityCost)
+	if _, err := g.Store.AdjustUserCredits(userID, -cost); err != nil {
 		log.Printf("[ERROR] deduct charity credit (user %d): %v", userID, err)
 	}
 }
@@ -659,8 +660,9 @@ func (g *Gateway) charityFailAccounting(userID int64, donation *db.Donation, err
 		return
 	}
 
-	// If consecutive >= 10, auto-inactivate
-	if consecutive >= 10 {
+	// If consecutive >= limit, auto-inactivate.
+	limit := g.Store.GetSettingInt(db.SettingDonationFailLimit, db.DefaultDonationFailLimit)
+	if consecutive >= limit {
 		if err2 := g.Store.SetDonationStatus(donation.ID, db.DonationInactive); err2 != nil {
 			log.Printf("[ERROR] auto-inactivate donation %d after %d failures: %v", donation.ID, consecutive, err2)
 		} else {
@@ -689,8 +691,8 @@ func (g *Gateway) maybeRecordBlockingFailedAlert(userID int64, modelName, servic
 
 // logRequestDonation is like logRequest but includes a donation_id for charity calls.
 func (g *Gateway) logRequestDonation(userID int64, model, service string, startedAt time.Time, status, errorCode string, httpStatus int, detail string, donationID int64) {
-	if len(detail) > 500 {
-		detail = detail[:500] + "…"
+	if len(detail) > g.Config.LogDetailMaxChars {
+		detail = detail[:g.Config.LogDetailMaxChars] + "…"
 	}
 	if err := g.Store.AddRequestLogFull(userID, model, service, startedAt, time.Now(), status, errorCode, httpStatus, detail, donationID); err != nil {
 		log.Printf("[WARN] write request log: %v", err)

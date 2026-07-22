@@ -42,7 +42,7 @@ func (m *mockSender) send(cfg config.SMTPConfig, subject, body string) error {
 func TestNew_NilWhenHostEmpty(t *testing.T) {
 	cfg := testSMTPConfig()
 	cfg.Host = ""
-	m := New(cfg)
+	m := New(cfg, 10)
 	if m != nil {
 		t.Error("expected nil when SMTP_HOST is empty")
 	}
@@ -50,7 +50,7 @@ func TestNew_NilWhenHostEmpty(t *testing.T) {
 
 func TestNew_ReturnsMailerWhenHostSet(t *testing.T) {
 	cfg := testSMTPConfig()
-	m := New(cfg)
+	m := New(cfg, 10)
 	if m == nil {
 		t.Fatal("expected non-nil when SMTP_HOST is set")
 	}
@@ -61,7 +61,7 @@ func TestNew_ReturnsMailerWhenHostSet(t *testing.T) {
 
 func TestStart_NoOp(t *testing.T) {
 	cfg := testSMTPConfig()
-	m := New(cfg)
+	m := New(cfg, 10)
 	if m == nil {
 		t.Fatal("expected non-nil mailer")
 	}

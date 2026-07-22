@@ -79,6 +79,15 @@ type Config struct {
 	// AuthFailRPMPerIP is the per-IP limit for /v1/* invalid-key requests;
 	// 0 disables.
 	AuthFailRPMPerIP int
+
+	// --- alpha.3: tunable windows ---
+	// RPMWindowSec is the three-class RPM sliding window in seconds (default 60).
+	RPMWindowSec int
+	// IPThrottleWindowSec is the per-IP sliding window in seconds (default 60).
+	IPThrottleWindowSec int
+	// LogDetailMaxChars is the maximum length of error_detail stored in
+	// request_logs (default 500).
+	LogDetailMaxChars int
 }
 
 // SMTPConfig holds the email-delivery settings for operational alerts (F5).
@@ -166,6 +175,11 @@ func LoadStartup(path string) (*Config, error) {
 		WebRPMPerIP:      getIntOrAllowZero(envMap, "WEB_RPM_PER_IP", 120),
 		WebThrottleSec:   getIntOr(envMap, "WEB_THROTTLE_SEC", 60),
 		AuthFailRPMPerIP: getIntOrAllowZero(envMap, "AUTH_FAIL_RPM_PER_IP", 30),
+
+		// alpha.3 — tunable windows.
+		RPMWindowSec:        getIntOr(envMap, "RPM_WINDOW_SEC", 60),
+		IPThrottleWindowSec: getIntOr(envMap, "IP_THROTTLE_WINDOW_SEC", 60),
+		LogDetailMaxChars:   getIntOr(envMap, "LOG_DETAIL_MAX_CHARS", 500),
 	}
 
 	a := &cfg.Admin

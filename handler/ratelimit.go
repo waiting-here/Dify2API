@@ -29,12 +29,13 @@ const (
 	rpmClassCount
 )
 
-// rateLimiter is an in-memory per-user sliding-window (60s) counter for the
-// three RPM classes. State resets on restart (acceptable: windows are one
-// minute).
+// rateLimiter is an in-memory per-user sliding-window counter for the
+// three RPM classes. State resets on restart (acceptable: windows are
+// short; configurable via RPM_WINDOW_SEC).
 type rateLimiter struct {
-	mu   sync.Mutex
-	hits [rpmClassCount]map[int64][]int64 // class -> userID -> unix seconds
+	mu        sync.Mutex
+	hits      [rpmClassCount]map[int64][]int64 // class -> userID -> unix seconds
+	windowSec int                              // sliding window size in seconds
 
 	// limitCache caches per-user resolved limits [A,B,C] to avoid a DB
 	// round-trip on every call; invalidated on admin changes.
@@ -42,9 +43,10 @@ type rateLimiter struct {
 	limitCacheMu sync.RWMutex
 }
 
-func newRateLimiter() *rateLimiter {
+func newRateLimiter(windowSec int) *rateLimiter {
 	l := &rateLimiter{
 		limitCache: make(map[int64][rpmClassCount]int),
+		windowSec:  windowSec,
 	}
 	for c := range l.hits {
 		l.hits[c] = make(map[int64][]int64)
@@ -55,7 +57,7 @@ func newRateLimiter() *rateLimiter {
 // countRecent returns how many hits the user has in the last 60s for the
 // given class, pruning expired entries. Caller must hold l.mu.
 func (l *rateLimiter) countRecentLocked(class rpmClass, userID int64, now time.Time) int {
-	cutoff := now.Unix() - 60
+	cutoff := now.Unix() - int64(l.windowSec)
 	keep := l.hits[class][userID][:0]
 	for _, t := range l.hits[class][userID] {
 		if t > cutoff {

@@ -16,15 +16,16 @@ import (
 
 // Mailer buffers and sends email alerts. Nil means disabled (SMTP not configured).
 type Mailer struct {
-	cfg      config.SMTPConfig
-	enabled  bool
-	mu       sync.Mutex
-	coolers  map[EventType]*cooler
-	sendFunc func(config.SMTPConfig, string, string) error // injectable for tests
+	cfg         config.SMTPConfig
+	enabled     bool
+	coolMinutes int
+	mu          sync.Mutex
+	coolers     map[EventType]*cooler
+	sendFunc    func(config.SMTPConfig, string, string) error // injectable for tests
 }
 
 // New creates a Mailer or returns nil when SMTP_HOST is empty.
-func New(cfg config.SMTPConfig) *Mailer {
+func New(cfg config.SMTPConfig, coolMinutes int) *Mailer {
 	if strings.TrimSpace(cfg.Host) == "" {
 		log.Printf("[MAILER] disabled (SMTP_HOST not set)")
 		return nil
@@ -36,12 +37,14 @@ func New(cfg config.SMTPConfig) *Mailer {
 	}
 	log.Printf("[MAILER] enabled: %s:%d → %s (TLS=%s)", cfg.Host, cfg.Port, cfg.To, tlsMode)
 
-	return &Mailer{
-		cfg:      cfg,
-		enabled:  true,
-		coolers:  make(map[EventType]*cooler),
-		sendFunc: sendSMTP,
+	m := &Mailer{
+		cfg:         cfg,
+		enabled:     true,
+		coolers:     make(map[EventType]*cooler),
+		sendFunc:    sendSMTP,
+		coolMinutes: coolMinutes,
 	}
+	return m
 }
 
 // Start is a no-op (each cooler launches its own timer goroutine on first
@@ -93,7 +96,7 @@ func (m *Mailer) queue(et EventType, summary string) {
 	m.mu.Lock()
 	c, ok := m.coolers[et]
 	if !ok {
-		c = newCooler(et, m.cfg, m.sendFunc)
+		c = newCooler(et, m.coolMinutes, m.cfg, m.sendFunc)
 		m.coolers[et] = c
 	}
 	m.mu.Unlock()

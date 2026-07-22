@@ -18,9 +18,14 @@ const (
 	SettingRPMLimitC         = "rpm_limit_c"         // class C: request received (default 18)
 	SettingRPMViolationLimit = "rpm_violation_limit" // violations before auto-ban (default 5)
 	SettingRPMBanHours       = "rpm_ban_hours"       // auto-ban duration in hours (default 24)
-	SettingCheckinMin        = "checkin_min"         // check-in credit lower bound (default 10)
-	SettingCheckinMax        = "checkin_max"         // check-in credit upper bound (default 20)
-	SettingCreditsCap        = "credits_cap"         // check-in credits ceiling (default 50)
+	SettingCheckinMin        = "checkin_min"         // check-in credit lower bound (default 100)
+	SettingCheckinMax        = "checkin_max"         // check-in credit upper bound (default 200)
+	SettingCreditsCap        = "credits_cap"         // check-in credits ceiling (default 500)
+	// alpha.3 — tunable thresholds.
+	SettingCreditsGate       = "credits_gate"        // charity gate: credits must be > this (default 0)
+	SettingCharityCost       = "charity_cost"        // credits deducted per charity success (default 10)
+	SettingDonationFailLimit = "donation_fail_limit" // consecutive failures before auto-inactive (default 10)
+	SettingMailerCoolMinutes = "mailer_cool_minutes" // email aggregation window in minutes (default 10)
 )
 
 // Global defaults for the three-class RPM system (alpha.3 F4).
@@ -30,6 +35,21 @@ const (
 	DefaultRPMLimitC         = 18 // class C: request received (post-auth)
 	DefaultRPMViolationLimit = 5  // violations within 24h before auto-ban
 	DefaultRPMBanHours       = 24 // auto-ban duration in hours
+)
+
+// Global defaults for the check-in system (alpha.3 F2).
+const (
+	DefaultCheckinMin = 100 // minimum credits awarded per successful check-in
+	DefaultCheckinMax = 200 // maximum credits awarded per successful check-in
+	DefaultCreditsCap = 500 // check-in fails when credits >= this cap
+)
+
+// Global defaults for tunable thresholds.
+const (
+	DefaultCreditsGate       = 0  // charity gate: credits must be > this
+	DefaultCharityCost       = 10 // credits deducted per charity success
+	DefaultDonationFailLimit = 10 // consecutive failures before auto-inactive
+	DefaultMailerCoolMinutes = 10 // email aggregation window in minutes
 )
 
 // GetSettingInt returns the setting parsed as a positive integer, falling

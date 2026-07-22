@@ -156,7 +156,7 @@ func (s *Store) ListAllRequestLogs(f LogFilter, limit, offset int) ([]*AdminRequ
 	}
 
 	// Clamp limit.
-	if limit <= 0 || limit > 500 {
+	if limit <= 0 {
 		limit = 100
 	}
 	if offset < 0 {

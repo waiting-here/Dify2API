@@ -505,7 +505,7 @@ func TestCharityRouting_Success(t *testing.T) {
 		t.Fatalf("set caller key: %v", err)
 	}
 	store.SetUserCharityEnabled(u.ID, true)
-	store.SetUserCredits(u.ID, 10)
+	store.SetUserCredits(u.ID, 20)
 	store.SetSetting(db.SettingCharityGlobalEnabled, "true")
 
 	// Create a source user (donor) and a donation entry.
@@ -553,8 +553,8 @@ func TestCharityRouting_Success(t *testing.T) {
 
 	// Verify: caller's credits decreased
 	callerUpdated, _ := store.GetUserByID(u.ID)
-	if callerUpdated.Credits != 9 {
-		t.Errorf("caller credits = %d, want 9", callerUpdated.Credits)
+	if callerUpdated.Credits != 10 {
+		t.Errorf("caller credits = %d, want 10", callerUpdated.Credits)
 	}
 }
 

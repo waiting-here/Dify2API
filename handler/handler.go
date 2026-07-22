@@ -48,12 +48,12 @@ func NewGateway(cfg *config.Config, store *db.Store) *Gateway {
 	gw := &Gateway{
 		Config:           cfg,
 		Store:            store,
-		limiter:          newRateLimiter(),
+		limiter:          newRateLimiter(cfg.RPMWindowSec),
 		chatSem:          make(chan struct{}, cfg.MaxChatInFlight),
 		loginThrottle:    newLoginThrottle(cfg),
-		webThrottle:      newIPThrottle(cfg.WebRPMPerIP, cfg.WebThrottleSec),
-		authFailThrottle: newIPThrottle(cfg.AuthFailRPMPerIP, 60),
-		mailer:           mailer.New(cfg.SMTP),
+		webThrottle:      newIPThrottle(cfg.WebRPMPerIP, cfg.WebThrottleSec, cfg.IPThrottleWindowSec),
+		authFailThrottle: newIPThrottle(cfg.AuthFailRPMPerIP, 60, cfg.IPThrottleWindowSec),
+		mailer:           mailer.New(cfg.SMTP, db.DefaultMailerCoolMinutes),
 	}
 	if gw.mailer != nil {
 		gw.mailer.Start()
@@ -455,8 +455,9 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// 2. Credits check
-	if user.Credits <= 0 {
+	// 2. Credits check (gate threshold is admin-tunable).
+	gate := g.Store.GetSettingInt(db.SettingCreditsGate, db.DefaultCreditsGate)
+	if user.Credits <= gate {
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "insufficient_credits",
 			http.StatusForbidden, fmt.Sprintf("credits <= 0 (%d)", user.Credits))
 		g.writeError(w, http.StatusForbidden, "insufficient_credits",
@@ -782,8 +783,8 @@ func parseDataURI(uri string) (mime string, data []byte, err error) {
 // status returned to the caller; detail is a short error message for admin
 // diagnostics (never request/response content — see db.RequestLog).
 func (g *Gateway) logRequest(userID int64, model, service string, startedAt time.Time, status, errorCode string, httpStatus int, detail string) {
-	if len(detail) > 500 {
-		detail = detail[:500] + "…"
+	if len(detail) > g.Config.LogDetailMaxChars {
+		detail = detail[:g.Config.LogDetailMaxChars] + "…"
 	}
 	if err := g.Store.AddRequestLogFull(userID, model, service, startedAt, time.Now(), status, errorCode, httpStatus, detail, 0); err != nil {
 		log.Printf("[WARN] write request log: %v", err)

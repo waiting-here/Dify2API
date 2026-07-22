@@ -15,7 +15,7 @@ import (
 // --- rateLimiter unit tests -------------------------------------------------
 
 func TestRateLimiter_ThreeIndependentWindows(t *testing.T) {
-	l := newRateLimiter()
+	l := newRateLimiter(60)
 	now := time.Now()
 	limits := [rpmClassCount]int{2, 3, 4}
 
@@ -34,7 +34,7 @@ func TestRateLimiter_ThreeIndependentWindows(t *testing.T) {
 
 	// Entries older than 60s expire.
 	past := now.Add(-61 * time.Second)
-	l2 := newRateLimiter()
+	l2 := newRateLimiter(60)
 	l2.record(rpmClassA, 1, past)
 	l2.record(rpmClassA, 1, past)
 	if ok, _ := l2.check(1, now, limits); !ok {
@@ -43,7 +43,7 @@ func TestRateLimiter_ThreeIndependentWindows(t *testing.T) {
 }
 
 func TestRateLimiter_ClassBAndCBlockIndependently(t *testing.T) {
-	l := newRateLimiter()
+	l := newRateLimiter(60)
 	now := time.Now()
 	limits := [rpmClassCount]int{10, 1, 10}
 
@@ -54,7 +54,7 @@ func TestRateLimiter_ClassBAndCBlockIndependently(t *testing.T) {
 	}
 
 	limits = [rpmClassCount]int{10, 10, 1}
-	l3 := newRateLimiter()
+	l3 := newRateLimiter(60)
 	l3.record(rpmClassC, 7, now)
 	ok, violated = l3.check(7, now, limits)
 	if ok || violated != rpmClassC {
@@ -65,7 +65,7 @@ func TestRateLimiter_ClassBAndCBlockIndependently(t *testing.T) {
 // --- ipThrottle unit tests --------------------------------------------------
 
 func TestIPThrottle_BlocksAndRecovers(t *testing.T) {
-	th := newIPThrottle(3, 2) // 3/min, 2s penalty
+	th := newIPThrottle(3, 2, 60) // 3/min, 2s penalty
 	now := time.Now()
 
 	for i := 0; i < 3; i++ {
@@ -91,7 +91,7 @@ func TestIPThrottle_BlocksAndRecovers(t *testing.T) {
 }
 
 func TestIPThrottle_DisabledAlwaysAllows(t *testing.T) {
-	th := newIPThrottle(0, 60)
+	th := newIPThrottle(0, 60, 60)
 	now := time.Now()
 	for i := 0; i < 100; i++ {
 		if !th.allow("9.9.9.9", now) {
@@ -101,7 +101,7 @@ func TestIPThrottle_DisabledAlwaysAllows(t *testing.T) {
 }
 
 func TestIPThrottle_RetryAfter(t *testing.T) {
-	th := newIPThrottle(1, 30)
+	th := newIPThrottle(1, 30, 60)
 	now := time.Now()
 	th.allow("1.1.1.1", now)
 	th.allow("1.1.1.1", now) // crosses the cap -> 30s penalty

@@ -9,7 +9,8 @@ import (
 	"dify2api/config"
 )
 
-// coolWindow is the aggregation period for each event type.
+// coolWindow is the aggregation period for each event type (overridden
+// via New if SMTP is configured).
 var coolWindow = 10 * time.Minute
 
 type coolerItem struct {
@@ -20,19 +21,21 @@ type coolerItem struct {
 // cooler buffers events of a single EventType and sends one aggregated
 // email after the cooling window expires.
 type cooler struct {
-	mu        sync.Mutex
-	eventType EventType
-	items     []coolerItem
-	timer     *time.Timer
-	cfg       config.SMTPConfig
-	sendFunc  func(config.SMTPConfig, string, string) error
+	mu          sync.Mutex
+	eventType   EventType
+	coolMinutes int
+	items       []coolerItem
+	timer       *time.Timer
+	cfg         config.SMTPConfig
+	sendFunc    func(config.SMTPConfig, string, string) error
 }
 
-func newCooler(et EventType, cfg config.SMTPConfig, sendFn func(config.SMTPConfig, string, string) error) *cooler {
+func newCooler(et EventType, coolMinutes int, cfg config.SMTPConfig, sendFn func(config.SMTPConfig, string, string) error) *cooler {
 	return &cooler{
-		eventType: et,
-		cfg:       cfg,
-		sendFunc:  sendFn,
+		eventType:   et,
+		coolMinutes: coolMinutes,
+		cfg:         cfg,
+		sendFunc:    sendFn,
 	}
 }
 
@@ -44,7 +47,11 @@ func (c *cooler) add(summary string) {
 	c.items = append(c.items, coolerItem{at: time.Now(), summary: summary})
 
 	if c.timer == nil {
-		c.timer = time.AfterFunc(coolWindow, func() {
+		win := coolWindow
+		if c.coolMinutes > 0 {
+			win = time.Duration(c.coolMinutes) * time.Minute
+		}
+		c.timer = time.AfterFunc(win, func() {
 			c.flush()
 		})
 	}

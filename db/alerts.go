@@ -62,7 +62,7 @@ func (s *Store) ListAdminAlerts(limit, offset int) ([]*AdminAlert, int, error) {
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM admin_alerts`).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	if limit <= 0 || limit > 500 {
+	if limit <= 0 {
 		limit = 100
 	}
 	if offset < 0 {

@@ -135,7 +135,7 @@ func TestAuthFailThrottle_ValidKeyNeverCounted(t *testing.T) {
 	defer srv.Close()
 
 	gw, key, _ := setupRoutedUser(t, srv.URL, "[general]m")
-	gw.authFailThrottle = newIPThrottle(1, 60)
+	gw.authFailThrottle = newIPThrottle(1, 60, 60)
 	setRPMSettings(t, gw, 100, 100, 100)
 	h := gw.Wrap(func() http.Handler {
 		mux := http.NewServeMux()

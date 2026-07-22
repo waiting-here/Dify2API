@@ -152,6 +152,15 @@ func TestLoadStartup_Alpha3Defaults(t *testing.T) {
 	if cfg.AuthFailRPMPerIP != 30 {
 		t.Errorf("AUTH_FAIL_RPM_PER_IP = %d, want 30", cfg.AuthFailRPMPerIP)
 	}
+	if cfg.RPMWindowSec != 60 {
+		t.Errorf("RPM_WINDOW_SEC = %d, want 60", cfg.RPMWindowSec)
+	}
+	if cfg.IPThrottleWindowSec != 60 {
+		t.Errorf("IP_THROTTLE_WINDOW_SEC = %d, want 60", cfg.IPThrottleWindowSec)
+	}
+	if cfg.LogDetailMaxChars != 500 {
+		t.Errorf("LOG_DETAIL_MAX_CHARS = %d, want 500", cfg.LogDetailMaxChars)
+	}
 }
 
 func TestLoadStartup_CheckinTZOffset(t *testing.T) {

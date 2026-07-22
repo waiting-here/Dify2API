@@ -5,10 +5,11 @@ import (
 	"time"
 )
 
-// ipThrottle is a per-IP sliding-window (60s) rate limiter with a fixed
-// penalty period: once an IP exceeds rpm hits per minute, further requests
+// ipThrottle is a per-IP sliding-window rate limiter with a fixed
+// penalty period: once an IP exceeds rpm hits per period, further requests
 // from it are rejected until penaltyDur elapses. In-memory by design
-// (short windows; restart resets counters).
+// (short windows; restart resets counters). The window size is configurable
+// via IP_THROTTLE_WINDOW_SEC.
 //
 // Two instances are used (alpha.3):
 //   - webThrottle: /api/* session endpoints (F7) — throttles all hits.
@@ -18,16 +19,18 @@ type ipThrottle struct {
 	mu         sync.Mutex
 	hits       map[string][]int64 // ip -> unix seconds of recent hits
 	blockUntil map[string]int64   // ip -> unix second the penalty ends
-	rpm        int                // per-minute cap; 0 disables the throttle
+	rpm        int                // per-period cap; 0 disables the throttle
 	penaltyDur time.Duration
+	windowSec  int // sliding window size in seconds
 }
 
-func newIPThrottle(rpm, penaltySec int) *ipThrottle {
+func newIPThrottle(rpm, penaltySec, windowSec int) *ipThrottle {
 	t := &ipThrottle{
 		hits:       make(map[string][]int64),
 		blockUntil: make(map[string]int64),
 		rpm:        rpm,
 		penaltyDur: time.Duration(penaltySec) * time.Second,
+		windowSec:  windowSec,
 	}
 	if rpm > 0 {
 		go func() {
@@ -50,7 +53,7 @@ func (t *ipThrottle) allow(ip string, now time.Time) bool {
 		return true
 	}
 	nowSec := now.Unix()
-	cutoff := nowSec - 60
+	cutoff := nowSec - int64(t.windowSec)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -94,7 +97,7 @@ func (t *ipThrottle) retryAfterSec(ip string, now time.Time) int {
 // purge drops IPs with no recent hits and expired penalties.
 func (t *ipThrottle) purge(now time.Time) {
 	nowSec := now.Unix()
-	cutoff := nowSec - 60
+	cutoff := nowSec - int64(t.windowSec)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for ip, until := range t.blockUntil {

@@ -15,15 +15,18 @@ import (
 
 func testConfig() *config.Config {
 	return &config.Config{
-		ListenAddr:         "localhost:10086",
-		DifyHTTPTimeoutMs:  600000,
-		MaxChatInFlight:    64,
-		MaxRequestBodyMB:   4,
-		SSEBufferMB:        1,
-		LoginMaxFailures:   5,
-		LoginWindowMin:     10,
-		LoginLockMin:       60,
-		LoginMinLatencyMs:  0,
+		ListenAddr:          "localhost:10086",
+		DifyHTTPTimeoutMs:   600000,
+		MaxChatInFlight:     64,
+		MaxRequestBodyMB:    4,
+		SSEBufferMB:         1,
+		LoginMaxFailures:    5,
+		LoginWindowMin:      10,
+		LoginLockMin:        60,
+		LoginMinLatencyMs:   0,
+		RPMWindowSec:        60,
+		IPThrottleWindowSec: 60,
+		LogDetailMaxChars:   500,
 	}
 }
 
