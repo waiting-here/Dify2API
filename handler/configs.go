@@ -89,6 +89,20 @@ func (req *configRequest) validate() string {
 	if req.Model == "" {
 		return "model is required"
 	}
+	// Block model names that contain the reserved charity prefix.
+	// Block brackets in the backend portion (after the "[service]" prefix).
+	// The message deliberately does not reveal which check triggered the
+	// rejection to avoid leaking internal detection logic.
+	if strings.Contains(req.Model, "[公益]") {
+		return "模型名不得包含方括号（[ ]）或保留前缀"
+	}
+	// Backend part (after the service bracket) must not contain brackets.
+	if idx := strings.Index(req.Model, "]"); idx > 0 && idx+1 < len(req.Model) {
+		backend := req.Model[idx+1:]
+		if strings.ContainsAny(backend, "[]") {
+			return "模型名不得包含方括号（[ ]）或保留前缀"
+		}
+	}
 	// Model names must use a registered service prefix (dropdown-selected in
 	// the UI). Free-form model names are not accepted.
 	svc := translator.ServiceOfModel(req.Model)
@@ -154,9 +168,9 @@ func (g *Gateway) handleCreateConfig(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ok":         true,
-		"config":     appConfigJSON(cfg),
-		"app_check":  g.checkAppBinding(req.Model, req.BaseURL, req.APIKey),
+		"ok":        true,
+		"config":    appConfigJSON(cfg),
+		"app_check": g.checkAppBinding(req.Model, req.BaseURL, req.APIKey),
 	})
 }
 
@@ -198,9 +212,9 @@ func (g *Gateway) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	cfg, _ := g.Store.GetAppConfig(id)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ok":         true,
-		"config":     appConfigJSON(cfg),
-		"app_check":  g.checkAppBinding(req.Model, req.BaseURL, req.APIKey),
+		"ok":        true,
+		"config":    appConfigJSON(cfg),
+		"app_check": g.checkAppBinding(req.Model, req.BaseURL, req.APIKey),
 	})
 }
 

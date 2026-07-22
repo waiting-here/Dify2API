@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"dify2api/db"
+
 	"dify2api/web"
 )
 
@@ -44,13 +46,16 @@ func (g *Gateway) registerWebRoutes(mux *http.ServeMux) {
 
 	// Public site info for the SPA's host-mode detection, branding, and legal pages.
 	mux.HandleFunc("GET /api/site-info", func(w http.ResponseWriter, r *http.Request) {
+		charityGlobal := g.Store.GetSettingString(db.SettingCharityGlobalEnabled, "") == "true"
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
-			"site_host":    g.Config.Admin.SiteHost,
-			"admin_host":   g.Config.Admin.AdminHost,
-			"site_name":    g.Config.Admin.SiteName,
-			"report_email": g.Config.Admin.ReportEmail,
-			"site_base_url": g.Config.Admin.SiteBaseURL,
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"site_host":              g.Config.Admin.SiteHost,
+			"admin_host":             g.Config.Admin.AdminHost,
+			"site_name":              g.Config.Admin.SiteName,
+			"report_email":           g.Config.Admin.ReportEmail,
+			"site_base_url":          g.Config.Admin.SiteBaseURL,
+			"charity_global_enabled": charityGlobal,
+			"credits_name":           g.Config.CreditsName,
 		})
 	})
 

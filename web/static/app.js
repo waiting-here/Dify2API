@@ -105,6 +105,47 @@ const T = {
   adminLogsUntil: "结束时间",
   thHTTPStatus: "HTTP",
   thErrorDetail: "错误详情",
+  // Charity / donations
+  charityTitle: "公益资源",
+  charityGlobalLabel: "全局公益开关",
+  charityGlobalHint: "开启后用户可在控制台中启用公益资源，并在 /v1/models 中看到公益模型",
+  charityFormTitle: "添加捐赠条目",
+  charityService: "服务",
+  charityModel: "模型名（不得含方括号）",
+  charityBaseURL: "Dify Base URL",
+  charityAPIKey: "Dify API Key",
+  charitySourceUser: "来源用户",
+  charitySourceUserHint: "从已注册用户中搜索（输入用户名或 Discord ID）",
+  charitySourceText: "来源文本（未选用户时填写）",
+  charityDeadline: "截止时间",
+  charityTotalCount: "捐赠次数",
+  charityNote: "备注（来源为管理员时必填）",
+  charitySubmit: "创建",
+  charityTableTitle: "捐赠条目列表",
+  charityThService: "服务",
+  charityThModel: "模型",
+  charityThSource: "来源",
+  charityThStatus: "状态",
+  charityThRemaining: "剩余/总数",
+  charityThDeadline: "截止时间",
+  charityThActions: "操作",
+  charityStatusActive: "有效",
+  charityStatusInactive: "未激活",
+  charityStatusExpired: "失效",
+  charityBtnToggleOn: "激活",
+  charityBtnToggleOff: "停用",
+  charityBtnDelete: "删除",
+  charityDeleteWarn: "关联的请求日志与告警将保留但不再能回溯到条目详情。确定删除？",
+  charityCreated: "捐赠条目已创建",
+  charityStatusChanged: "状态已更新",
+  charityDeleted: "捐赠条目已删除",
+  // User charity toggle
+  userCharityToggle: "启用公益资源",
+  userCharityConfirm: "警告：开启公益资源后，您的请求将被转发至捐赠者配置的 Dify App。捐赠者可通过其 Dify App 后台日志查看完整请求内容。平台不保证捐赠 App 的可靠性，对捐赠者可能的恶意行为免除平台责任。\n\n确定开启？",
+  userCharityOn: "公益资源已启用",
+  userCharityOff: "公益资源已关闭",
+  userCharityBanner: "捐赠与公益系统尚未被管理员启用",
+  insufficientCredits: "积分不足",
 };
 
 /* ---------------- helpers ---------------- */
@@ -262,6 +303,7 @@ async function renderUserDashboard() {
         <button id="delete-account" class="contrast outline">${T.deleteAccount}</button>
       </div>
     </section>
+    <section class="card" id="charity-card"></section>
     <section class="card" id="configs">
       <h3>${T.configsTitle}</h3>
       <div id="check-note"></div>
@@ -270,7 +312,7 @@ async function renderUserDashboard() {
       <form id="cfg-form">
         <div style="display:grid;grid-template-columns:auto 1fr;gap:.5rem;align-items:end">
           <label>${T.thService}<select name="service" id="cfg-service"></select></label>
-          <label>${T.thModel}<input name="backend" placeholder="${T.fieldBackend}" required></label>
+          <label>${T.thModel}<input name="backend" placeholder="${T.fieldBackend}（不得含方括号 [ ] 或保留前缀）" required></label>
         </div>
         <label>${T.thBaseURL}<input name="dify_base_url" placeholder="${T.fieldBaseURL}" required></label>
         <label>API Key<input name="dify_api_key" placeholder="${T.fieldAPIKey}" required></label>
@@ -335,6 +377,60 @@ async function renderUserDashboard() {
     .map((s) => `<option value="${esc(s.name)}" title="${esc(s.label)}">${esc(s.name)}</option>`)
     .join("");
   await Promise.all([loadConfigs(), loadLogs()]);
+
+  // Charity toggle and banner.
+  renderCharityCard();
+}
+
+async function renderCharityCard() {
+  const card = $("#charity-card");
+  if (!card) return;
+  // When the global switch is off, show a persistent banner AND the
+  // personal toggle (users can freely flip the switch, but every flip
+  // shows an informational toast).
+  const globalOff = !state.site.charity_global_enabled;
+  let enabled = false;
+  if (!globalOff) {
+    try {
+      const data = await api("/api/me/charity");
+      enabled = data.charity_enabled;
+    } catch { /* use default false */ }
+  }
+  const statusText = enabled ? T.userCharityOn : T.userCharityOff;
+  card.innerHTML = `
+    ${globalOff ? `<article class="note warn" style="margin-bottom:.75rem">${T.userCharityBanner}</article>` : ""}
+    <h3>${T.userCharityToggle}</h3>
+    <p class="muted">${esc(statusText)}</p>
+    <label style="display:flex;align-items:center;gap:.75rem">
+      <input type="checkbox" id="charity-toggle" role="switch" ${enabled ? "checked" : ""}>
+      <span>${T.userCharityToggle}</span>
+    </label>`;
+  const toggle = $("#charity-toggle");
+  toggle.onchange = async () => {
+    const wantOn = toggle.checked;
+    // If the global switch is off, allow the toggle but show an
+    // informational toast and revert the visual state.
+    if (globalOff) {
+      toggle.checked = !wantOn;
+      toast(T.userCharityBanner, 3000);
+      return;
+    }
+    if (wantOn && !confirm(T.userCharityConfirm)) {
+      toggle.checked = false;
+      return;
+    }
+    try {
+      await api("/api/me/charity", {
+        method: "PUT",
+        body: { enabled: wantOn, confirmed: wantOn },
+      });
+      toast(wantOn ? T.userCharityOn : T.userCharityOff);
+      renderCharityCard();
+    } catch (err) {
+      toggle.checked = !wantOn;
+      toast(T.error.replace("{msg}", err.message), 3000);
+    }
+  };
 }
 
 let editingId = null;
@@ -494,6 +590,11 @@ async function renderAdminDashboard() {
           <label style="flex:1 1 12rem">${T.rpmViolationLimit}<input name="rpm_violation_limit" type="number" min="1" required></label>
           <label style="flex:1 1 12rem">${T.rpmBanHours}<input name="rpm_ban_hours" type="number" min="1" required></label>
         </div>
+        <label style="display:flex;align-items:center;gap:.5rem;margin-top:.5rem">
+          <input name="charity_global_enabled" type="checkbox" role="switch">
+          <span>${T.charityGlobalLabel}</span>
+          <span class="muted" style="font-size:.85em">${T.charityGlobalHint}</span>
+        </label>
         <button type="submit">${T.save}</button>
       </form>
     </section>
@@ -517,6 +618,33 @@ async function renderAdminDashboard() {
       </div>
       <div class="table-wrap"><table><thead><tr><th>${T.thTime}</th><th>${T.thUser}</th><th>${T.thModel}</th><th>${T.thService}</th><th>${T.thDuration}</th><th>${T.thStatus}</th><th>${T.thHTTPStatus}</th><th>${T.thErrorCode}</th><th>${T.thErrorDetail}</th></tr></thead><tbody id="alf-rows"></tbody></table></div>
       <div class="row-actions" id="alf-pager" style="margin-top:.5rem"></div>
+    </section>
+    <section class="card" id="donations-card">
+      <h3>${T.charityTitle}</h3>
+      <form id="donation-form">
+        <div style="display:grid;grid-template-columns:auto 1fr;gap:.5rem;align-items:end">
+          <label>${T.charityService}<select name="service" id="don-service"></select></label>
+          <label>${T.charityModel}<input name="model" placeholder="${T.charityModel}" required></label>
+        </div>
+        <label>${T.charityBaseURL}<input name="dify_base_url" placeholder="https://api.dify.ai/v1" required></label>
+        <label>${T.charityAPIKey}<input name="dify_api_key" placeholder="app-…" required></label>
+        <label>${T.charitySourceUser}
+          <input id="don-source-user" list="don-user-list" placeholder="${T.charitySourceUserHint}" autocomplete="off">
+          <datalist id="don-user-list"></datalist>
+        </label>
+        <label>${T.charitySourceText}<input name="source_text" placeholder="当未选来源用户时填写此项"></label>
+        <label>${T.charityDeadline}<input name="deadline" type="datetime-local" required></label>
+        <label>${T.charityTotalCount}<input name="total_count" type="number" min="1" required></label>
+        <label>${T.charityNote}<input name="note" placeholder="${T.charityNote}"></label>
+        <div id="don-note"></div>
+        <button type="submit">${T.charitySubmit}</button>
+      </form>
+      <div class="table-wrap" style="margin-top:1.5rem"><table><thead><tr>
+        <th>${T.charityThService}</th><th>${T.charityThModel}</th><th>${T.charityThSource}</th>
+        <th>${T.charityThStatus}</th><th>${T.charityThRemaining}</th><th>${T.charityThDeadline}</th>
+        <th>${T.thActions}</th>
+      </tr></thead><tbody id="don-rows"></tbody></table></div>
+      <div class="row-actions" id="don-pager" style="margin-top:.5rem"></div>
     </section>`;
 
   const s = await api("/api/admin/settings");
@@ -528,6 +656,7 @@ async function renderAdminDashboard() {
   sf.rpm_limit_c.value = s.rpm_limit_c;
   sf.rpm_violation_limit.value = s.rpm_violation_limit;
   sf.rpm_ban_hours.value = s.rpm_ban_hours;
+  sf.charity_global_enabled.checked = s.charity_global_enabled;
   sf.onsubmit = async (e) => {
     e.preventDefault();
     await api("/api/admin/settings", { method: "PUT", body: {
@@ -538,6 +667,7 @@ async function renderAdminDashboard() {
       rpm_limit_c: parseInt(sf.rpm_limit_c.value, 10),
       rpm_violation_limit: parseInt(sf.rpm_violation_limit.value, 10),
       rpm_ban_hours: parseInt(sf.rpm_ban_hours.value, 10),
+      charity_global_enabled: sf.charity_global_enabled.checked,
     } });
     toast(T.settingsSaved);
   };
@@ -561,6 +691,18 @@ async function renderAdminDashboard() {
 
   $("#alf-query").onclick = () => { adminLogPager.page = 1; loadAdminLogs(); };
   await loadAdminLogs();
+
+  // Charity / donations card initialization.
+  const donSvc = $("#don-service");
+  donSvc.innerHTML = services
+    .map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`)
+    .join("");
+  // Source user datalist from the same users array.
+  $("#don-user-list").innerHTML = adminLogUsers
+    .map((u) => `<option value="${esc(u.username)}（${esc(u.discord_id)}）"></option>`)
+    .join("");
+  $("#donation-form").onsubmit = onDonationSubmit;
+  await loadAdminDonations();
 }
 
 function userStatusBadges(u) {
@@ -798,3 +940,105 @@ function renderAdminLogs(data) {
   c.querySelector(".pg-prev").onclick = () => { adminLogPager.page--; loadAdminLogs(); };
   c.querySelector(".pg-next").onclick = () => { adminLogPager.page++; loadAdminLogs(); };
 }
+
+/* ---------------- admin site: donations (公益资源) ---------------- */
+const donPager = newPager(donationRow);
+
+function donationRow(d) {
+  const statusMap = { active: T.charityStatusActive, inactive: T.charityStatusInactive, expired: T.charityStatusExpired };
+  const statusBadge = `<span class="badge ${d.status === "active" ? "ok" : d.status === "expired" ? "off" : "warn"}">${esc(statusMap[d.status] || d.status)}</span>`;
+  const remaining = `${d.remaining_count}/${d.total_count}`;
+  const deadline = fmtT(d.deadline);
+  const source = esc(d.source_display || "—");
+  let actions = "";
+  if (d.status === "active") {
+    actions += `<button class="secondary don-toggle" data-id="${d.id}" data-status="inactive" style="width:auto;margin:0">${T.charityBtnToggleOff}</button> `;
+  } else if (d.status === "inactive") {
+    actions += `<button class="secondary don-toggle" data-id="${d.id}" data-status="active" style="width:auto;margin:0">${T.charityBtnToggleOn}</button> `;
+  }
+  if (d.status !== "expired") {
+    actions += `<button class="contrast outline don-delete" data-id="${d.id}" style="width:auto;margin:0">${T.charityBtnDelete}</button>`;
+  }
+  return `<tr><td>${esc(d.service)}</td><td class="mono">${esc(d.model)}</td><td>${source}</td><td>${statusBadge}</td><td>${remaining}</td><td class="muted">${deadline}</td><td class="row-actions">${actions}</td></tr>`;
+}
+
+async function loadAdminDonations() {
+  try {
+    const data = await api("/api/admin/donations");
+    const list = data.donations || [];
+    donPager.data = list;
+    renderPaged(donPager, "#don-rows", "#don-pager", 7);
+  } catch (err) {
+    $("#don-rows").innerHTML = `<tr><td colspan="7" class="muted">${T.error.replace("{msg}", err.message)}</td></tr>`;
+    $("#don-pager").innerHTML = "";
+  }
+}
+
+async function onDonationSubmit(e) {
+  e.preventDefault();
+  const f = e.target;
+  // Resolve source user from text+<datalist>.
+  const userText = $("#don-source-user").value.trim();
+  let sourceUserId = null;
+  if (userText) {
+    const m = userText.match(/^(.*)（([^（）]*)）$/);
+    if (m) {
+      const hit = adminLogUsers.find((u) => u.username === m[1] && u.discord_id === m[2]);
+      if (hit) sourceUserId = hit.id;
+    }
+  }
+  // Convert datetime-local to unix seconds.
+  const deadline = f.deadline.value ? Math.floor(new Date(f.deadline.value).getTime() / 1000) : 0;
+  const body = {
+    service: f.service.value,
+    model: f.model.value.trim(),
+    dify_base_url: f.dify_base_url.value.trim(),
+    dify_api_key: f.dify_api_key.value.trim(),
+    source_user_id: sourceUserId,
+    source_text: f.source_text.value.trim(),
+    deadline,
+    total_count: parseInt(f.total_count.value, 10),
+    note: f.note.value.trim(),
+  };
+  const note = $("#don-note");
+  note.innerHTML = `<p class="muted">${T.loading}</p>`;
+  try {
+    await api("/api/admin/donations", { method: "POST", body });
+    note.innerHTML = `<div class="note ok">${T.charityCreated}</div>`;
+    f.reset();
+    $("#don-source-user").value = "";
+    await loadAdminDonations();
+  } catch (err) {
+    note.innerHTML = `<div class="note err">${T.error.replace("{msg}", esc(err.message))}</div>`;
+  }
+}
+
+// Delegate click events for donation actions (toggle/delete).
+document.addEventListener("click", async (ev) => {
+  const btn = ev.target.closest(".don-toggle");
+  if (btn) {
+    const id = btn.dataset.id;
+    const status = btn.dataset.status;
+    try {
+      await api(`/api/admin/donations/${id}/status`, { method: "POST", body: { status } });
+      toast(T.charityStatusChanged);
+      await loadAdminDonations();
+    } catch (err) {
+      toast(T.error.replace("{msg}", err.message), 3000);
+    }
+    return;
+  }
+  const delBtn = ev.target.closest(".don-delete");
+  if (delBtn) {
+    if (!confirm(T.charityDeleteWarn)) return;
+    const id = delBtn.dataset.id;
+    try {
+      await api(`/api/admin/donations/${id}`, { method: "DELETE" });
+      toast(T.charityDeleted);
+      await loadAdminDonations();
+    } catch (err) {
+      toast(T.error.replace("{msg}", err.message), 3000);
+    }
+    return;
+  }
+});

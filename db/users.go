@@ -254,6 +254,14 @@ func (s *Store) AdjustUserDonationCredit(userID int64, delta int) (int, error) {
 	return newVal, nil
 }
 
+// UpdateUserProfile updates username and avatar for an existing user
+// (used to refresh Discord profile changes on re-login).
+func (s *Store) UpdateUserProfile(userID int64, username, avatar string) error {
+	now := time.Now().Unix()
+	_, err := s.db.Exec(`UPDATE users SET username=?, avatar=?, updated_at=? WHERE id=?`, username, avatar, now, userID)
+	return err
+}
+
 // SetUserCharityEnabled sets the user-side public-resource opt-in switch.
 func (s *Store) SetUserCharityEnabled(userID int64, enabled bool) error {
 	v := 0

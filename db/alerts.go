@@ -9,7 +9,8 @@ import (
 
 // Admin alert type constants.
 const (
-	AlertBlockingFailed200 = "blocking_failed_200"
+	AlertBlockingFailed200     = "blocking_failed_200"
+	AlertDonationExhaustedRace = "donation_exhausted_race"
 )
 
 // AdminAlert records an operational event that requires administrator

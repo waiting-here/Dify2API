@@ -246,6 +246,16 @@ func (g *Gateway) handleDiscordCallback(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Refresh username/avatar from Discord on every login (the user may have
+	// changed their name or avatar on Discord since the last login).
+	discordName := info.DisplayName()
+	discordAvatar := info.Avatar
+	if user.Username != discordName || user.Avatar != discordAvatar {
+		if err := g.Store.UpdateUserProfile(user.ID, discordName, discordAvatar); err != nil {
+			log.Printf("[WARN] refresh user profile (user %d): %v", user.ID, err)
+		}
+	}
+
 	// Auto-provision a caller key on first use (registration or first login
 	// after this version) so the dashboard's copy button always has a key.
 	if ok, _ := g.Store.CallerKeyExists(user.ID); !ok {

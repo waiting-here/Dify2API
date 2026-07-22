@@ -80,6 +80,16 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/settings", g.handleAdminGetSettings)
 	mux.HandleFunc("PUT /api/admin/settings", g.handleAdminPutSettings)
 
+	// Charity / donation admin endpoints
+	mux.HandleFunc("POST /api/admin/donations", g.handleCreateDonation)
+	mux.HandleFunc("GET /api/admin/donations", g.handleListDonations)
+	mux.HandleFunc("POST /api/admin/donations/{id}/status", g.handleDonationStatus)
+	mux.HandleFunc("DELETE /api/admin/donations/{id}", g.handleDeleteDonation)
+
+	// User charity toggle
+	mux.HandleFunc("GET /api/me/charity", g.handleGetCharity)
+	mux.HandleFunc("PUT /api/me/charity", g.handlePutCharity)
+
 	// User endpoints (session-authenticated)
 	mux.HandleFunc("GET /api/logs", g.handleListLogs)
 	mux.HandleFunc("GET /api/configs", g.handleListConfigs)
@@ -125,7 +135,9 @@ func (g *Gateway) userFromCallerKey(r *http.Request) *db.User {
 	return u
 }
 
-// handleModels: per-user model list (enabled configs of the caller-key user).
+// handleModels: per-user model list (enabled configs of the caller-key user),
+// plus charity models when the user has opted in (charity_enabled) and the
+// global charity switch is on.
 func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -155,6 +167,30 @@ func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
 		}
 		models = append(models, openai.Model{ID: c.Model, Object: "model", Created: c.CreatedAt, OwnedBy: "dify2api"})
 	}
+
+	// Append charity models when global switch is on and user has opted in.
+	if user.CharityEnabled && g.Store.GetSettingString(db.SettingCharityGlobalEnabled, "") == "true" {
+		seen := make(map[string]bool, len(models))
+		for _, m := range models {
+			seen[m.ID] = true
+		}
+		pairs, err := g.Store.ListRoutableDonationModels()
+		if err == nil {
+			for _, p := range pairs {
+				charityID := charityModelName(p.Service, p.Model)
+				if !seen[charityID] {
+					models = append(models, openai.Model{
+						ID:      charityID,
+						Object:  "model",
+						Created: time.Now().Unix(),
+						OwnedBy: "dify2api-charity",
+					})
+					seen[charityID] = true
+				}
+			}
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(openai.ModelListResponse{Object: "list", Data: models})
 }
@@ -279,7 +315,27 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	// Class C (request received) counts immediately after passing the gate.
 	g.limiter.record(rpmClassC, user.ID, startedAt)
 
-	// 3. Model full name -> the user's enabled App config.
+	// Charity global gate check: if the model is a charity model and the
+	// global switch is off, reject immediately.
+	// We check this early to fail fast; the full charity routing in
+	// handleCharityAfterRPM also checks this again for safety.
+	if IsCharityModel(req.Model) {
+		if g.Store.GetSettingString(db.SettingCharityGlobalEnabled, "") != "true" {
+			g.logRequest(user.ID, req.Model, service, startedAt, "error", "charity_disabled",
+				http.StatusForbidden, "全局公益开关未开启")
+			g.writeError(w, http.StatusForbidden, "charity_disabled",
+				"捐赠与公益系统尚未被管理员启用")
+			return
+		}
+	}
+
+	// 3a. Charity model routing — takes priority over user App configs.
+	if IsCharityModel(req.Model) {
+		g.handleCharityAfterRPM(w, r, user, req, service, startedAt)
+		return
+	}
+
+	// 3b. Model full name -> the user's enabled App config.
 	appCfg, err := g.Store.GetEnabledAppConfigByModel(user.ID, req.Model)
 	if err != nil {
 		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
@@ -358,6 +414,120 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		g.handleStreaming(w, client, wfReq, modelName, user.ID, service, startedAt)
 	} else {
 		g.handleBlocking(w, client, wfReq, modelName, user.ID, service, startedAt)
+	}
+}
+
+// handleCharityAfterRPM runs the full charity routing path after the RPM
+// gate has been passed (class C already counted). It checks charity_enabled,
+// credits, routable donations, weighted selection, contract validation,
+// and then forwards to the streaming/blocking handler.
+func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, user *db.User, req openai.ChatCompletionRequest, service string, startedAt time.Time) {
+	service, backend := ParseCharityModel(req.Model)
+
+	// 1. User charity_enabled (model_not_found to not leak existence)
+	if !user.CharityEnabled {
+		g.logRequest(user.ID, req.Model, service, startedAt, "error", "model_not_found",
+			http.StatusNotFound, fmt.Sprintf("model %q not found", req.Model))
+		g.writeError(w, http.StatusNotFound, "model_not_found",
+			fmt.Sprintf("model %q not found in your configs", req.Model))
+		return
+	}
+
+	// 2. Credits check
+	if user.Credits <= 0 {
+		g.logRequest(user.ID, req.Model, service, startedAt, "error", "insufficient_credits",
+			http.StatusForbidden, fmt.Sprintf("credits <= 0 (%d)", user.Credits))
+		g.writeError(w, http.StatusForbidden, "insufficient_credits",
+			fmt.Sprintf("您的%s不足，无法调用公益模型", g.Config.CreditsName))
+		return
+	}
+
+	// 3. List routable donations
+	donations, err := g.Store.ListRoutableDonations(service, backend)
+	if err != nil {
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	if len(donations) == 0 {
+		g.logRequest(user.ID, req.Model, service, startedAt, "error", "service_unavailable",
+			http.StatusServiceUnavailable, "no routable donations")
+		g.writeError(w, http.StatusServiceUnavailable, "service_unavailable",
+			"当前该公益模型无可用捐赠条目")
+		return
+	}
+
+	// 4. Weighted random selection
+	picked := pickWeightedDonation(donations)
+	if picked == nil {
+		g.logRequest(user.ID, req.Model, service, startedAt, "error", "service_unavailable",
+			http.StatusServiceUnavailable, "pickWeightedDonation returned nil")
+		g.writeError(w, http.StatusServiceUnavailable, "service_unavailable",
+			"当前该公益模型无可用捐赠条目")
+		return
+	}
+
+	// 5. Decrypt API key and build Dify client
+	apiKey, err := g.Store.Decrypt(picked.DifyAPIKeyEnc)
+	if err != nil {
+		log.Printf("[ERROR] decrypt donation key (donation %d): %v", picked.ID, err)
+		g.logRequest(user.ID, req.Model, service, startedAt, "error", "internal",
+			http.StatusInternalServerError, "credential decryption error")
+		g.writeError(w, http.StatusInternalServerError, "internal", "credential error")
+		return
+	}
+	client := dify.NewClient(picked.DifyBaseURL, apiKey, time.Duration(g.Config.DifyHTTPTimeoutMs)*time.Millisecond)
+	client.SSEBufferSize = g.Config.SSEBufferMB << 20
+
+	// 6. Contract validation (failure does NOT count as donation failure)
+	inputs, images, err := translator.TranslateForService(service, req.Messages)
+	if err != nil {
+		g.logRequest(user.ID, req.Model, service, startedAt, "error", "invalid_message_sequence",
+			http.StatusBadRequest, err.Error())
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": map[string]interface{}{
+				"message": err.Error(),
+				"type":    "invalid_request_error",
+				"code":    "invalid_message_sequence",
+			},
+		})
+		return
+	}
+
+	// Log model name (hides donation identity)
+	logModel := charityModelName(service, backend)
+
+	// Build workflow inputs
+	wfInputs := make(map[string]interface{}, len(inputs)+1)
+	for k, v := range inputs {
+		wfInputs[k] = v
+	}
+
+	// Handle images if applicable
+	if len(images) > 0 {
+		files, err := g.buildImageFiles(client, wfReq_User(user.ID), images)
+		if err != nil {
+			log.Printf("[ERROR] charity image files (user %d): %v", user.ID, err)
+			g.logRequest(user.ID, logModel, service, startedAt, "error", "image_upload_failed",
+				difyErrorStatus(err), err.Error())
+			g.writeDifyError(w, err)
+			return
+		}
+		wfInputs["input_image_list"] = files
+	}
+
+	wfReq := &dify.WorkflowRequest{
+		Inputs:       wfInputs,
+		ResponseMode: "streaming",
+		User:         fmt.Sprintf("u%d", user.ID),
+	}
+
+	// 7. Forward (streaming or blocking)
+	if req.Stream {
+		g.charityStreaming(w, client, wfReq, logModel, user.ID, service, startedAt, picked)
+	} else {
+		g.charityBlocking(w, client, wfReq, logModel, user.ID, service, startedAt, picked)
 	}
 }
 
@@ -489,6 +659,8 @@ func (g *Gateway) handleBlocking(w http.ResponseWriter, client *dify.Client, wfR
 		var de *dify.DifyError
 		if errors.As(err, &de) && de.Status == http.StatusOK {
 			g.limiter.record(rpmClassB, userID, time.Now())
+			// Write admin alert for 200-but-failed (non-charity path).
+			g.maybeRecordBlockingFailedAlert(userID, modelName, service, de, nil)
 		}
 		log.Printf("[ERROR] dify blocking (user %d): %v", userID, err)
 		g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error())

@@ -10,6 +10,8 @@ import (
 const (
 	SettingGuildID = "discord_guild_id"
 	SettingRoleID  = "discord_role_id"
+	// Charity global switch (alpha.3 F1).
+	SettingCharityGlobalEnabled = "charity_global_enabled"
 	// alpha.3 — three-class RPM global defaults.
 	SettingRPMLimitA         = "rpm_limit_a"         // class A: transfer complete (default 6)
 	SettingRPMLimitB         = "rpm_limit_b"         // class B: request success (default 12)
@@ -52,6 +54,16 @@ func (s *Store) GetSetting(key string) (string, error) {
 		return "", nil
 	}
 	return v, err
+}
+
+// GetSettingString returns a setting value, falling back to the given default
+// when unset or on error (no-op convenience wrapper).
+func (s *Store) GetSettingString(key string, fallback string) string {
+	v, err := s.GetSetting(key)
+	if err != nil || v == "" {
+		return fallback
+	}
+	return v
 }
 
 // SetSetting upserts a setting value.

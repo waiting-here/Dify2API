@@ -170,13 +170,14 @@ func (g *Gateway) handleAdminGetSettings(w http.ResponseWriter, r *http.Request)
 	roleID, _ := g.Store.GetSetting(db.SettingRoleID)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"guild_id":            guildID,
-		"role_id":             roleID,
-		"rpm_limit_a":         g.Store.GetSettingInt(db.SettingRPMLimitA, db.DefaultRPMLimitA),
-		"rpm_limit_b":         g.Store.GetSettingInt(db.SettingRPMLimitB, db.DefaultRPMLimitB),
-		"rpm_limit_c":         g.Store.GetSettingInt(db.SettingRPMLimitC, db.DefaultRPMLimitC),
-		"rpm_violation_limit": g.Store.GetSettingInt(db.SettingRPMViolationLimit, db.DefaultRPMViolationLimit),
-		"rpm_ban_hours":       g.Store.GetSettingInt(db.SettingRPMBanHours, db.DefaultRPMBanHours),
+		"guild_id":               guildID,
+		"role_id":                roleID,
+		"rpm_limit_a":            g.Store.GetSettingInt(db.SettingRPMLimitA, db.DefaultRPMLimitA),
+		"rpm_limit_b":            g.Store.GetSettingInt(db.SettingRPMLimitB, db.DefaultRPMLimitB),
+		"rpm_limit_c":            g.Store.GetSettingInt(db.SettingRPMLimitC, db.DefaultRPMLimitC),
+		"rpm_violation_limit":    g.Store.GetSettingInt(db.SettingRPMViolationLimit, db.DefaultRPMViolationLimit),
+		"rpm_ban_hours":          g.Store.GetSettingInt(db.SettingRPMBanHours, db.DefaultRPMBanHours),
+		"charity_global_enabled": g.Store.GetSettingString(db.SettingCharityGlobalEnabled, "") == "true",
 	})
 }
 
@@ -187,13 +188,14 @@ func (g *Gateway) handleAdminPutSettings(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req struct {
-		GuildID           string `json:"guild_id"`
-		RoleID            string `json:"role_id"`
-		RPMLimitA         *int   `json:"rpm_limit_a"`
-		RPMLimitB         *int   `json:"rpm_limit_b"`
-		RPMLimitC         *int   `json:"rpm_limit_c"`
-		RPMViolationLimit *int   `json:"rpm_violation_limit"`
-		RPMBanHours       *int   `json:"rpm_ban_hours"`
+		GuildID              string `json:"guild_id"`
+		RoleID               string `json:"role_id"`
+		RPMLimitA            *int   `json:"rpm_limit_a"`
+		RPMLimitB            *int   `json:"rpm_limit_b"`
+		RPMLimitC            *int   `json:"rpm_limit_c"`
+		RPMViolationLimit    *int   `json:"rpm_violation_limit"`
+		RPMBanHours          *int   `json:"rpm_ban_hours"`
+		CharityGlobalEnabled *bool  `json:"charity_global_enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
@@ -230,6 +232,18 @@ func (g *Gateway) handleAdminPutSettings(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
+	// Charity global switch (optional bool).
+	if req.CharityGlobalEnabled != nil {
+		val := "false"
+		if *req.CharityGlobalEnabled {
+			val = "true"
+		}
+		if err := g.Store.SetSetting(db.SettingCharityGlobalEnabled, val); err != nil {
+			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+	}
+
 	// Global limits may have changed — drop every cached per-user limit.
 	g.invalidateRPMCache(0)
 	w.Header().Set("Content-Type", "application/json")
