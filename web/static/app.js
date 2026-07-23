@@ -159,7 +159,8 @@ const i18n = {
   userCharityConfirm: "警告：使用公益资源时，您的请求将被转发至捐赠者配置的 Dify App。捐赠者可通过其 Dify App 后台日志查看完整请求内容。平台不保证捐赠 App 的可靠性，对捐赠者可能的恶意行为免除平台责任。\n\n确定开启？",
   userCharityOn: "公益资源已启用",
   userCharityOff: "公益资源已关闭",
-  userCharityBanner: "捐赠/公益系统尚未被管理员启用",
+  userCharityBanner: "公益系统尚未被管理员启用",
+  userDonationBanner: "捐赠系统尚未被管理员启用",
   insufficientCredits: "积分不足",
   // Credits & check-in (alpha.3 F2)
   creditsTitle: "公益积分",
@@ -225,7 +226,7 @@ const i18n = {
   // --- User tab navigation (alpha.4 Tab-U) ---
   userTabConfigs: "模型配置",
   userTabCredits: "积分签到",
-  userTabCharity: "公益",
+  userTabCharity: "公益与捐赠",
   userTabLogs: "请求日志",
   userTabDebug: "调试",
 
@@ -480,11 +481,13 @@ database — debug data exists only within the current browser tab.
   userMoreActions: "More actions",
   userSearch: "Search users",
   userSearchPlaceholder: "Enter username or Discord ID to search…",
-  userTabCharity: "Charity",
+  userTabCharity: "Charity & Donations",
   userTabConfigs: "Model Configs",
   userTabCredits: "Credits & Check-in",
   userTabDebug: "Debug",
   userTabLogs: "Request Logs",
+  userCharityBanner: "Charity system has not been enabled by administrator",
+  userDonationBanner: "Donation system has not been enabled by administrator",
   }
 };
 
@@ -1340,7 +1343,7 @@ async function renderMyDonations() {
       <span id="donation-apply-msg" class="muted" style="margin-left:.75rem"></span>
     </form>`;
   } else {
-    html += `<article class="note warn">${esc(T('userCharityBanner')) || "捐赠系统当前未开放"}</article>`;
+    html += `<article class="note warn">${T('userDonationBanner')}</article>`;
   }
 
   // Application status table.
@@ -1949,7 +1952,7 @@ function userRow(u) {
       <input class="u-rpm" data-id="${u.id}" data-class="a" type="number" min="1" value="${fmtLim(u.rpm_limit_a)}" placeholder="${T('rpmA')}" style="width:3.5rem;padding:0 .25rem;font-size:.75rem">
       <input class="u-rpm" data-id="${u.id}" data-class="b" type="number" min="1" value="${fmtLim(u.rpm_limit_b)}" placeholder="${T('rpmB')}" style="width:3.5rem;padding:0 .25rem;font-size:.75rem">
       <input class="u-rpm" data-id="${u.id}" data-class="c" type="number" min="1" value="${fmtLim(u.rpm_limit_c)}" placeholder="${T('rpmC')}" style="width:3.5rem;padding:0 .25rem;font-size:.75rem">
-      <button class="secondary u-rpm-save" data-id="${u.id}" style="width:auto">${T('rpmSave')}</button>
+      <button class="secondary u-rpm-save" data-id="${u.id}" style="padding:.3rem .5rem;font-size:.8rem">${T('rpmSave')}</button>
     </span>`;
   const titleTxt = esc(`${u.username}（${u.discord_id}）`);
   return `
