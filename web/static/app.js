@@ -21,7 +21,7 @@ const i18n = {
   keyHint: "此密钥用于 OpenAI 兼容接口（/v1）鉴权。界面不显示完整密钥，点击按钮复制。",
   copy: "复制",
   copied: "已复制",
-  copyFail: "复制失败，请手动复制",
+  copyFail: "复制失败，请刷新页面后重试",
   resetKey: "重置密钥",
   resetKeyConfirm: "重置后旧密钥立即失效，确定重置？",
   keyResetDone: "密钥已重置，请重新复制。",
