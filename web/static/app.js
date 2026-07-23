@@ -1524,10 +1524,10 @@ function cfgRow(c) {
       <td class="mono">${esc(c.model)}</td>
       <td class="muted wrap">${esc(c.note || "—")}</td>
       <td><input type="checkbox" class="cfg-toggle" ${c.enabled ? "checked" : ""} role="switch"></td>
-      <td class="row-actions">
+      <td><div class="row-actions">
         <button class="secondary cfg-edit">${T('editConfig')}</button>
         <button class="contrast outline cfg-del">${T('deleteConfig')}</button>
-      </td>
+      </div></td>
     </tr>`;
 }
 
@@ -2058,7 +2058,7 @@ function userRow(u) {
       <td>${rpm}</td>
       <td class="muted" title="${fmtT(u.created_at)}" style="white-space:nowrap">${fmtDate(u.created_at)}</td>
       <td class="wrap">${userStatusBadges(u)}</td>
-      <td class="row-actions">
+      <td><div class="row-actions">
         <button class="secondary u-ban">${T('ban')}</button>
         <button class="secondary u-unban">${T('unban')}</button>
         <div class="dropdown-wrapper" style="position:relative;display:inline-block">
@@ -2069,7 +2069,7 @@ function userRow(u) {
             <button class="dropdown-item u-del" data-id="${u.id}" style="display:block;width:100%;text-align:left;background:none;border:none;border-radius:0;padding:.4rem .75rem;cursor:pointer;color:var(--pico-color);margin:0;font-size:.85rem">${T('deleteUser')}</button>
           </div>
         </div>
-      </td>
+      </div></td>
     </tr>`;
 }
 
@@ -2333,7 +2333,7 @@ function alertRow(a) {
       <td class="muted">${fmtT(a.created_at)}</td>
       <td><span class="badge warn">${typeLabel}</span></td>
       <td class="wrap" style="max-width:24rem">${esc(a.message)}</td>
-      <td class="row-actions">${actionsHtml}</td>
+      <td><div class="row-actions">${actionsHtml}</div></td>
     </tr>`;
 }
 
@@ -2435,7 +2435,7 @@ function donationRow(d) {
   if (d.status !== "expired") {
     actions += `<button class="contrast outline don-delete" data-id="${d.id}" style="width:auto;margin:0">${T('charityBtnDelete')}</button>`;
   }
-  return `<tr><td>${esc(d.service)}</td><td class="mono">${esc(d.model)}</td><td>${source} ${keyInfo}</td><td>${statusBadge}</td><td>${remaining}</td><td class="mono">${rpmDisplay}</td><td class="muted">${deadline}</td><td class="row-actions">${actions}</td></tr>`;
+  return `<tr><td>${esc(d.service)}</td><td class="mono">${esc(d.model)}</td><td>${source} ${keyInfo}</td><td>${statusBadge}</td><td>${remaining}</td><td class="mono">${rpmDisplay}</td><td class="muted">${deadline}</td><td><div class="row-actions">${actions}</div></td></tr>`;
 }
 
 async function loadAdminDonations() {
@@ -2532,9 +2532,9 @@ async function renderAdminDonationReview() {
         <td class="mono">${esc(String(a.total_count))}</td>
         <td class="muted wrap" style="max-width:12rem">${esc(a.note || "—")}</td>
         <td class="muted">${fmtT(a.created_at)}</td>
-        <td class="row-actions">
+        <td><div class="row-actions">
           <button class="secondary don-review-btn" data-id="${a.id}">${T('donationReviewBtn')}</button>
-        </td>
+        </div></td>
       </tr>`;
     }
     html += `</tbody></table></div>`;
@@ -2858,7 +2858,7 @@ function adminBulletinRow(b) {
       <td class="muted">${created}</td>
       <td class="muted">${expires}</td>
       <td>${closable}</td>
-      <td class="row-actions">${actions}</td>
+      <td><div class="row-actions">${actions}</div></td>
     </tr>`;
 }
 
