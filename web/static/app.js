@@ -409,10 +409,7 @@ function renderDebugUI() {
     // Disclaimer.
     html += `
       <div class="debug-warning card" style="border-left:4px solid var(--pico-del-color, #c62828);margin-bottom:1rem">
-        <pre style="white-space:pre-wrap;font-size:.85rem;margin:0">${esc(currentLang === 'zh' ? i18n.zh.debugWarning : i18n.en.debugWarning)}</pre>
-        <details style="margin-top:.5rem"><summary>${currentLang === 'zh' ? T('langEn') : T('langZh')}</summary>
-          <pre style="white-space:pre-wrap;font-size:.85rem;margin:0">${esc(currentLang === 'zh' ? i18n.en.debugWarning : i18n.zh.debugWarning)}</pre>
-        </details>
+        <pre style="white-space:pre-wrap;font-size:.85rem;margin:0">${esc(T('debugWarning'))}</pre>
         <button id="debug-consent-btn" class="secondary" style="margin-top:.75rem">${T('debugConsent')}</button>
       </div>`;
   } else if (_debugActive) {
@@ -440,10 +437,7 @@ function renderDebugUI() {
     // Consented but inactive.
     html += `
       <div class="debug-warning card" style="border-left:4px solid var(--pico-del-color, #c62828);margin-bottom:1rem">
-        <pre style="white-space:pre-wrap;font-size:.85rem;margin:0">${esc(currentLang === 'zh' ? i18n.zh.debugWarning : i18n.en.debugWarning)}</pre>
-        <details style="margin-top:.5rem"><summary>${currentLang === 'zh' ? T('langEn') : T('langZh')}</summary>
-          <pre style="white-space:pre-wrap;font-size:.85rem;margin:0">${esc(currentLang === 'zh' ? i18n.en.debugWarning : i18n.zh.debugWarning)}</pre>
-        </details>
+        <pre style="white-space:pre-wrap;font-size:.85rem;margin:0">${esc(T('debugWarning'))}</pre>
       </div>
       <button id="debug-start-btn" class="secondary">${T('debugStart')}</button>`;
   }
