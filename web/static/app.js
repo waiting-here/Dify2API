@@ -344,6 +344,24 @@ const i18n = {
   checkinMinLabel: "签到最低积分",
   checkinMaxLabel: "签到最高积分",
   creditsCapLabel: "积分上限",
+  // i18n sweep (TASK 021)
+  alertTypeDonationExhausted: "公益资源竞争耗尽",
+  banReasonLabel: "原因：{reason}",
+  batchInvalidAmount: "请输入有效数值",
+  charitySourceTextPlaceholder: "当未选来源用户时填写此项",
+  creditsLoadFailed: "无法加载积分信息",
+  debugContentPreview: "内容（前60字）",
+  debugNone: "（无）",
+  debugRole: "角色",
+  fieldBackendHint: "（不得含方括号 [ ] 或保留前缀）",
+  langEn: "English",
+  langZh: "中文",
+  paginationAll: "全部",
+  paginationInfo: "{page} / {pages} 页 · 共 {total} 条",
+  paginationPerPage: "条/页",
+  reviewKeepOriginalKey: "留空则沿用原密钥",
+  rpmAutoBanPrefix: "RPM 自动",
+  selectAll: "全选",
   },
   en: {
   adminTabAlerts: "Alert Center",
@@ -507,6 +525,24 @@ database — debug data exists only within the current browser tab.
   checkinMinLabel: "Min Check-in Credits",
   checkinMaxLabel: "Max Check-in Credits",
   creditsCapLabel: "Credits Cap",
+  // i18n sweep (TASK 021)
+  alertTypeDonationExhausted: "Charity resource exhaustion",
+  banReasonLabel: "Reason: {reason}",
+  batchInvalidAmount: "Please enter a valid number",
+  charitySourceTextPlaceholder: "Fill when no source user is selected",
+  creditsLoadFailed: "Unable to load credits information",
+  debugContentPreview: "Content (first 60 chars)",
+  debugNone: "(None)",
+  debugRole: "Role",
+  fieldBackendHint: " (no brackets [ ] or reserved prefixes)",
+  langEn: "English",
+  langZh: "中文",
+  paginationAll: "All",
+  paginationInfo: "Page {page} / {pages} · {total} total",
+  paginationPerPage: "per page",
+  reviewKeepOriginalKey: "Leave empty to keep original key",
+  rpmAutoBanPrefix: "RPM Auto",
+  selectAll: "Select All",
   }
 };
 
@@ -698,11 +734,11 @@ function renderPaged(p, rowsSel, ctrlsSel, emptyCols) {
   $(rowsSel).innerHTML = items.length ? items.map(p.rowFn).join("") : `<tr><td colspan="${emptyCols}" class="muted">${T('empty')}</td></tr>`;
   $(ctrlsSel).innerHTML = `
     <select class="pg-size">
-      ${[5, 10, 20, 50].map((n) => `<option value="${n}" ${p.size === n ? "selected" : ""}>${n} 条/页</option>`).join("")}
-      <option value="inf" ${p.size === Infinity ? "selected" : ""}>全部</option>
+      ${[5, 10, 20, 50].map((n) => `<option value="${n}" ${p.size === n ? "selected" : ""}>${n} ${T('paginationPerPage')}</option>`).join("")}
+      <option value="inf" ${p.size === Infinity ? "selected" : ""}>${T('paginationAll')}</option>
     </select>
     <button class="pg-prev secondary" ${p.page <= 1 ? "disabled" : ""}>‹</button>
-    <span class="muted">${p.page} / ${pages} 页 · 共 ${total} 条</span>
+    <span class="muted">${T('paginationInfo').replace('{page}', String(p.page)).replace('{pages}', String(pages)).replace('{total}', String(total))}</span>
     <button class="pg-next secondary" ${p.page >= pages ? "disabled" : ""}>›</button>`;
   const c = $(ctrlsSel);
   c.querySelector(".pg-size").onchange = (e) => {
@@ -765,7 +801,7 @@ async function renderUserDashboard() {
         <form id="cfg-form">
           <div style="display:grid;grid-template-columns:auto 1fr;gap:.5rem;align-items:end">
             <label>${T('thService')}<select name="service" id="cfg-service"></select></label>
-            <label>${T('thModel')}<input name="backend" placeholder="${T('fieldBackend')}（不得含方括号 [ ] 或保留前缀）" required></label>
+            <label>${T('thModel')}<input name="backend" placeholder="${T('fieldBackend')}${T('fieldBackendHint')}" required></label>
           </div>
           <label>${T('thBaseURL')}<input name="dify_base_url" placeholder="${T('fieldBaseURL')}" required></label>
           <label>API Key<input name="dify_api_key" placeholder="${T('fieldAPIKey')}" required></label>
@@ -947,7 +983,7 @@ function renderDebugUI() {
     html += `
       <div class="debug-warning card" style="border-left:4px solid var(--pico-del-color, #c62828);margin-bottom:1rem">
         <pre style="white-space:pre-wrap;font-size:.85rem;margin:0">${esc(currentLang === 'zh' ? i18n.zh.debugWarning : i18n.en.debugWarning)}</pre>
-        <details style="margin-top:.5rem"><summary>${currentLang === 'zh' ? 'English' : '中文'}</summary>
+        <details style="margin-top:.5rem"><summary>${currentLang === 'zh' ? T('langEn') : T('langZh')}</summary>
           <pre style="white-space:pre-wrap;font-size:.85rem;margin:0">${esc(currentLang === 'zh' ? i18n.en.debugWarning : i18n.zh.debugWarning)}</pre>
         </details>
         <button id="debug-consent-btn" class="secondary" style="margin-top:.75rem">${T('debugConsent')}</button>
@@ -978,7 +1014,7 @@ function renderDebugUI() {
     html += `
       <div class="debug-warning card" style="border-left:4px solid var(--pico-del-color, #c62828);margin-bottom:1rem">
         <pre style="white-space:pre-wrap;font-size:.85rem;margin:0">${esc(currentLang === 'zh' ? i18n.zh.debugWarning : i18n.en.debugWarning)}</pre>
-        <details style="margin-top:.5rem"><summary>${currentLang === 'zh' ? 'English' : '中文'}</summary>
+        <details style="margin-top:.5rem"><summary>${currentLang === 'zh' ? T('langEn') : T('langZh')}</summary>
           <pre style="white-space:pre-wrap;font-size:.85rem;margin:0">${esc(currentLang === 'zh' ? i18n.en.debugWarning : i18n.zh.debugWarning)}</pre>
         </details>
       </div>
@@ -1033,8 +1069,8 @@ function renderOneDebugEvent(evt, idx) {
   const hasError = !!evt.error;
 
   const reqBodyStr = typeof req.body === "object" ? JSON.stringify(req.body, null, 2) : String(req.body ?? "");
-  const inputsStr = evt.dify_inputs ? JSON.stringify(evt.dify_inputs, null, 2) : "（无）";
-  const respBodyStr = resp ? (resp.body || "") : "（无）";
+  const inputsStr = evt.dify_inputs ? JSON.stringify(evt.dify_inputs, null, 2) : T('debugNone');
+  const respBodyStr = resp ? (resp.body || "") : T('debugNone');
 
   const statusBadge = resp
     ? `<span class="badge ${resp.status < 400 ? "ok" : "err"}">${resp.status}</span>`
@@ -1068,7 +1104,7 @@ function renderMessageLayout(layout) {
   }).join("");
   return `
     <p style="margin:.5rem 0 .25rem"><strong>${T('debugMessageLayout')}:</strong></p>
-    <div class="table-wrap" style="margin-bottom:.5rem"><table style="font-size:.8rem"><thead><tr><th>#</th><th>${currentLang === 'zh' ? '角色' : 'Role'}</th><th>${currentLang === 'zh' ? '内容（前60字）' : 'Content (first 60 chars)'}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    <div class="table-wrap" style="margin-bottom:.5rem"><table style="font-size:.8rem"><thead><tr><th>#</th><th>${T('debugRole')}</th><th>${T('debugContentPreview')}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 // ---- Debug actions ----
@@ -1272,7 +1308,7 @@ async function renderCreditsCard() {
       }
     };
   } catch {
-    $("#credits-info").innerHTML = `<p class="muted">${T('error').replace("{msg}", "无法加载积分信息")}</p>`;
+    $("#credits-info").innerHTML = `<p class="muted">${T('error').replace("{msg}", T('creditsLoadFailed'))}</p>`;
   }
 }
 
@@ -1793,7 +1829,7 @@ async function renderAdminDashboard() {
           <input id="batch-amount" type="number" min="0" placeholder="${T('batchAmount')}" style="width:6rem;margin-bottom:0">
           <button id="batch-submit" class="secondary" style="width:auto;margin-bottom:0">${T('batchSubmit')}</button>
         </div>
-        <div class="table-wrap"><table><thead><tr><th><input type="checkbox" id="select-all" title="全选"></th><th>${T('thUser')}</th><th>${T('thCredits')}</th><th>${T('thDonationCredit')}</th><th>${T('thRPM')}</th><th>${T('thCreated')}</th><th>${T('thStatus')}</th><th>${T('thActions')}</th></tr></thead><tbody id="user-rows"></tbody></table></div>
+        <div class="table-wrap"><table><thead><tr><th><input type="checkbox" id="select-all" title="${T('selectAll')}"></th><th>${T('thUser')}</th><th>${T('thCredits')}</th><th>${T('thDonationCredit')}</th><th>${T('thRPM')}</th><th>${T('thCreated')}</th><th>${T('thStatus')}</th><th>${T('thActions')}</th></tr></thead><tbody id="user-rows"></tbody></table></div>
         <div class="row-actions" id="user-pager" style="margin-top:.5rem"></div>
       </section>
     </div>
@@ -1839,7 +1875,7 @@ async function renderAdminDashboard() {
             <input id="don-source-user" list="don-user-list" placeholder="${T('charitySourceUserHint')}" autocomplete="off">
             <datalist id="don-user-list"></datalist>
           </label>
-          <label>${T('charitySourceText')}<input name="source_text" placeholder="当未选来源用户时填写此项"></label>
+          <label>${T('charitySourceText')}<input name="source_text" placeholder="${T('charitySourceTextPlaceholder')}"></label>
           <label>${T('charityDeadline')}<input name="deadline" type="datetime-local" required></label>
           <label>${T('charityTotalCount')}<input name="total_count" type="number" min="1" required></label>
           <label>${T('charityNote')}<input name="note" placeholder="${T('charityNote')}"></label>
@@ -1859,7 +1895,7 @@ async function renderAdminDashboard() {
     <div id="tab-alerts" class="admin-tab-content" style="display:none">
       <section class="card">
         <h3>${T('alertTitle')}</h3>
-        <div class="table-wrap"><table><thead><tr><th><input type="checkbox" id="alert-select-all" title="全选"></th><th>${T('thTime')}</th><th>${T('alertType')}</th><th>${T('alertMessage')}</th><th>${T('thActions')}</th></tr></thead><tbody id="alert-rows"></tbody></table></div>
+        <div class="table-wrap"><table><thead><tr><th><input type="checkbox" id="alert-select-all" title="${T('selectAll')}"></th><th>${T('thTime')}</th><th>${T('alertType')}</th><th>${T('alertMessage')}</th><th>${T('thActions')}</th></tr></thead><tbody id="alert-rows"></tbody></table></div>
         <div class="row-actions" style="margin:.5rem 0">
           <button id="alert-delete-btn" class="contrast outline">${T('alertDeleteSelected')}</button>
         </div>
@@ -1940,8 +1976,8 @@ function userStatusBadges(u) {
     return `<span class="badge err">${txt}</span>`;
   }
   if (u.banned_until > 0 && u.banned_until * 1000 > Date.now()) {
-    let txt = (u.auto_banned ? "RPM 自动" : "") + T('statusBannedUntil').replace("{time}", fmtT(u.banned_until));
-    if (u.ban_reason) txt += `<br><span class="muted">原因：${esc(u.ban_reason)}</span>`;
+    let txt = (u.auto_banned ? T('rpmAutoBanPrefix') : "") + T('statusBannedUntil').replace("{time}", fmtT(u.banned_until));
+    if (u.ban_reason) txt += `<br><span class="muted">${T('banReasonLabel').replace('{reason}', esc(u.ban_reason))}</span>`;
     return `<span class="badge warn">${txt}</span>`;
   }
   return `<span class="badge ok">${T('statusNormal')}</span>`;
@@ -2108,7 +2144,7 @@ function bindUserRowActions() {
       const action = $("#batch-action").value;
       const amount = parseInt($("#batch-amount").value, 10);
       if (!action) { toast(T('batchNoSelection')); return; }
-      if (isNaN(amount) || amount < 0) { toast("请输入有效数值"); return; }
+      if (isNaN(amount) || amount < 0) { toast(T('batchInvalidAmount')); return; }
       const chks = document.querySelectorAll(".user-chk:checked");
       if (chks.length === 0) { toast(T('batchNoSelection')); return; }
       const actionLabels = {
@@ -2236,11 +2272,11 @@ function renderAdminLogs(data) {
 
   $("#alf-pager").innerHTML = `
     <select class="pg-size">
-      ${[5, 10, 20, 50].map((n) => `<option value="${n}" ${size === n ? "selected" : ""}>${n} 条/页</option>`).join("")}
-      <option value="inf" ${size === Infinity ? "selected" : ""}>全部</option>
+      ${[5, 10, 20, 50].map((n) => `<option value="${n}" ${size === n ? "selected" : ""}>${n} ${T('paginationPerPage')}</option>`).join("")}
+      <option value="inf" ${size === Infinity ? "selected" : ""}>${T('paginationAll')}</option>
     </select>
     <button class="pg-prev secondary" ${adminLogPager.page <= 1 ? "disabled" : ""}>‹</button>
-    <span class="muted">${adminLogPager.page} / ${pages} 页 · 共 ${total} 条</span>
+    <span class="muted">${T('paginationInfo').replace('{page}', String(adminLogPager.page)).replace('{pages}', String(pages)).replace('{total}', String(total))}</span>
     <button class="pg-next secondary" ${adminLogPager.page >= pages ? "disabled" : ""}>›</button>`;
 
   const c = $("#alf-pager");
@@ -2256,7 +2292,7 @@ function renderAdminLogs(data) {
 /* ---------------- admin site: alert centre ---------------- */
 const alertTypeLabels = {
   blocking_failed_200: T('alertTypeBlockingFailed200'),
-  donation_exhausted_race: "公益资源竞争耗尽",
+  donation_exhausted_race: T('alertTypeDonationExhausted'),
 };
 
 function alertRow(a) {
@@ -2304,11 +2340,11 @@ function renderAdminAlerts(data) {
 
   $("#alert-pager").innerHTML = `
     <select class="pg-size">
-      ${[5, 10, 20, 50].map((n) => `<option value="${n}" ${size === n ? "selected" : ""}>${n} 条/页</option>`).join("")}
-      <option value="inf" ${size === Infinity ? "selected" : ""}>全部</option>
+      ${[5, 10, 20, 50].map((n) => `<option value="${n}" ${size === n ? "selected" : ""}>${n} ${T('paginationPerPage')}</option>`).join("")}
+      <option value="inf" ${size === Infinity ? "selected" : ""}>${T('paginationAll')}</option>
     </select>
     <button class="pg-prev secondary" ${alertPager.page <= 1 ? "disabled" : ""}>‹</button>
-    <span class="muted">${alertPager.page} / ${pages} 页 · 共 ${total} 条</span>
+    <span class="muted">${T('paginationInfo').replace('{page}', String(alertPager.page)).replace('{pages}', String(pages)).replace('{total}', String(total))}</span>
     <button class="pg-next secondary" ${alertPager.page >= pages ? "disabled" : ""}>›</button>`;
 
   const c = $("#alert-pager");
@@ -2498,7 +2534,7 @@ function showReviewDialog(app) {
           <label>${T('donationAppThModel')}<input name="model" value="${esc(app.model)}"></label>
         </div>
         <label>${T('donationApplyBaseURL')}<input name="dify_base_url" value="${esc(app.dify_base_url)}"></label>
-        <label>${T('donationApplyAPIKey')}<input name="dify_api_key" placeholder="留空则沿用原密钥"></label>
+        <label>${T('donationApplyAPIKey')}<input name="dify_api_key" placeholder="${T('reviewKeepOriginalKey')}"></label>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem">
           <label>${T('donationAppThDeadline')}<input name="deadline" type="datetime-local" value="${new Date(app.deadline * 1000).toISOString().slice(0, 16)}"></label>
           <label>${T('donationAppThCount')}<input name="total_count" type="number" min="1" value="${esc(String(app.total_count))}"></label>
