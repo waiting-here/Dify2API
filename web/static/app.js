@@ -362,6 +362,15 @@ const i18n = {
   reviewKeepOriginalKey: "留空则沿用原密钥",
   rpmAutoBanPrefix: "RPM 自动",
   selectAll: "全选",
+  rpmLimitLabel: "RPM 上限",
+  rpmLimitHint: "次/分钟，默认 10",
+  rpmLimitUserHint: "次/分钟，高级 Dify 订阅可设更高",
+  donationEdit: "编辑",
+  donationEditTitle: "编辑捐赠条目 #{id}",
+  donationSavedValid: "已保存，App 校验通过",
+  donationSavedInvalid: "已保存，但 App 校验失败：{msg}",
+  charityOverloaded: "当前该公益模型所有捐赠条目均已达速率上限，请稍后重试",
+  donationExpiredNoEdit: "已失效的捐赠条目不可编辑",
   },
   en: {
   adminTabAlerts: "Alert Center",
@@ -543,6 +552,15 @@ database — debug data exists only within the current browser tab.
   reviewKeepOriginalKey: "Leave empty to keep original key",
   rpmAutoBanPrefix: "RPM Auto",
   selectAll: "Select All",
+  rpmLimitLabel: "RPM Limit",
+  rpmLimitHint: "calls/min, default 10",
+  rpmLimitUserHint: "calls/min; higher-tier Dify subscriptions support higher limits",
+  donationEdit: "Edit",
+  donationEditTitle: "Edit Donation #{id}",
+  donationSavedValid: "Saved, App validation passed",
+  donationSavedInvalid: "Saved, but App validation failed: {msg}",
+  charityOverloaded: "All charity resources for this model are currently rate-limited. Please retry later.",
+  donationExpiredNoEdit: "Expired donations cannot be edited",
   }
 };
 
@@ -1403,8 +1421,11 @@ async function renderMyDonations() {
       </div>
       <label>${T('donationApplyBaseURL')}<input name="dify_base_url" placeholder="https://api.dify.ai/v1" required></label>
       <label>${T('donationApplyAPIKey')}<input name="dify_api_key" placeholder="app-…" required></label>
-      <label>${T('donationApplyDeadline')}<input name="deadline" type="datetime-local" required></label>
-      <label>${T('donationApplyTotalCount')}<input name="total_count" type="number" min="1" value="100" required></label>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.5rem">
+        <label>${T('donationApplyDeadline')}<input name="deadline" type="datetime-local" required></label>
+        <label>${T('donationApplyTotalCount')}<input name="total_count" type="number" min="1" value="100" required></label>
+        <label>${T('rpmLimitLabel')}<input name="rpm_limit" type="number" min="1" value="10" placeholder="${T('rpmLimitUserHint')}"></label>
+      </div>
       <label>${T('donationApplyNote')}<textarea name="note" rows="2"></textarea></label>
       <button type="submit">${T('donationApplySubmit')}</button>
       <span id="donation-apply-msg" class="muted" style="margin-left:.75rem"></span>
@@ -1467,6 +1488,7 @@ async function renderMyDonations() {
       const msg = $("#donation-apply-msg");
       msg.textContent = T('loading');
       try {
+        const rpmLimit = parseInt(f.rpm_limit.value, 10) || 0;
         await api("/api/me/donations", {
           method: "POST",
           body: {
@@ -1476,6 +1498,7 @@ async function renderMyDonations() {
             dify_api_key: f.dify_api_key.value.trim(),
             deadline,
             total_count: parseInt(f.total_count.value, 10),
+            rpm_limit: rpmLimit,
             note: f.note.value.trim(),
           },
         });
@@ -1876,15 +1899,18 @@ async function renderAdminDashboard() {
             <datalist id="don-user-list"></datalist>
           </label>
           <label>${T('charitySourceText')}<input name="source_text" placeholder="${T('charitySourceTextPlaceholder')}"></label>
-          <label>${T('charityDeadline')}<input name="deadline" type="datetime-local" required></label>
-          <label>${T('charityTotalCount')}<input name="total_count" type="number" min="1" required></label>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.5rem">
+            <label>${T('charityDeadline')}<input name="deadline" type="datetime-local" required></label>
+            <label>${T('charityTotalCount')}<input name="total_count" type="number" min="1" required></label>
+            <label>${T('rpmLimitLabel')}<input name="rpm_limit" type="number" min="1" value="10" placeholder="${T('rpmLimitHint')}"></label>
+          </div>
           <label>${T('charityNote')}<input name="note" placeholder="${T('charityNote')}"></label>
           <div id="don-note"></div>
           <button type="submit">${T('charitySubmit')}</button>
         </form>
         <div class="table-wrap" style="margin-top:1.5rem"><table><thead><tr>
           <th>${T('charityThService')}</th><th>${T('charityThModel')}</th><th>${T('charityThSource')}</th>
-          <th>${T('charityThStatus')}</th><th>${T('charityThRemaining')}</th><th>${T('charityThDeadline')}</th>
+          <th>${T('charityThStatus')}</th><th>${T('charityThRemaining')}</th><th>RPM</th><th>${T('charityThDeadline')}</th>
           <th>${T('thActions')}</th>
         </tr></thead><tbody id="don-rows"></tbody></table></div>
         <div class="row-actions" id="don-pager" style="margin-top:.5rem"></div>
@@ -2386,13 +2412,21 @@ function renderAdminAlerts(data) {
 /* ---------------- admin site: donations (公益资源) ---------------- */
 const donPager = newPager(donationRow);
 
+let donDupKeys = new Set(); // populated by loadAdminDonations
+
 function donationRow(d) {
   const statusMap = { active: T('charityStatusActive'), inactive: T('charityStatusInactive'), expired: T('charityStatusExpired') };
   const statusBadge = `<span class="badge ${d.status === "active" ? "ok" : d.status === "expired" ? "off" : "warn"}">${esc(statusMap[d.status] || d.status)}</span>`;
   const remaining = `${d.remaining_count}/${d.total_count}`;
   const deadline = fmtT(d.deadline);
   const source = esc(d.source_display || "—");
+  const rpmDisplay = esc(String(d.rpm_limit != null ? d.rpm_limit : 10));
+  const dupWarn = donDupKeys.has(d.dify_base_url) && d.has_key ? ` <span title="${esc(T('rpmLimitHint'))}" style="cursor:help">⚠</span>` : "";
+  const keyInfo = d.has_key ? `<span class="badge ok" style="font-size:.7em">Key${dupWarn}</span>` : `<span class="muted">—</span>`;
   let actions = "";
+  if (d.status !== "expired") {
+    actions += `<button class="secondary don-edit" data-id="${d.id}" style="width:auto;margin:0" title="${T('donationEdit')}">✎</button> `;
+  }
   if (d.status === "active") {
     actions += `<button class="secondary don-toggle" data-id="${d.id}" data-status="inactive" style="width:auto;margin:0">${T('charityBtnToggleOff')}</button> `;
   } else if (d.status === "inactive") {
@@ -2401,17 +2435,23 @@ function donationRow(d) {
   if (d.status !== "expired") {
     actions += `<button class="contrast outline don-delete" data-id="${d.id}" style="width:auto;margin:0">${T('charityBtnDelete')}</button>`;
   }
-  return `<tr><td>${esc(d.service)}</td><td class="mono">${esc(d.model)}</td><td>${source}</td><td>${statusBadge}</td><td>${remaining}</td><td class="muted">${deadline}</td><td class="row-actions">${actions}</td></tr>`;
+  return `<tr><td>${esc(d.service)}</td><td class="mono">${esc(d.model)}</td><td>${source} ${keyInfo}</td><td>${statusBadge}</td><td>${remaining}</td><td class="mono">${rpmDisplay}</td><td class="muted">${deadline}</td><td class="row-actions">${actions}</td></tr>`;
 }
 
 async function loadAdminDonations() {
   try {
     const data = await api("/api/admin/donations");
     const list = data.donations || [];
+    // Compute duplicate dify_base_url among entries that have a key.
+    const keyed = list.filter((d) => d.has_key);
+    const urlCounts = new Map();
+    for (const d of keyed) urlCounts.set(d.dify_base_url, (urlCounts.get(d.dify_base_url) || 0) + 1);
+    donDupKeys = new Set();
+    for (const [url, cnt] of urlCounts) { if (cnt > 1) donDupKeys.add(url); }
     donPager.data = list;
-    renderPaged(donPager, "#don-rows", "#don-pager", 7);
+    renderPaged(donPager, "#don-rows", "#don-pager", 8);
   } catch (err) {
-    $("#don-rows").innerHTML = `<tr><td colspan="7" class="muted">${T('error').replace("{msg}", err.message)}</td></tr>`;
+    $("#don-rows").innerHTML = `<tr><td colspan="8" class="muted">${T('error').replace("{msg}", err.message)}</td></tr>`;
     $("#don-pager").innerHTML = "";
   }
 }
@@ -2431,6 +2471,7 @@ async function onDonationSubmit(e) {
   }
   // Convert datetime-local to unix seconds.
   const deadline = f.deadline.value ? Math.floor(new Date(f.deadline.value).getTime() / 1000) : 0;
+  const rpmLimit = parseInt(f.rpm_limit.value, 10) || 0;
   const body = {
     service: f.service.value,
     model: f.model.value.trim(),
@@ -2440,6 +2481,7 @@ async function onDonationSubmit(e) {
     source_text: f.source_text.value.trim(),
     deadline,
     total_count: parseInt(f.total_count.value, 10),
+    rpm_limit: rpmLimit,
     note: f.note.value.trim(),
   };
   const note = $("#don-note");
@@ -2535,9 +2577,10 @@ function showReviewDialog(app) {
         </div>
         <label>${T('donationApplyBaseURL')}<input name="dify_base_url" value="${esc(app.dify_base_url)}"></label>
         <label>${T('donationApplyAPIKey')}<input name="dify_api_key" placeholder="${T('reviewKeepOriginalKey')}"></label>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.5rem">
           <label>${T('donationAppThDeadline')}<input name="deadline" type="datetime-local" value="${new Date(app.deadline * 1000).toISOString().slice(0, 16)}"></label>
           <label>${T('donationAppThCount')}<input name="total_count" type="number" min="1" value="${esc(String(app.total_count))}"></label>
+          <label>${T('rpmLimitLabel')}<input name="rpm_limit" type="number" min="1" value="${esc(String(app.rpm_limit || 10))}" placeholder="${T('rpmLimitHint')}"></label>
         </div>
         <label>${T('donationReviewNote')}<textarea name="review_note" rows="2"></textarea></label>
         <div id="review-msg" style="margin-bottom:.5rem"></div>
@@ -2573,12 +2616,14 @@ function showReviewDialog(app) {
   $("#review-approve-btn").onclick = async () => {
     const f = $("#review-form");
     const deadline = f.querySelector("[name=deadline]").value ? Math.floor(new Date(f.querySelector("[name=deadline]").value).getTime() / 1000) : 0;
+    const rpmLimit = parseInt(f.querySelector("[name=rpm_limit]").value, 10) || 0;
     const body = {
       service: f.querySelector("[name=service]").value.trim(),
       model: f.querySelector("[name=model]").value.trim(),
       dify_base_url: f.querySelector("[name=dify_base_url]").value.trim(),
       dify_api_key: f.querySelector("[name=dify_api_key]").value.trim(),
       total_count: parseInt(f.querySelector("[name=total_count]").value, 10),
+      rpm_limit: rpmLimit,
       deadline,
       review_note: f.querySelector("[name=review_note]").value.trim(),
     };
@@ -2589,6 +2634,77 @@ function showReviewDialog(app) {
       toast(T('donationReviewApproved'));
       close();
       await renderAdminDonationReview();
+      await loadAdminDonations();
+    } catch (err) {
+      msg.innerHTML = `<span class="note err">${T('error').replace("{msg}", err.message)}</span>`;
+    }
+  };
+}
+
+async function showDonationEditDialog(d) {
+  // Remove existing dialog if any.
+  const old = $("#don-edit-dialog");
+  if (old) old.remove();
+
+  const dialog = document.createElement("dialog");
+  dialog.id = "don-edit-dialog";
+  document.body.appendChild(dialog);
+
+  dialog.innerHTML = `
+    <article>
+      <header><h3>${T('donationEditTitle').replace("{id}", String(d.id))}</h3></header>
+      <p class="muted" style="font-size:.85em">${T('donationReviewModifyHint')}</p>
+      <form id="don-edit-form">
+        <div style="display:grid;grid-template-columns:auto 1fr;gap:.5rem;align-items:end">
+          <label>${T('charityService')}<input name="service" value="${esc(d.service)}"></label>
+          <label>${T('charityModel')}<input name="model" value="${esc(d.model)}"></label>
+        </div>
+        <label>${T('charityBaseURL')}<input name="dify_base_url" value="${esc(d.dify_base_url)}"></label>
+        <label>${T('charityAPIKey')}<input name="dify_api_key" placeholder="${T('reviewKeepOriginalKey')}"></label>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.5rem">
+          <label>${T('charityDeadline')}<input name="deadline" type="datetime-local" value="${new Date(d.deadline * 1000).toISOString().slice(0, 16)}"></label>
+          <label>${T('charityTotalCount')}<input name="total_count" type="number" min="1" value="${esc(String(d.total_count))}"></label>
+          <label>${T('rpmLimitLabel')}<input name="rpm_limit" type="number" min="1" value="${esc(String(d.rpm_limit || 10))}" placeholder="${T('rpmLimitHint')}"></label>
+        </div>
+        <label>${T('charityNote')}<input name="note" value="${esc(d.note || "")}" placeholder="${T('charityNote')}"></label>
+        <div id="don-edit-msg" style="margin-bottom:.5rem"></div>
+        <footer style="display:flex;gap:.5rem;justify-content:flex-end">
+          <button type="button" id="don-edit-save-btn">${T('save')}</button>
+          <button type="button" id="don-edit-cancel-btn">${T('bulletinClose')}</button>
+        </footer>
+      </form>
+    </article>`;
+  dialog.showModal();
+
+  const close = () => { dialog.close(); dialog.remove(); };
+  $("#don-edit-cancel-btn").onclick = close;
+  dialog.addEventListener("click", (e) => { if (e.target === dialog) close(); });
+
+  $("#don-edit-save-btn").onclick = async () => {
+    const f = $("#don-edit-form");
+    const deadline = f.querySelector("[name=deadline]").value ? Math.floor(new Date(f.querySelector("[name=deadline]").value).getTime() / 1000) : 0;
+    const rpmLimit = parseInt(f.querySelector("[name=rpm_limit]").value, 10) || 0;
+    const totalCount = parseInt(f.querySelector("[name=total_count]").value, 10) || 0;
+    const body = {
+      service: f.querySelector("[name=service]").value.trim(),
+      model: f.querySelector("[name=model]").value.trim(),
+      dify_base_url: f.querySelector("[name=dify_base_url]").value.trim(),
+      dify_api_key: f.querySelector("[name=dify_api_key]").value.trim(),
+      note: f.querySelector("[name=note]").value.trim(),
+    };
+    if (deadline) body.deadline = deadline;
+    if (totalCount > 0) body.total_count = totalCount;
+    if (rpmLimit > 0) body.rpm_limit = rpmLimit;
+    const msg = $("#don-edit-msg");
+    msg.innerHTML = `<span class="muted">${T('loading')}</span>`;
+    try {
+      const resp = await api(`/api/admin/donations/${d.id}`, { method: "PATCH", body });
+      if (resp.validation && !resp.validation.compatible) {
+        toast(T('donationSavedInvalid').replace("{msg}", esc(resp.validation.message || "")), 3000);
+      } else {
+        toast(T('donationSavedValid'));
+      }
+      close();
       await loadAdminDonations();
     } catch (err) {
       msg.innerHTML = `<span class="note err">${T('error').replace("{msg}", err.message)}</span>`;
@@ -2921,6 +3037,13 @@ document.addEventListener("click", async (ev) => {
     } catch (err) {
       toast(T('error').replace("{msg}", err.message), 3000);
     }
+    return;
+  }
+  const editBtn = ev.target.closest(".don-edit");
+  if (editBtn) {
+    const id = parseInt(editBtn.dataset.id, 10);
+    const d = donPager.data.find((x) => x.id === id);
+    if (d) showDonationEditDialog(d);
     return;
   }
 });
