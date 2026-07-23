@@ -1862,16 +1862,16 @@ async function renderAdminDashboard() {
       <section class="card">
         <h3>${T('adminLogsTitle')}</h3>
         <div id="admin-logs-filter" style="margin-bottom:.8rem">
-          <label>${T('thUser')}
+          <label class="afl-user">${T('thUser')}
             <input id="alf-user" list="alf-user-list" placeholder="${T('adminLogsUserSearch')}" autocomplete="off">
             <datalist id="alf-user-list"></datalist>
           </label>
-          <label>${T('thService')}<select id="alf-service"><option value="">${T('adminLogsAllServices')}</option></select></label>
-          <label>${T('adminLogsModel')}<input id="alf-model" placeholder="[公益][general]x"></label>
-          <label>${T('thStatus')}<select id="alf-status"><option value="">${T('adminLogsAllStatus')}</option><option value="success">${T('adminLogsSuccess')}</option><option value="error">${T('adminLogsError')}</option></select></label>
-          <label>${T('adminLogsSince')}<input id="alf-since" type="datetime-local"></label>
-          <label>${T('adminLogsUntil')}<input id="alf-until" type="datetime-local"></label>
-          <button id="alf-query">${T('adminLogsQuery')}</button>
+          <label class="afl-svc">${T('thService')}<select id="alf-service"><option value="">${T('adminLogsAllServices')}</option></select></label>
+          <label class="afl-model">${T('adminLogsModel')}<input id="alf-model" placeholder="[公益][general]x"></label>
+          <label class="afl-status">${T('thStatus')}<select id="alf-status"><option value="">${T('adminLogsAllStatus')}</option><option value="success">${T('adminLogsSuccess')}</option><option value="error">${T('adminLogsError')}</option></select></label>
+          <label class="afl-since">${T('adminLogsSince')}<input id="alf-since" type="datetime-local"></label>
+          <label class="afl-until">${T('adminLogsUntil')}<input id="alf-until" type="datetime-local"></label>
+          <button id="alf-query" class="afl-btn">${T('adminLogsQuery')}</button>
         </div>
         <div class="table-wrap"><table><thead><tr><th>${T('thTime')}</th><th>${T('thUser')}</th><th>${T('thModel')}</th><th>${T('thService')}</th><th>${T('thDuration')}</th><th>${T('thStatus')}</th><th>${T('thHTTPStatus')}</th><th>${T('thErrorCode')}</th><th>${T('thErrorDetail')}</th><th>${T('thDonationSource')}</th></tr></thead><tbody id="alf-rows"></tbody></table></div>
         <div class="row-actions" id="alf-pager" style="margin-top:.5rem"></div>
@@ -2062,7 +2062,7 @@ function userRow(u) {
         <button class="secondary u-ban">${T('ban')}</button>
         <button class="secondary u-unban">${T('unban')}</button>
         <div class="dropdown-wrapper" style="position:relative;display:inline-block">
-          <button class="secondary dropdown-trigger" style="width:auto;margin:0;padding:.3rem .45rem">…</button>
+          <button class="secondary dropdown-trigger" style="width:auto;margin:0;padding:.4rem .5rem">…</button>
           <div class="dropdown-menu" style="display:none;position:absolute;right:0;top:100%;z-index:100;background:var(--pico-card-background-color);border:1px solid var(--pico-muted-border-color);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.2);min-width:130px;padding:.25rem 0">
             <button class="dropdown-item u-key" data-id="${u.id}" style="display:block;width:100%;text-align:left;background:none;border:none;border-radius:0;padding:.4rem .75rem;cursor:pointer;color:var(--pico-color);margin:0;font-size:.85rem">${T('resetUserKey')}</button>
             <button class="dropdown-item u-export" data-id="${u.id}" style="display:block;width:100%;text-align:left;background:none;border:none;border-radius:0;padding:.4rem .75rem;cursor:pointer;color:var(--pico-color);margin:0;font-size:.85rem">${T('adminExport')}</button>

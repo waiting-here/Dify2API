@@ -28,7 +28,7 @@
   table td, table th { vertical-align: middle; }
   .mono { font-family: ui-monospace, monospace; font-size: .9em; }
   .row-actions { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; }
-  .row-actions button, .row-actions a[role=button] { padding: .15rem .6rem; font-size: .85rem; margin: 0; white-space: nowrap; width: auto; }
+  .row-actions button, .row-actions a[role=button] { padding: .4rem .6rem; font-size: .85rem; margin: 0; white-space: nowrap; width: auto; }
   td .row-actions { flex-wrap: nowrap; }
   .muted { color: var(--pico-muted-color); }
   .note { padding: .6rem .9rem; border-radius: .4rem; margin: .5rem 0; }
@@ -61,12 +61,22 @@
   /* Key + data cards above user tabs: side-by-side on small screens. */
   .user-top-cards { display: flex; flex-wrap: wrap; gap: 1.25rem; }
   .user-top-cards > .card { flex: 1 1 16rem; margin-bottom: 1.25rem; }
-  /* Admin logs filter grid layout. */
-  #admin-logs-filter { display: grid; grid-template-columns: 2fr 1fr 1fr 0.7fr 1fr 1fr auto; gap: .75rem; align-items: center; }
+  /* Admin logs filter grid layout — 3 rows. */
+  #admin-logs-filter { display: grid; grid-template-columns: 1.5fr 1fr 1fr auto; gap: .5rem .75rem; align-items: center; }
   #admin-logs-filter label { margin-bottom: 0; }
   #admin-logs-filter input, #admin-logs-filter select { margin-bottom: 0; }
   #admin-logs-filter button { margin-bottom: 0; }
-  @media (max-width: 800px) { #admin-logs-filter { grid-template-columns: 1fr; } }
+  #admin-logs-filter .afl-user   { grid-column: 1; grid-row: 1; }
+  #admin-logs-filter .afl-status { grid-column: 2; grid-row: 1; }
+  #admin-logs-filter .afl-svc    { grid-column: 1; grid-row: 2; }
+  #admin-logs-filter .afl-model  { grid-column: 2; grid-row: 2; }
+  #admin-logs-filter .afl-since  { grid-column: 1; grid-row: 3; }
+  #admin-logs-filter .afl-until  { grid-column: 2; grid-row: 3; }
+  #admin-logs-filter .afl-btn    { grid-column: 4; grid-row: 1 / 4; align-self: center; }
+  @media (max-width: 800px) {
+    #admin-logs-filter { grid-template-columns: 1fr; }
+    #admin-logs-filter .afl-btn { grid-column: 1; grid-row: auto; }
+  }
 </style>
 </head>
 <body>
