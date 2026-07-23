@@ -20,7 +20,7 @@ type User struct {
 	BannedUntil int64  `json:"banned_until"` // unix ts; 0 = no timed ban; ban lapses automatically once past
 	AutoBanned  bool   `json:"auto_banned"`  // true when RPM-violation auto-ban
 	BanReason   string `json:"ban_reason"`   // admin-supplied reason (empty for auto-bans)
-	// Credits is the user's public-service credit balance (F2).
+	// Credits is the user's public-service credit balance.
 	Credits int `json:"credits"`
 	// LastCheckinDay is the normalised date of the last successful check-in
 	// (e.g. "2026-07-24"), used for once-per-day enforcement. Empty when
@@ -35,6 +35,8 @@ type User struct {
 	DonationCredit int `json:"donation_credit"`
 	// CharityEnabled is the user-side public-resource opt-in switch (§1.3).
 	CharityEnabled bool `json:"charity_enabled"`
+	// Lang is the user's preferred UI language ("zh" or "en"). Empty means unset.
+	Lang      string `json:"lang"`
 
 	CreatedAt int64
 	UpdatedAt int64
@@ -49,7 +51,7 @@ func IsBanned(u *User) bool {
 func scanUser(row interface{ Scan(...interface{}) error }) (*User, error) {
 	var u User
 	var isAdmin, disabled, autoBanned, charityEnabled int
-	err := row.Scan(&u.ID, &u.DiscordID, &u.Username, &u.Avatar, &isAdmin, &disabled, &u.BannedUntil, &autoBanned, &u.BanReason, &u.Credits, &u.LastCheckinDay, &u.RPMLimitA, &u.RPMLimitB, &u.RPMLimitC, &u.DonationCredit, &charityEnabled, &u.CreatedAt, &u.UpdatedAt)
+	err := row.Scan(&u.ID, &u.DiscordID, &u.Username, &u.Avatar, &isAdmin, &disabled, &u.BannedUntil, &autoBanned, &u.BanReason, &u.Credits, &u.LastCheckinDay, &u.RPMLimitA, &u.RPMLimitB, &u.RPMLimitC, &u.DonationCredit, &charityEnabled, &u.Lang, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +62,7 @@ func scanUser(row interface{ Scan(...interface{}) error }) (*User, error) {
 	return &u, nil
 }
 
-const userCols = "id, discord_id, username, avatar, is_admin, disabled, banned_until, auto_banned, ban_reason, credits, last_checkin_day, rpm_limit_a, rpm_limit_b, rpm_limit_c, donation_credit, charity_enabled, created_at, updated_at"
+const userCols = "id, discord_id, username, avatar, is_admin, disabled, banned_until, auto_banned, ban_reason, credits, last_checkin_day, rpm_limit_a, rpm_limit_b, rpm_limit_c, donation_credit, charity_enabled, lang, created_at, updated_at"
 
 // GetUserByID fetches a user by primary key. Returns (nil, nil) when absent.
 func (s *Store) GetUserByID(id int64) (*User, error) {
@@ -140,6 +142,12 @@ func (s *Store) AutoBanUser(id int64, until time.Time) error {
 // the auto-ban flag, and the ban reason.
 func (s *Store) UnbanUser(id int64) error {
 	_, err := s.db.Exec(`UPDATE users SET banned_until=0, disabled=0, auto_banned=0, ban_reason='', updated_at=? WHERE id=? AND is_admin=0`, time.Now().Unix(), id)
+	return err
+}
+
+// SetUserLang updates the user's preferred UI language.
+func (s *Store) SetUserLang(id int64, lang string) error {
+	_, err := s.db.Exec(`UPDATE users SET lang=?, updated_at=? WHERE id=?`, lang, time.Now().Unix(), id)
 	return err
 }
 

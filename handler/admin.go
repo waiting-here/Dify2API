@@ -181,12 +181,15 @@ func (g *Gateway) handleAdminGetSettings(w http.ResponseWriter, r *http.Request)
 		"rpm_ban_hours":          g.Store.GetSettingInt(db.SettingRPMBanHours, db.DefaultRPMBanHours),
 		"checkin_min":            g.Store.GetSettingInt(db.SettingCheckinMin, db.DefaultCheckinMin),
 		"checkin_max":            g.Store.GetSettingInt(db.SettingCheckinMax, db.DefaultCheckinMax),
-		"credits_cap":            g.Store.GetSettingInt(db.SettingCreditsCap, db.DefaultCreditsCap),
+		"credits_cap":            g.Store.GetSettingIntAllowZero(db.SettingCreditsCap, db.DefaultCreditsCap),
 		"credits_gate":           g.Store.GetSettingInt(db.SettingCreditsGate, db.DefaultCreditsGate),
 		"charity_cost":           g.Store.GetSettingInt(db.SettingCharityCost, db.DefaultCharityCost),
 		"donation_fail_limit":    g.Store.GetSettingInt(db.SettingDonationFailLimit, db.DefaultDonationFailLimit),
+		"donation_review_limit":  g.Store.GetSettingInt(db.SettingDonationReviewLimit, db.DefaultDonationReviewLimit),
 		"mailer_cool_minutes":    g.Store.GetSettingInt(db.SettingMailerCoolMinutes, db.DefaultMailerCoolMinutes),
-		"charity_global_enabled": g.Store.GetSettingString(db.SettingCharityGlobalEnabled, "") == "true",
+		"donation_enabled":       g.Store.GetSettingString(db.SettingDonationEnabled, "") == "true",
+		"charity_enabled":        g.Store.GetSettingString(db.SettingCharityEnabled, "") == "true",
+		"maintenance_mode":       g.Store.GetSettingString(db.SettingMaintenanceMode, "") == "true",
 	})
 }
 
@@ -210,8 +213,11 @@ func (g *Gateway) handleAdminPutSettings(w http.ResponseWriter, r *http.Request)
 		CreditsGate          *int   `json:"credits_gate"`
 		CharityCost          *int   `json:"charity_cost"`
 		DonationFailLimit    *int   `json:"donation_fail_limit"`
+		DonationReviewLimit  *int   `json:"donation_review_limit"`
 		MailerCoolMinutes    *int   `json:"mailer_cool_minutes"`
-		CharityGlobalEnabled *bool  `json:"charity_global_enabled"`
+		DonationEnabled      *bool  `json:"donation_enabled"`
+		CharityEnabled       *bool  `json:"charity_enabled"`
+		MaintenanceMode      *bool  `json:"maintenance_mode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
@@ -255,7 +261,6 @@ func (g *Gateway) handleAdminPutSettings(w http.ResponseWriter, r *http.Request)
 	}{
 		{req.CheckinMin, db.SettingCheckinMin},
 		{req.CheckinMax, db.SettingCheckinMax},
-		{req.CreditsCap, db.SettingCreditsCap},
 		{req.CharityCost, db.SettingCharityCost},
 		{req.DonationFailLimit, db.SettingDonationFailLimit},
 		{req.MailerCoolMinutes, db.SettingMailerCoolMinutes},
@@ -272,6 +277,17 @@ func (g *Gateway) handleAdminPutSettings(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
+	// credits_cap may be 0 (check-in disabled).
+	if req.CreditsCap != nil {
+		if *req.CreditsCap < 0 {
+			g.writeError(w, http.StatusBadRequest, "invalid_request", "credits_cap must be >= 0")
+			return
+		}
+		if err := g.Store.SetSetting(db.SettingCreditsCap, strconv.Itoa(*req.CreditsCap)); err != nil {
+			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+	}
 	// credits_gate may be 0 (default).
 	if req.CreditsGate != nil {
 		if *req.CreditsGate < 0 {
@@ -284,13 +300,49 @@ func (g *Gateway) handleAdminPutSettings(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	// Charity global switch (optional bool).
-	if req.CharityGlobalEnabled != nil {
+	// Donation review limit (optional, >= 0).
+	if req.DonationReviewLimit != nil {
+		if *req.DonationReviewLimit < 0 {
+			g.writeError(w, http.StatusBadRequest, "invalid_request", "donation_review_limit must be >= 0")
+			return
+		}
+		if err := g.Store.SetSetting(db.SettingDonationReviewLimit, strconv.Itoa(*req.DonationReviewLimit)); err != nil {
+			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+	}
+
+	// Donation enabled switch (optional bool).
+	if req.DonationEnabled != nil {
 		val := "false"
-		if *req.CharityGlobalEnabled {
+		if *req.DonationEnabled {
 			val = "true"
 		}
-		if err := g.Store.SetSetting(db.SettingCharityGlobalEnabled, val); err != nil {
+		if err := g.Store.SetSetting(db.SettingDonationEnabled, val); err != nil {
+			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+	}
+
+	// Charity enabled switch (optional bool).
+	if req.CharityEnabled != nil {
+		val := "false"
+		if *req.CharityEnabled {
+			val = "true"
+		}
+		if err := g.Store.SetSetting(db.SettingCharityEnabled, val); err != nil {
+			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+	}
+
+	// Maintenance mode switch (optional bool).
+	if req.MaintenanceMode != nil {
+		val := "false"
+		if *req.MaintenanceMode {
+			val = "true"
+		}
+		if err := g.Store.SetSetting(db.SettingMaintenanceMode, val); err != nil {
 			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
 			return
 		}

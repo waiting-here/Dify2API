@@ -26,6 +26,12 @@ const (
 	SettingCharityCost       = "charity_cost"        // credits deducted per charity success (default 10)
 	SettingDonationFailLimit = "donation_fail_limit" // consecutive failures before auto-inactive (default 10)
 	SettingMailerCoolMinutes = "mailer_cool_minutes" // email aggregation window in minutes (default 10)
+	// alpha.4 — split charity switches (donation / charity routing).
+	SettingDonationEnabled     = "donation_enabled"      // allow user donation submissions (default false)
+	SettingCharityEnabled      = "charity_enabled"       // enable charity routing (default false)
+	SettingDonationReviewLimit = "donation_review_limit" // pending application cap per user (default 3)
+	// alpha.4 — maintenance mode.
+	SettingMaintenanceMode = "maintenance_mode" // site-wide maintenance toggle (default false)
 )
 
 // Global defaults for the three-class RPM system (alpha.3 F4).
@@ -46,10 +52,11 @@ const (
 
 // Global defaults for tunable thresholds.
 const (
-	DefaultCreditsGate       = 0  // charity gate: credits must be > this
-	DefaultCharityCost       = 10 // credits deducted per charity success
-	DefaultDonationFailLimit = 10 // consecutive failures before auto-inactive
-	DefaultMailerCoolMinutes = 10 // email aggregation window in minutes
+	DefaultCreditsGate         = 0  // charity gate: credits must be > this
+	DefaultCharityCost         = 10 // credits deducted per charity success
+	DefaultDonationFailLimit   = 10 // consecutive failures before auto-inactive
+	DefaultDonationReviewLimit = 3  // pending donation application cap per user
+	DefaultMailerCoolMinutes   = 10 // email aggregation window in minutes
 )
 
 // GetSettingInt returns the setting parsed as a positive integer, falling
@@ -61,6 +68,20 @@ func (s *Store) GetSettingInt(key string, fallback int) int {
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 1 {
+		return fallback
+	}
+	return n
+}
+
+// GetSettingIntAllowZero is like GetSettingInt but permits 0 as a valid
+// value (used for credits_cap, where 0 means "check-in disabled").
+func (s *Store) GetSettingIntAllowZero(key string, fallback int) int {
+	v, err := s.GetSetting(key)
+	if err != nil || v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
 		return fallback
 	}
 	return n

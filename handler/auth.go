@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -150,7 +151,35 @@ func (g *Gateway) handleMe(w http.ResponseWriter, r *http.Request) {
 		"username": u.Username,
 		"avatar":   u.Avatar,
 		"is_admin": u.IsAdmin,
+		"credits":  u.Credits,
+		"lang":     u.Lang,
 	})
+}
+
+// PUT /api/me/lang — updates the user's preferred UI language.
+func (g *Gateway) handleSetLang(w http.ResponseWriter, r *http.Request) {
+	u := g.currentUser(r)
+	if u == nil {
+		g.writeError(w, http.StatusUnauthorized, "unauthorized", "not logged in")
+		return
+	}
+	var req struct {
+		Lang string `json:"lang"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	if req.Lang != "zh" && req.Lang != "en" {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "lang must be 'zh' or 'en'")
+		return
+	}
+	if err := g.Store.SetUserLang(u.ID, req.Lang); err != nil {
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "lang": req.Lang})
 }
 
 // --- GET /auth/discord/login ---
@@ -257,6 +286,23 @@ func (g *Gateway) handleDiscordCallback(w http.ResponseWriter, r *http.Request) 
 	if user.Username != discordName || user.Avatar != discordAvatar {
 		if err := g.Store.UpdateUserProfile(user.ID, discordName, discordAvatar); err != nil {
 			log.Printf("[WARN] refresh user profile (user %d): %v", user.ID, err)
+		}
+	}
+
+	// On first login (lang is empty), auto-detect language from the browser's
+	// Accept-Language header.  Fall back to "en" when unsupported or absent.
+	if user.Lang == "" {
+		detected := "en"
+		if al := r.Header.Get("Accept-Language"); al != "" {
+			if strings.HasPrefix(strings.ToLower(al), "zh") {
+				detected = "zh"
+			}
+		}
+		if err := g.Store.SetUserLang(user.ID, detected); err != nil {
+			log.Printf("[WARN] set initial lang for user %d: %v", user.ID, err)
+		} else {
+			user.Lang = detected
+			log.Printf("[AUTH] auto-detected lang=%s for user %d", detected, user.ID)
 		}
 	}
 

@@ -506,7 +506,7 @@ func TestCharityRouting_Success(t *testing.T) {
 	}
 	store.SetUserCharityEnabled(u.ID, true)
 	store.SetUserCredits(u.ID, 20)
-	store.SetSetting(db.SettingCharityGlobalEnabled, "true")
+	store.SetSetting(db.SettingCharityEnabled, "true")
 
 	// Create a source user (donor) and a donation entry.
 	donor, err := store.CreateUser("501", "donor", "")
@@ -609,7 +609,7 @@ func TestCharityRouting_InsufficientCredits(t *testing.T) {
 	store.SetUserCredits(u.ID, 0) // No credits
 
 	// Enable global charity
-	store.SetSetting(db.SettingCharityGlobalEnabled, "true")
+	store.SetSetting(db.SettingCharityEnabled, "true")
 
 	model := "[公益][general]x"
 	rec := chatRequest(gw, key, fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}]}`, model))
@@ -640,7 +640,7 @@ func TestCharityRouting_UserSwitchOff(t *testing.T) {
 	}
 	// charity_enabled is false by default — do NOT enable it.
 	store.SetUserCredits(u.ID, 10)
-	store.SetSetting(db.SettingCharityGlobalEnabled, "true")
+	store.SetSetting(db.SettingCharityEnabled, "true")
 
 	model := "[公益][general]x"
 	rec := chatRequest(gw, key, fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}]}`, model))
@@ -666,7 +666,7 @@ func TestCharityRouting_NoDonationsAvailable(t *testing.T) {
 	}
 	store.SetUserCharityEnabled(u.ID, true)
 	store.SetUserCredits(u.ID, 10)
-	store.SetSetting(db.SettingCharityGlobalEnabled, "true")
+	store.SetSetting(db.SettingCharityEnabled, "true")
 
 	// No donations exist, so no routable ones.
 	model := "[公益][general]x"
@@ -807,5 +807,382 @@ func TestDonationAdminLogs(t *testing.T) {
 	}
 	if !found {
 		t.Error("charity log entry with donation_id=42 not found")
+	}
+}
+
+// --- B1: User self-service donation applications ---
+
+func appUserCookie(t *testing.T, gw *Gateway, store *db.Store) *http.Cookie {
+	t.Helper()
+	u, err := store.CreateUser("200", "testuser", "avatar")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	// Create a session directly.
+	tok, _, err := store.CreateSession(u.ID)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	return &http.Cookie{Name: auth.SessionCookieName, Value: tok}
+}
+
+// TestCreateDonationApplication_Submit submits a valid application and verifies it.
+func TestCreateDonationApplication_Submit(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	// Enable donation system.
+	store.SetSetting(db.SettingDonationEnabled, "true")
+	cookie := appUserCookie(t, gw, store)
+
+	deadline := time.Now().Add(48 * time.Hour).Unix()
+	body := map[string]interface{}{
+		"service":       "general",
+		"model":         "claude-opus-4-6",
+		"dify_base_url": "https://dify.example.com/v1",
+		"dify_api_key":  "app-test-key-123",
+		"deadline":      deadline,
+		"total_count":   100,
+		"note":          "测试捐赠申请",
+	}
+	rec := donationRequest(gw, cookie, "POST", "/api/me/donations", body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		OK          bool                   `json:"ok"`
+		Application map[string]interface{} `json:"application"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if !resp.OK {
+		t.Fatal("expected ok=true")
+	}
+	a := resp.Application
+	if a["service"] != "general" {
+		t.Errorf("service = %v", a["service"])
+	}
+	if a["model"] != "claude-opus-4-6" {
+		t.Errorf("model = %v", a["model"])
+	}
+	if a["status"] != "pending" {
+		t.Errorf("status = %v", a["status"])
+	}
+	if a["has_key"] != true {
+		t.Errorf("has_key = %v", a["has_key"])
+	}
+	if a["total_count"] != float64(100) {
+		t.Errorf("total_count = %v", a["total_count"])
+	}
+}
+
+// TestCreateDonationApplication_DisabledGate rejects submission when donation_enabled is off.
+func TestCreateDonationApplication_DisabledGate(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	// donation_enabled defaults to false.
+	cookie := appUserCookie(t, gw, store)
+
+	deadline := time.Now().Add(48 * time.Hour).Unix()
+	body := map[string]interface{}{
+		"service":       "general",
+		"model":         "claude-opus-4-6",
+		"dify_base_url": "https://dify.example.com/v1",
+		"dify_api_key":  "app-test-key",
+		"deadline":      deadline,
+		"total_count":   100,
+	}
+	rec := donationRequest(gw, cookie, "POST", "/api/me/donations", body)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "donation_disabled") {
+		t.Errorf("want donation_disabled, got: %s", rec.Body.String())
+	}
+}
+
+// TestCreateDonationApplication_PendingLimit rejects when user already has N pending.
+func TestCreateDonationApplication_PendingLimit(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	store.SetSetting(db.SettingDonationEnabled, "true")
+	store.SetSetting(db.SettingDonationReviewLimit, "1") // cap at 1 pending
+	cookie := appUserCookie(t, gw, store)
+
+	deadline := time.Now().Add(48 * time.Hour).Unix()
+	body := map[string]interface{}{
+		"service":       "general",
+		"model":         "m1",
+		"dify_base_url": "https://dify.example.com/v1",
+		"dify_api_key":  "app-test-key-1",
+		"deadline":      deadline,
+		"total_count":   100,
+	}
+
+	// First submission should succeed.
+	rec := donationRequest(gw, cookie, "POST", "/api/me/donations", body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("first submit: status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Second submission should be rejected.
+	body2 := map[string]interface{}{
+		"service":       "general",
+		"model":         "m2",
+		"dify_base_url": "https://dify.example.com/v1",
+		"dify_api_key":  "app-test-key-2",
+		"deadline":      deadline,
+		"total_count":   200,
+	}
+	rec2 := donationRequest(gw, cookie, "POST", "/api/me/donations", body2)
+	if rec2.Code != http.StatusBadRequest {
+		t.Fatalf("second submit: status = %d, want 400; body: %s", rec2.Code, rec2.Body.String())
+	}
+	if !strings.Contains(rec2.Body.String(), "too_many_pending") {
+		t.Errorf("want too_many_pending, got: %s", rec2.Body.String())
+	}
+}
+
+// TestCreateDonationApplication_Validation tests various validation rejections.
+func TestCreateDonationApplication_Validation(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	store.SetSetting(db.SettingDonationEnabled, "true")
+	cookie := appUserCookie(t, gw, store)
+
+	deadline := time.Now().Add(48 * time.Hour).Unix()
+
+	tests := []struct {
+		name string
+		body map[string]interface{}
+		want int
+	}{
+		{
+			"brackets in model",
+			map[string]interface{}{"service": "general", "model": "[bad]x", "dify_base_url": "https://dify.example.com/v1", "dify_api_key": "k", "deadline": deadline, "total_count": 100},
+			http.StatusBadRequest,
+		},
+		{
+			"invalid service",
+			map[string]interface{}{"service": "nonexistent", "model": "x", "dify_base_url": "https://dify.example.com/v1", "dify_api_key": "k", "deadline": deadline, "total_count": 100},
+			http.StatusBadRequest,
+		},
+		{
+			"past deadline",
+			map[string]interface{}{"service": "general", "model": "x", "dify_base_url": "https://dify.example.com/v1", "dify_api_key": "k", "deadline": 1, "total_count": 100},
+			http.StatusBadRequest,
+		},
+		{
+			"zero total_count",
+			map[string]interface{}{"service": "general", "model": "x", "dify_base_url": "https://dify.example.com/v1", "dify_api_key": "k", "deadline": deadline, "total_count": 0},
+			http.StatusBadRequest,
+		},
+		{
+			"empty api key",
+			map[string]interface{}{"service": "general", "model": "x", "dify_base_url": "https://dify.example.com/v1", "dify_api_key": "", "deadline": deadline, "total_count": 100},
+			http.StatusBadRequest,
+		},
+		{
+			"invalid base url",
+			map[string]interface{}{"service": "general", "model": "x", "dify_base_url": "ftp://bad", "dify_api_key": "k", "deadline": deadline, "total_count": 100},
+			http.StatusBadRequest,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := donationRequest(gw, cookie, "POST", "/api/me/donations", tc.body)
+			if rec.Code != tc.want {
+				t.Errorf("status = %d, want %d; body: %s", rec.Code, tc.want, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestListMyApplications returns the user's own applications.
+func TestListMyApplications(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	store.SetSetting(db.SettingDonationEnabled, "true")
+	cookie := appUserCookie(t, gw, store)
+
+	// Submit two applications.
+	deadline := time.Now().Add(48 * time.Hour).Unix()
+	for i := 0; i < 2; i++ {
+		rec := donationRequest(gw, cookie, "POST", "/api/me/donations", map[string]interface{}{
+			"service":       "general",
+			"model":         fmt.Sprintf("m%d", i),
+			"dify_base_url": "https://dify.example.com/v1",
+			"dify_api_key":  fmt.Sprintf("key%d", i),
+			"deadline":      deadline,
+			"total_count":   100,
+		})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("submit %d: status = %d", i, rec.Code)
+		}
+	}
+
+	// List.
+	rec := donationRequest(gw, cookie, "GET", "/api/me/donations", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list: status = %d", rec.Code)
+	}
+
+	var resp struct {
+		Applications []map[string]interface{} `json:"applications"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if len(resp.Applications) != 2 {
+		t.Errorf("want 2 applications, got %d", len(resp.Applications))
+	}
+	for _, a := range resp.Applications {
+		if a["status"] != "pending" {
+			t.Errorf("status = %v", a["status"])
+		}
+		// API key must NOT be exposed.
+		if _, ok := a["dify_api_key"]; ok {
+			t.Error("dify_api_key should not be exposed in list")
+		}
+	}
+}
+
+// TestAdminApproveRejectApplication tests the full review flow.
+func TestAdminApproveRejectApplication(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	store.SetSetting(db.SettingDonationEnabled, "true")
+	userC := appUserCookie(t, gw, store)
+	adminC := adminCookie(t, gw)
+
+	// User submits an application.
+	deadline := time.Now().Add(48 * time.Hour).Unix()
+	rec := donationRequest(gw, userC, "POST", "/api/me/donations", map[string]interface{}{
+		"service":       "general",
+		"model":         "claude-opus-4-6",
+		"dify_base_url": "https://dify.example.com/v1",
+		"dify_api_key":  "app-test-key",
+		"deadline":      deadline,
+		"total_count":   100,
+		"note":          "test",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("submit: status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var submitResp struct {
+		Application map[string]interface{} `json:"application"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &submitResp)
+	appID := int64(submitResp.Application["id"].(float64))
+
+	// Admin lists pending.
+	rec2 := donationRequest(gw, adminC, "GET", "/api/admin/donations/pending", nil)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("list pending: status = %d", rec2.Code)
+	}
+	var pendingResp struct {
+		Applications []map[string]interface{} `json:"applications"`
+	}
+	json.Unmarshal(rec2.Body.Bytes(), &pendingResp)
+	if len(pendingResp.Applications) != 1 {
+		t.Fatalf("want 1 pending, got %d", len(pendingResp.Applications))
+	}
+
+	// Admin approves with modified fields.
+	rec3 := donationRequest(gw, adminC, "POST", fmt.Sprintf("/api/admin/donations/%d/approve", appID), map[string]interface{}{
+		"dify_api_key": "app-modified-key",
+		"review_note":  "密钥已更新，审核通过",
+	})
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("approve: status = %d, body: %s", rec3.Code, rec3.Body.String())
+	}
+	var apprResp struct {
+		OK          bool                   `json:"ok"`
+		Application map[string]interface{} `json:"application"`
+		Donation    map[string]interface{} `json:"donation"`
+	}
+	json.Unmarshal(rec3.Body.Bytes(), &apprResp)
+	if !apprResp.OK {
+		t.Fatal("expected ok=true")
+	}
+	if apprResp.Application["status"] != "approved" {
+		t.Errorf("application status = %v", apprResp.Application["status"])
+	}
+	if apprResp.Donation["status"] != "inactive" {
+		t.Errorf("donation status = %v (want inactive)", apprResp.Donation["status"])
+	}
+	if apprResp.Donation["source_user_id"] == nil {
+		t.Error("donation should have source_user_id set to applicant")
+	}
+
+	// Pending list should be empty now.
+	rec4 := donationRequest(gw, adminC, "GET", "/api/admin/donations/pending", nil)
+	json.Unmarshal(rec4.Body.Bytes(), &pendingResp)
+	if len(pendingResp.Applications) != 0 {
+		t.Errorf("want 0 pending, got %d", len(pendingResp.Applications))
+	}
+
+	// Submit another application and reject it.
+	rec5 := donationRequest(gw, userC, "POST", "/api/me/donations", map[string]interface{}{
+		"service":       "general",
+		"model":         "claude-haiku",
+		"dify_base_url": "https://dify.example.com/v1",
+		"dify_api_key":  "app-key-2",
+		"deadline":      deadline,
+		"total_count":   50,
+	})
+	var sub2 struct {
+		Application map[string]interface{} `json:"application"`
+	}
+	json.Unmarshal(rec5.Body.Bytes(), &sub2)
+	appID2 := int64(sub2.Application["id"].(float64))
+
+	rec6 := donationRequest(gw, adminC, "POST", fmt.Sprintf("/api/admin/donations/%d/reject", appID2), map[string]interface{}{
+		"review_note": "模型名不符合规范",
+	})
+	if rec6.Code != http.StatusOK {
+		t.Fatalf("reject: status = %d, body: %s", rec6.Code, rec6.Body.String())
+	}
+	var rejResp struct {
+		Application map[string]interface{} `json:"application"`
+	}
+	json.Unmarshal(rec6.Body.Bytes(), &rejResp)
+	if rejResp.Application["status"] != "rejected" {
+		t.Errorf("status = %v", rejResp.Application["status"])
+	}
+	if rejResp.Application["review_note"] != "模型名不符合规范" {
+		t.Errorf("review_note = %v", rejResp.Application["review_note"])
+	}
+}
+
+// TestDonationAppAdminAccess verifies that user endpoints are admin-protected.
+func TestDonationAppAdminAccess(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	cookie := appUserCookie(t, gw, store)
+
+	// User cannot access admin pending list.
+	rec := donationRequest(gw, cookie, "GET", "/api/admin/donations/pending", nil)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("user access pending: status = %d, want 403", rec.Code)
+	}
+
+	// User cannot approve.
+	rec2 := donationRequest(gw, cookie, "POST", "/api/admin/donations/1/approve", map[string]interface{}{})
+	if rec2.Code != http.StatusForbidden {
+		t.Errorf("user access approve: status = %d, want 403", rec2.Code)
+	}
+
+	// User cannot reject.
+	rec3 := donationRequest(gw, cookie, "POST", "/api/admin/donations/1/reject", map[string]interface{}{})
+	if rec3.Code != http.StatusForbidden {
+		t.Errorf("user access reject: status = %d, want 403", rec3.Code)
+	}
+
+	// Unauthenticated cannot submit.
+	rec4 := donationRequest(gw, nil, "POST", "/api/me/donations", map[string]interface{}{})
+	if rec4.Code != http.StatusUnauthorized {
+		t.Errorf("anonymous submit: status = %d, want 401", rec4.Code)
+	}
+
+	// Unauthenticated cannot list.
+	rec5 := donationRequest(gw, nil, "GET", "/api/me/donations", nil)
+	if rec5.Code != http.StatusUnauthorized {
+		t.Errorf("anonymous list: status = %d, want 401", rec5.Code)
 	}
 }

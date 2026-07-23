@@ -2,6 +2,7 @@
 .env
 admin.env
 *.backup
+i18n.json
 
 # User-supplied site assets (not part of the open-source repo)
 *.ico
@@ -41,4 +42,3 @@ dify2api.exe
 *.db-shm
 *.db-wal
 *.key
-

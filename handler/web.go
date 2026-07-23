@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"dify2api/config"
 	"dify2api/db"
 
 	"dify2api/web"
@@ -50,17 +51,27 @@ func (g *Gateway) registerWebRoutes(mux *http.ServeMux) {
 
 	// Public site info for the SPA's host-mode detection, branding, and legal pages.
 	mux.HandleFunc("GET /api/site-info", func(w http.ResponseWriter, r *http.Request) {
-		charityGlobal := g.Store.GetSettingString(db.SettingCharityGlobalEnabled, "") == "true"
+		donationEnabled := g.Store.GetSettingString(db.SettingDonationEnabled, "") == "true"
+		charityEnabled := g.Store.GetSettingString(db.SettingCharityEnabled, "") == "true"
+		maintenanceMode := g.Store.GetSettingString(db.SettingMaintenanceMode, "") == "true"
+		donationReviewLimit := g.Store.GetSettingInt(db.SettingDonationReviewLimit, db.DefaultDonationReviewLimit)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"site_host":              g.Config.Admin.SiteHost,
-			"admin_host":             g.Config.Admin.AdminHost,
-			"site_name":              g.Config.Admin.SiteName,
-			"report_email":           g.Config.Admin.ReportEmail,
-			"site_base_url":          g.Config.Admin.SiteBaseURL,
-			"charity_global_enabled": charityGlobal,
-			"credits_name":           g.Config.CreditsName,
-			"credits_logo_text":      g.Config.CreditsLogoText,
+			"site_host":             g.Config.Admin.SiteHost,
+			"admin_host":            g.Config.Admin.AdminHost,
+			"site_name":             g.Config.Admin.SiteName,
+			"site_name_zh":          g.Config.I18N("site_name", "zh", g.Config.Admin.SiteName),
+			"site_name_en":          g.Config.I18N("site_name", "en", g.Config.Admin.SiteName),
+			"report_email":          g.Config.Admin.ReportEmail,
+			"site_base_url":         g.Config.Admin.SiteBaseURL,
+			"donation_enabled":      donationEnabled,
+			"charity_enabled":       charityEnabled,
+			"maintenance_mode":      maintenanceMode,
+			"donation_review_limit": donationReviewLimit,
+			"credits_name":          g.Config.I18N("credits_name", "zh", config.DefaultCreditsName),
+			"credits_name_zh":       g.Config.I18N("credits_name", "zh", config.DefaultCreditsName),
+			"credits_name_en":       g.Config.I18N("credits_name", "en", config.DefaultCreditsName),
+			"credits_logo_text":     g.Config.CreditsLogoText,
 		})
 	})
 
@@ -95,7 +106,8 @@ func (g *Gateway) serveCreditsLogo(w http.ResponseWriter) {
 	}
 	data, err := os.ReadFile(p)
 	if err != nil {
-		w.Header().Set("Cache-Control", "public, max-age=300")
+		// Short cache to avoid browsers caching a transient error.
+		w.Header().Set("Cache-Control", "public, max-age=30")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}

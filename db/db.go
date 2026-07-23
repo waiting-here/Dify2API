@@ -23,15 +23,25 @@ import (
 // schema is applied idempotently on every Open.
 const schema = `
 CREATE TABLE IF NOT EXISTS users (
-	id          INTEGER PRIMARY KEY AUTOINCREMENT,
-	discord_id  TEXT NOT NULL UNIQUE,
-	username    TEXT NOT NULL DEFAULT '',
-	avatar      TEXT NOT NULL DEFAULT '',
-	is_admin    INTEGER NOT NULL DEFAULT 0,
-	disabled    INTEGER NOT NULL DEFAULT 0,
-	banned_until INTEGER NOT NULL DEFAULT 0,
-	created_at  INTEGER NOT NULL,
-	updated_at  INTEGER NOT NULL
+	id              INTEGER PRIMARY KEY AUTOINCREMENT,
+	discord_id      TEXT NOT NULL UNIQUE,
+	username        TEXT NOT NULL DEFAULT '',
+	avatar          TEXT NOT NULL DEFAULT '',
+	is_admin        INTEGER NOT NULL DEFAULT 0,
+	disabled        INTEGER NOT NULL DEFAULT 0,
+	banned_until    INTEGER NOT NULL DEFAULT 0,
+	auto_banned     INTEGER NOT NULL DEFAULT 0,
+	ban_reason      TEXT NOT NULL DEFAULT '',
+	credits         INTEGER NOT NULL DEFAULT 0,
+	last_checkin_day TEXT NOT NULL DEFAULT '',
+	rpm_limit_a     INTEGER,
+	rpm_limit_b     INTEGER,
+	rpm_limit_c     INTEGER,
+	donation_credit INTEGER NOT NULL DEFAULT 0,
+	charity_enabled INTEGER NOT NULL DEFAULT 0,
+	lang            TEXT NOT NULL DEFAULT '',
+	created_at      INTEGER NOT NULL,
+	updated_at      INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -116,6 +126,39 @@ CREATE TABLE IF NOT EXISTS admin_alerts (
 	created_at     INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_admin_alerts_created ON admin_alerts(created_at);
+
+CREATE TABLE IF NOT EXISTS bulletins (
+	id          INTEGER PRIMARY KEY AUTOINCREMENT,
+	title       TEXT NOT NULL DEFAULT '',
+	content     TEXT NOT NULL DEFAULT '',
+	type        TEXT NOT NULL DEFAULT 'info',
+	sort_order  INTEGER NOT NULL DEFAULT 0,
+	closable    INTEGER NOT NULL DEFAULT 1,
+	created_at  INTEGER NOT NULL,
+	expires_at  INTEGER,
+	is_system   INTEGER NOT NULL DEFAULT 0,
+	system_key  TEXT,
+	lang        TEXT NOT NULL DEFAULT 'zh'
+);
+
+CREATE TABLE IF NOT EXISTS donation_applications (
+	id                INTEGER PRIMARY KEY AUTOINCREMENT,
+	user_id           INTEGER NOT NULL REFERENCES users(id),
+	service           TEXT NOT NULL,
+	model             TEXT NOT NULL,
+	dify_base_url     TEXT NOT NULL,
+	dify_api_key_enc  TEXT NOT NULL,
+	total_count       INTEGER NOT NULL,
+	deadline          INTEGER NOT NULL,
+	note              TEXT NOT NULL DEFAULT '',
+	status            TEXT NOT NULL DEFAULT 'pending',
+	reviewer_id       INTEGER,
+	review_note       TEXT NOT NULL DEFAULT '',
+	donation_id       INTEGER,
+	created_at        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_da_user ON donation_applications(user_id);
+CREATE INDEX IF NOT EXISTS idx_da_status ON donation_applications(status);
 `
 
 // Store wraps the SQLite handle and the master encryption key.
@@ -174,6 +217,10 @@ func Open(path, keyPath string) (*Store, error) {
 		// alpha.3 — admin log detail (HTTP status + error message).
 		`ALTER TABLE request_logs ADD COLUMN http_status INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE request_logs ADD COLUMN error_detail TEXT NOT NULL DEFAULT ''`,
+		// alpha.4 — bulletins table.
+		`ALTER TABLE bulletins ADD COLUMN lang TEXT NOT NULL DEFAULT 'zh'`,
+		// alpha.4 — donation_applications table.
+		`ALTER TABLE donation_applications ADD COLUMN note TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := sqldb.Exec(m); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			sqldb.Close()

@@ -16,11 +16,12 @@ import (
 // the administrator and belong to the public-resource pool, not to any
 // individual user's personal data.
 type ExportBundle struct {
-	ExportedAt time.Time      `json:"exported_at"`
-	User       ExportUser     `json:"user"`
-	Configs    []ExportConfig `json:"app_configs"`
-	CallerKey  string         `json:"caller_key"`
-	Logs       []ExportLog    `json:"request_logs"`
+	ExportedAt           time.Time                `json:"exported_at"`
+	User                 ExportUser               `json:"user"`
+	Configs              []ExportConfig           `json:"app_configs"`
+	CallerKey            string                   `json:"caller_key"`
+	Logs                 []ExportLog              `json:"request_logs"`
+	DonationApplications []ExportDonationApp      `json:"donation_applications"`
 }
 
 // ExportUser mirrors the users row without internal sentinel fields.
@@ -55,6 +56,22 @@ type ExportConfig struct {
 	Enabled     bool   `json:"enabled"`
 	CreatedAt   int64  `json:"created_at"`
 	UpdatedAt   int64  `json:"updated_at"`
+}
+
+// ExportDonationApp mirrors one donation_applications row with the Dify API key decrypted.
+type ExportDonationApp struct {
+	ID          int64  `json:"id"`
+	Service     string `json:"service"`
+	Model       string `json:"model"`
+	DifyBaseURL string `json:"dify_base_url"`
+	DifyAPIKey  string `json:"dify_api_key"` // decrypted
+	TotalCount  int    `json:"total_count"`
+	Deadline    int64  `json:"deadline"`
+	Note        string `json:"note"`
+	Status      string `json:"status"`
+	ReviewNote  string `json:"review_note"`
+	DonationID  *int64 `json:"donation_id"`
+	CreatedAt   int64  `json:"created_at"`
 }
 
 // ExportLog mirrors one request_log entry.
@@ -144,6 +161,36 @@ func (s *Store) ExportUserData(userID int64) (*ExportBundle, error) {
 			Status:    l.Status,
 			ErrorCode: l.ErrorCode,
 		})
+	}
+
+	// Donation applications with decrypted API keys.
+	apps, err := s.ListApplicationsByUser(userID)
+	if err != nil {
+		return nil, err
+	}
+	bundle.DonationApplications = make([]ExportDonationApp, 0, len(apps))
+	for _, a := range apps {
+		key, decErr := s.Decrypt(a.DifyAPIKeyEnc)
+		if decErr != nil {
+			key = "(decrypt failed: " + decErr.Error() + ")"
+		}
+		expApp := ExportDonationApp{
+			ID:          a.ID,
+			Service:     a.Service,
+			Model:       a.Model,
+			DifyBaseURL: a.DifyBaseURL,
+			DifyAPIKey:  key,
+			TotalCount:  a.TotalCount,
+			Deadline:    a.Deadline,
+			Note:        a.Note,
+			Status:      a.Status,
+			ReviewNote:  a.ReviewNote,
+			CreatedAt:   a.CreatedAt,
+		}
+		if a.DonationID.Valid {
+			expApp.DonationID = &a.DonationID.Int64
+		}
+		bundle.DonationApplications = append(bundle.DonationApplications, expApp)
 	}
 
 	return bundle, nil

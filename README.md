@@ -72,6 +72,7 @@ SITE_BASE_URL=https://dify2api.example.com
 # 可选（全部有默认值）
 ADMIN_HOST=admin.dify2api.example.com
 SITE_NAME=Dify2API             # 网站对外显示的名称
+I18N_FILE=i18n.json           # 多语言字典文件（可选，为站点名称/积分名称等提供多语言版本）
 REPORT_EMAIL=report@example.com  # DMCA/CSAM 举报联络邮箱（展示于服务协议与隐私政策页）
 FAVICON_PATH=                  # 浏览器标签页图标文件路径（可选,支持 .ico/.png/.svg/.webp）
 LISTEN_ADDR=localhost:10086
@@ -184,7 +185,18 @@ result_limit: 4000               # 超限结果写临时文件，仅回路径+�
   此后每 24 小时自动清理 30 天以上的日志与过期会话（启动日志含
   `[CLEANUP]` 行）；用户台自查；管理台“请求日志”面板可按用户（关键字
   搜索）/服务/状态/时间范围筛选全部用户的请求记录，支持分页；
-- **调试模式**：`-debug` 拦截请求落盘（`request.json` + `dify_inputs.json`）不转发。
+- **调试模式**：`-debug` 拦截请求落盘（`request.json` + `dify_inputs.json`）不转发；
+  普通用户可在控制台"调试"标签页自主开启调试（SSE 流式推送至浏览器，
+  服务端零磁盘留存，支持演习模式，需确认免责声明）。
+- **公告栏**：管理员可发布/编辑/删除公告（HTML 正文），用户端以卡片列表展示，
+  点击弹出详情；系统公告（签到未启用/捐赠未启用/公益未启用）自动生成。
+- **维护模式**：管理员在设置页开启后，用户端显示友好维护页面（503），
+  管理员端不受影响。
+- **用户自助捐赠**：用户可提交 Dify App 凭据申请加入公益资源池，管理员审核
+  （可修改字段）后入池；用户可查看自己捐赠的审核状态。
+- **多语言**：前端支持中文/英文切换，首次登录自动检测浏览器语言；
+  语言偏好保存至服务端（跨设备同步）。站点名称、积分名称等可通过
+  `i18n.json` 字典文件提供多语言版本。
 - **数据权利**：用户可在网页控制台自助导出全部个人数据（JSON 下载，含解密凭据），
   或自助删除账号（二次确认，清空全部记录）；管理员可从后台为单个用户导出数据。
 - **法律页面**：内嵌 `/privacy`（隐私政策）和 `/terms`（服务协议，含 DMCA/NCMEC 条款）。
@@ -254,10 +266,14 @@ SMTP_TLS=implicit
 | 400 | `invalid_message_sequence` | 消息布局不符该服务契约 |
 | 400 | `invalid_request` | 请求体/参数非法（含未注册服务名） |
 | 401 | `unauthorized` | 调用方密钥缺失/无效，或网页会话失效 |
+| 400 | `checkin_disabled` | 签到系统已被管理员关闭（积分上限设为 0） |
+| 400 | `too_many_pending` | 待审核捐赠申请已达上限 |
+| 400 | `already_checked_in` | 今日已签到 |
 | 403 | `forbidden` | 管理接口非管理员 |
 | 403 | `rpm_exceeded` | 超出三类 RPM 任一上限（文案含类别、阈值与封禁提示） |
 | 403 | `insufficient_credits` | 调用公益模型时积分不足（含可配置积分名） |
 | 403 | `charity_disabled` | 全局公益开关已被管理员关闭 |
+| 403 | `donation_disabled` | 捐赠系统已被管理员关闭 |
 | 403 | `login_locked` | 管理员登录失败过多，锁定中 |
 | 403 | `login_failed` | OAuth 登录失败（注册条件/封禁等） |
 | 404 | `model_not_found` | 模型未配置或已停用 |
@@ -269,6 +285,7 @@ SMTP_TLS=implicit
 | 429 | `server_busy` | 全局并发已满（附 Retry-After） |
 | 429 | `rate_limited` | 源 IP 被限流（Web 接口超频或无效密钥过多，附 Retry-After） |
 | 503 | `service_unavailable` | 当前该公益模型无可用捐赠条目 |
+| 503 | `maintenance` | 站点处于维护模式 |
 | 4xx | （透传上游 code） | Dify 返回 4xx 时原状态码与错误码透传（如 400 `invalid_param`），消息带 `[Dify]` 前缀 |
 | 502 | `upstream_error` 等 / `image_upload_failed` | Dify 5xx 或网络错误 / 图片预上传失败 |
 | 500 | `internal` | 网关内部错误 |

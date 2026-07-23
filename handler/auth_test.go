@@ -109,6 +109,9 @@ func TestMe_And_Logout(t *testing.T) {
 	if me["is_admin"] != true || me["username"] != "root" {
 		t.Errorf("me = %v", me)
 	}
+	if _, ok := me["credits"]; !ok {
+		t.Errorf("me missing 'credits' field: %v", me)
+	}
 
 	// Logout invalidates the session.
 	req = httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)

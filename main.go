@@ -17,7 +17,7 @@ import (
 
 // Version is the Dify2API release version, printed by the -version flag.
 // 发版时与 git tag 同步（tag 格式 v<major.minor.patch>）。
-const Version = "1.0.0-alpha.3"
+const Version = "1.0.0-alpha.4"
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -60,6 +60,11 @@ func main() {
 	}
 	log.Printf("  Listen Addr:   %s", cfg.ListenAddr)
 	log.Printf("  Site Base URL: %s (admin site: %s)", cfg.Admin.SiteBaseURL, cfg.Admin.AdminHost)
+	if cfg.CreditsLogoPath != "" {
+		if _, err := os.Stat(cfg.CreditsLogoPath); os.IsNotExist(err) {
+			log.Printf("  ⚠️  CREDITS_LOGO_PATH points to a non-existent file: %s (logo will not display)", cfg.CreditsLogoPath)
+		}
+	}
 	log.Printf("  Limits: chat_in_flight=%d body=%dMB sse_buffer=%dMB login_lock=%dmin",
 		cfg.MaxChatInFlight, cfg.MaxRequestBodyMB, cfg.SSEBufferMB, cfg.LoginLockMin)
 	if cfg.ForceHTTPS {

@@ -706,3 +706,294 @@ func (g *Gateway) enrichDonationJSON(d *db.Donation, keyPlain *string) map[strin
 	j["source_display"] = g.resolveSourceDisplay(d)
 	return j
 }
+
+// --- User self-service donation application ---
+
+// POST /api/me/donations — user submits a donation application.
+func (g *Gateway) handleCreateDonationApp(w http.ResponseWriter, r *http.Request) {
+	u := g.currentUser(r)
+	if u == nil {
+		g.writeError(w, http.StatusUnauthorized, "unauthorized", "not logged in")
+		return
+	}
+
+	// Gate: donation_enabled must be true.
+	if g.Store.GetSettingString(db.SettingDonationEnabled, "") != "true" {
+		g.writeError(w, http.StatusForbidden, "donation_disabled",
+			"捐赠系统尚未被管理员启用")
+		return
+	}
+
+	// Check pending limit.
+	limit := g.Store.GetSettingInt(db.SettingDonationReviewLimit, db.DefaultDonationReviewLimit)
+	pending, err := g.Store.CountPendingByUser(u.ID)
+	if err != nil {
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	if pending >= limit {
+		g.writeError(w, http.StatusBadRequest, "too_many_pending",
+			fmt.Sprintf("您已有 %d 条待审核申请（上限 %d），请等待审核完成后再提交", pending, limit))
+		return
+	}
+
+	var req struct {
+		Service     string `json:"service"`
+		Model       string `json:"model"`
+		DifyBaseURL string `json:"dify_base_url"`
+		DifyAPIKey  string `json:"dify_api_key"`
+		Deadline    int64  `json:"deadline"`
+		TotalCount  int    `json:"total_count"`
+		Note        string `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+
+	// Validate service.
+	if !translator.IsSupportedService(req.Service) {
+		g.writeError(w, http.StatusBadRequest, "invalid_request",
+			fmt.Sprintf("不支持的服务 %q", req.Service))
+		return
+	}
+
+	// Validate model: no brackets.
+	if strings.ContainsAny(req.Model, "[]") {
+		g.writeError(w, http.StatusBadRequest, "invalid_request",
+			"模型名不得包含方括号")
+		return
+	}
+
+	// Validate dify_base_url.
+	req.DifyBaseURL = strings.TrimRight(strings.TrimSpace(req.DifyBaseURL), "/")
+	if req.DifyBaseURL == "" || !(strings.HasPrefix(req.DifyBaseURL, "http://") || strings.HasPrefix(req.DifyBaseURL, "https://")) {
+		g.writeError(w, http.StatusBadRequest, "invalid_request",
+			"dify_base_url 必须为合法的 http(s) URL")
+		return
+	}
+
+	// Validate dify_api_key.
+	if strings.TrimSpace(req.DifyAPIKey) == "" {
+		g.writeError(w, http.StatusBadRequest, "invalid_request",
+			"dify_api_key 为必填")
+		return
+	}
+
+	// Validate deadline.
+	if req.Deadline <= time.Now().Unix() {
+		g.writeError(w, http.StatusBadRequest, "invalid_request",
+			"截止时间必须是将来的 Unix 时间戳")
+		return
+	}
+
+	// Validate total_count.
+	if req.TotalCount <= 0 {
+		g.writeError(w, http.StatusBadRequest, "invalid_request",
+			"捐赠次数必须为正整数")
+		return
+	}
+
+	app, err := g.Store.CreateDonationApplication(u.ID, req.Service, req.Model, req.DifyBaseURL, req.DifyAPIKey, req.TotalCount, req.Deadline, strings.TrimSpace(req.Note))
+	if err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":          true,
+		"application": applicationJSON(app),
+	})
+}
+
+// GET /api/me/donations — returns the user's own applications.
+func (g *Gateway) handleListMyApplications(w http.ResponseWriter, r *http.Request) {
+	u := g.currentUser(r)
+	if u == nil {
+		g.writeError(w, http.StatusUnauthorized, "unauthorized", "not logged in")
+		return
+	}
+
+	apps, err := g.Store.ListApplicationsByUser(u.ID)
+	if err != nil {
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+
+	out := make([]map[string]interface{}, 0, len(apps))
+	for _, a := range apps {
+		aj := applicationJSON(a)
+		// Enrich approved applications with linked donation info.
+		if a.Status == db.AppStatusApproved && a.DonationID.Valid {
+			d, err := g.Store.GetDonation(a.DonationID.Int64)
+			if err == nil && d != nil {
+				aj["donation_status"] = d.Status
+				aj["donation_remaining"] = d.RemainingCount
+				aj["donation_total"] = d.TotalCount
+				aj["donation_deadline"] = d.Deadline
+			}
+		}
+		out = append(out, aj)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"applications": out})
+}
+
+// applicationJSON builds the API representation of a DonationApplication.
+func applicationJSON(a *db.DonationApplication) map[string]interface{} {
+	out := map[string]interface{}{
+		"id":          a.ID,
+		"user_id":     a.UserID,
+		"service":     a.Service,
+		"model":       a.Model,
+		"dify_base_url": a.DifyBaseURL,
+		"has_key":     a.DifyAPIKeyEnc != "",
+		"total_count": a.TotalCount,
+		"deadline":    a.Deadline,
+		"note":        a.Note,
+		"status":      a.Status,
+		"review_note": a.ReviewNote,
+		"created_at":  a.CreatedAt,
+	}
+	if a.ReviewerID.Valid {
+		out["reviewer_id"] = a.ReviewerID.Int64
+	}
+	if a.DonationID.Valid {
+		out["donation_id"] = a.DonationID.Int64
+	}
+	if a.Username != "" {
+		out["username"] = a.Username
+		out["discord_id"] = a.DiscordID
+	}
+	return out
+}
+
+// --- Admin application review endpoints ---
+
+// GET /api/admin/donations/pending — list pending applications.
+func (g *Gateway) handleListPendingApplications(w http.ResponseWriter, r *http.Request) {
+	if g.requireAdmin(r) == nil {
+		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
+		return
+	}
+
+	apps, err := g.Store.ListPendingApplications()
+	if err != nil {
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+
+	out := make([]map[string]interface{}, 0, len(apps))
+	for _, a := range apps {
+		aj := applicationJSON(a)
+		out = append(out, aj)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"applications": out})
+}
+
+// POST /api/admin/donations/{id}/approve — approve an application.
+func (g *Gateway) handleApproveApplication(w http.ResponseWriter, r *http.Request) {
+	if g.requireAdmin(r) == nil {
+		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
+		return
+	}
+
+	adminUser := g.currentUser(r)
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid application id")
+		return
+	}
+
+	var req struct {
+		Service     string `json:"service"`
+		Model       string `json:"model"`
+		DifyBaseURL string `json:"dify_base_url"`
+		DifyAPIKey  string `json:"dify_api_key"`
+		TotalCount  int    `json:"total_count"`
+		Deadline    int64  `json:"deadline"`
+		ReviewNote  string `json:"review_note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+
+	// Validate modified fields if provided.
+	if req.Model != "" && strings.ContainsAny(req.Model, "[]") {
+		g.writeError(w, http.StatusBadRequest, "invalid_request",
+			"模型名不得包含方括号")
+		return
+	}
+	if req.DifyBaseURL != "" {
+		req.DifyBaseURL = strings.TrimRight(strings.TrimSpace(req.DifyBaseURL), "/")
+		if !(strings.HasPrefix(req.DifyBaseURL, "http://") || strings.HasPrefix(req.DifyBaseURL, "https://")) {
+			g.writeError(w, http.StatusBadRequest, "invalid_request",
+				"dify_base_url 必须为合法的 http(s) URL")
+			return
+		}
+	}
+
+	modified := &db.ApproveApplicationFields{
+		Service:     req.Service,
+		Model:       req.Model,
+		DifyBaseURL: req.DifyBaseURL,
+		DifyAPIKey:  req.DifyAPIKey,
+		TotalCount:  req.TotalCount,
+		Deadline:    req.Deadline,
+	}
+
+	app, donation, err := g.Store.ApproveApplication(id, adminUser.ID, modified, strings.TrimSpace(req.ReviewNote))
+	if err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":          true,
+		"application": applicationJSON(app),
+		"donation":    donationJSON(donation, nil),
+	})
+}
+
+// POST /api/admin/donations/{id}/reject — reject an application.
+func (g *Gateway) handleRejectApplication(w http.ResponseWriter, r *http.Request) {
+	if g.requireAdmin(r) == nil {
+		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
+		return
+	}
+
+	adminUser := g.currentUser(r)
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid application id")
+		return
+	}
+
+	var req struct {
+		ReviewNote string `json:"review_note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+
+	app, err := g.Store.RejectApplication(id, adminUser.ID, strings.TrimSpace(req.ReviewNote))
+	if err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":          true,
+		"application": applicationJSON(app),
+	})
+}

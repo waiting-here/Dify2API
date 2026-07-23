@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/url"
@@ -54,8 +55,6 @@ type Config struct {
 	Admin AdminConfig
 
 	// --- alpha.3: Public-resource credits ---
-	// CreditsName is the name shown to users for the credit statistic.
-	CreditsName string
 	// CreditsLogoText is an emoji or text displayed next to the credits name.
 	CreditsLogoText string
 	// CreditsLogoPath is a local image file path for the credits logo; takes
@@ -65,11 +64,15 @@ type Config struct {
 	// boundary. Allowed range is [-12, 14]; out-of-range values are logged
 	// and reset to 0.
 	CheckinTZOffset int
+	// I18NDict holds the optional i18n dictionary loaded from I18NFile.
+	// Keys are config item names ("credits_name", "site_name"); values are
+	// per-language translations. nil when no file is configured.
+	I18NDict map[string]map[string]string
 
 	// --- alpha.3: SMTP (email alerts) ---
 	SMTP SMTPConfig
 
-	// --- alpha.3: Web IP rate-limit (F7) ---
+	// --- alpha.3: Web IP rate-limit ---
 	// WebRPMPerIP is the per-IP requests-per-minute cap for /api/* endpoints.
 	// 0 disables IP rate-limiting.
 	WebRPMPerIP int
@@ -90,7 +93,7 @@ type Config struct {
 	LogDetailMaxChars int
 }
 
-// SMTPConfig holds the email-delivery settings for operational alerts (F5).
+// SMTPConfig holds the email-delivery settings for operational alerts.
 type SMTPConfig struct {
 	Host string
 	Port int
@@ -155,7 +158,6 @@ func LoadStartup(path string) (*Config, error) {
 		LoginMinLatencyMs: getIntOr(envMap, "LOGIN_MIN_LATENCY_MS", 300),
 
 		// alpha.3 — public-resource credits.
-		CreditsName:     getOr(envMap, "CREDITS_NAME", "公益 Dify2API 积分"),
 		CreditsLogoText: getOr(envMap, "CREDITS_LOGO_TEXT", "🌟"),
 		CreditsLogoPath: getOr(envMap, "CREDITS_LOGO_PATH", ""),
 		CheckinTZOffset: getCheckinTZOffset(envMap),
@@ -195,8 +197,14 @@ func LoadStartup(path string) (*Config, error) {
 	if a.AdminHost == "" && a.SiteHost != "" {
 		a.AdminHost = "admin." + a.SiteHost
 	}
-	a.SiteName = getOr(envMap, "SITE_NAME", "Dify2API")
+	a.SiteName = "Dify2API"
 	a.ReportEmail = getOr(envMap, "REPORT_EMAIL", "report@example.com")
+
+	// Load optional i18n dictionary for config values that need per-language versions.
+	cfg.I18NDict = loadI18NDict(getOr(envMap, "I18N_FILE", ""))
+
+	// Apply i18n overrides for values that have per-language versions.
+	a.SiteName = cfg.I18N("site_name", "zh", a.SiteName)
 
 	missing := []string{}
 	if a.Username == "" {
@@ -333,4 +341,39 @@ func loadEnvFile(path string, dst map[string]string) error {
 		dst[key] = value
 	}
 	return nil
+}
+
+const DefaultCreditsName = "公益 Dify2API 积分"
+
+// I18N returns the i18n'd value for a config key, or fallback if not found.
+func (c *Config) I18N(key, lang, fallback string) string {
+	if c.I18NDict == nil {
+		return fallback
+	}
+	if entry, ok := c.I18NDict[key]; ok {
+		if v, ok := entry[lang]; ok && v != "" {
+			return v
+		}
+	}
+	return fallback
+}
+
+// loadI18NDict reads an i18n JSON file and returns the parsed dictionary.
+// Returns nil if path is empty or the file cannot be loaded.
+func loadI18NDict(path string) map[string]map[string]string {
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		log.Printf("[CONFIG] I18N_FILE=%q cannot be read: %v — i18n disabled", path, err)
+		return nil
+	}
+	var dict map[string]map[string]string
+	if err := json.Unmarshal(data, &dict); err != nil {
+		log.Printf("[CONFIG] I18N_FILE=%q invalid JSON: %v — i18n disabled", path, err)
+		return nil
+	}
+	log.Printf("[CONFIG] loaded i18n dictionary from %s (%d entries)", path, len(dict))
+	return dict
 }

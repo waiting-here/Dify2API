@@ -41,6 +41,8 @@ type Gateway struct {
 	authFailThrottle *ipThrottle
 	// mailer delivers optional email alerts (nil when SMTP not configured).
 	mailer *mailer.Mailer
+	// userDebug manages per-user self-service debug sessions.
+	userDebug *userDebugHub
 }
 
 // NewGateway creates a new Gateway.
@@ -54,6 +56,7 @@ func NewGateway(cfg *config.Config, store *db.Store) *Gateway {
 		webThrottle:      newIPThrottle(cfg.WebRPMPerIP, cfg.WebThrottleSec, cfg.IPThrottleWindowSec),
 		authFailThrottle: newIPThrottle(cfg.AuthFailRPMPerIP, 60, cfg.IPThrottleWindowSec),
 		mailer:           mailer.New(cfg.SMTP, db.DefaultMailerCoolMinutes),
+		userDebug:        newUserDebugHub(),
 	}
 	if gw.mailer != nil {
 		gw.mailer.Start()
@@ -98,12 +101,37 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/admin/donations/{id}/status", g.handleDonationStatus)
 	mux.HandleFunc("DELETE /api/admin/donations/{id}", g.handleDeleteDonation)
 
+	// Donation application review
+	mux.HandleFunc("GET /api/admin/donations/pending", g.handleListPendingApplications)
+	mux.HandleFunc("POST /api/admin/donations/{id}/approve", g.handleApproveApplication)
+	mux.HandleFunc("POST /api/admin/donations/{id}/reject", g.handleRejectApplication)
+
+	// Bulletin board (admin CRUD + public merged list)
+	mux.HandleFunc("GET /api/admin/bulletins", g.handleAdminListBulletins)
+	mux.HandleFunc("POST /api/admin/bulletins", g.handleAdminCreateBulletin)
+	mux.HandleFunc("PUT /api/admin/bulletins/{id}", g.handleAdminUpdateBulletin)
+	mux.HandleFunc("DELETE /api/admin/bulletins/{id}", g.handleAdminDeleteBulletin)
+	mux.HandleFunc("GET /api/bulletins", g.handleListBulletins)
+
 	// User charity toggle
 	mux.HandleFunc("GET /api/me/charity", g.handleGetCharity)
 	mux.HandleFunc("PUT /api/me/charity", g.handlePutCharity)
 
+	// User self-service donation applications
+	mux.HandleFunc("POST /api/me/donations", g.handleCreateDonationApp)
+	mux.HandleFunc("GET /api/me/donations", g.handleListMyApplications)
+
+	// User debug
+	mux.HandleFunc("POST /api/me/debug/start", g.handleDebugStart)
+	mux.HandleFunc("POST /api/me/debug/stop", g.handleDebugStop)
+	mux.HandleFunc("GET /api/me/debug/status", g.handleDebugStatus)
+	mux.HandleFunc("GET /api/me/debug/stream", g.handleDebugStream)
+	mux.HandleFunc("POST /api/me/debug/dry-run", g.handleDebugDryRun)
+
 	// User check-in (credits system)
 	mux.HandleFunc("POST /api/me/checkin", g.handleCheckin)
+	mux.HandleFunc("GET /api/me/checkin/status", g.handleCheckinStatus)
+	mux.HandleFunc("PUT /api/me/lang", g.handleSetLang)
 
 	// Admin batch credits & donation-credit operations
 	mux.HandleFunc("POST /api/admin/users/credits", g.handleAdminBatchCredits)
@@ -188,7 +216,7 @@ func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Append charity models when global switch is on and user has opted in.
-	if user.CharityEnabled && g.Store.GetSettingString(db.SettingCharityGlobalEnabled, "") == "true" {
+	if user.CharityEnabled && g.Store.GetSettingString(db.SettingCharityEnabled, "") == "true" {
 		seen := make(map[string]bool, len(models))
 		for _, m := range models {
 			seen[m.ID] = true
@@ -301,7 +329,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	service := translator.ServiceOfModel(req.Model)
 
-	// 2. Three-class RPM gate (F4). The check runs once here — after auth,
+	// 2. Three-class RPM gate. The check runs once here — after auth,
 	// before anything is sent to Dify — against all three windows:
 	//   A (transfer complete) and B (request success) are recorded at
 	//   request end; C (request received) is recorded now.
@@ -342,7 +370,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	// We check this early to fail fast; the full charity routing in
 	// handleCharityAfterRPM also checks this again for safety.
 	if IsCharityModel(req.Model) {
-		if g.Store.GetSettingString(db.SettingCharityGlobalEnabled, "") != "true" {
+		if g.Store.GetSettingString(db.SettingCharityEnabled, "") != "true" {
 			g.logRequest(user.ID, req.Model, service, startedAt, "error", "charity_disabled",
 				http.StatusForbidden, "全局公益开关未开启")
 			g.writeError(w, http.StatusForbidden, "charity_disabled",
@@ -374,6 +402,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	// 4. Per-service contract validation & mapping.
 	inputs, images, err := translator.TranslateForService(service, req.Messages)
 	if err != nil {
+		g.debugWrapError(r, user.ID, rawBody, nil, err.Error(), http.StatusBadRequest)
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "invalid_message_sequence",
 			http.StatusBadRequest, err.Error())
 		w.Header().Set("Content-Type", "application/json")
@@ -386,6 +415,19 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			},
 		})
 		return
+	}
+
+	// 4b. Debug interception — after translation, before Dify forward.
+	w2, debugFinalize := g.debugWrap(w, r, user.ID, req.Model, rawBody, inputs)
+	if debugFinalize == nil && w2 == nil {
+		// dry-run: mock response already written in debugWrap.
+		g.logRequest(user.ID, req.Model, service, startedAt, "success", "debug_dry_run", http.StatusOK, "")
+		return
+	}
+	writer := w
+	if debugFinalize != nil {
+		defer debugFinalize()
+		writer = w2
 	}
 
 	// 5. Build the Dify client from the user's config.
@@ -413,7 +455,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			log.Printf("[ERROR] image files (user %d): %v", user.ID, err)
 			g.logRequest(user.ID, req.Model, service, startedAt, "error", "image_upload_failed",
 				difyErrorStatus(err), err.Error())
-			g.writeDifyError(w, err)
+			g.writeDifyError(writer, err)
 			return
 		}
 		wfInputs["input_image_list"] = files
@@ -433,9 +475,9 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	// 7. Forward (streaming or blocking).
 	if req.Stream {
-		g.handleStreaming(w, client, wfReq, modelName, user.ID, service, startedAt)
+		g.handleStreaming(writer, client, wfReq, modelName, user.ID, service, startedAt)
 	} else {
-		g.handleBlocking(w, client, wfReq, modelName, user.ID, service, startedAt)
+		g.handleBlocking(writer, client, wfReq, modelName, user.ID, service, startedAt)
 	}
 }
 
@@ -461,7 +503,7 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "insufficient_credits",
 			http.StatusForbidden, fmt.Sprintf("credits <= 0 (%d)", user.Credits))
 		g.writeError(w, http.StatusForbidden, "insufficient_credits",
-			fmt.Sprintf("您的%s不足，无法调用公益模型", g.Config.CreditsName))
+			fmt.Sprintf("您的%s不足，无法调用公益模型", g.Config.I18N("credits_name", "zh", config.DefaultCreditsName)))
 		return
 	}
 
@@ -504,6 +546,8 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 	// 6. Contract validation (failure does NOT count as donation failure)
 	inputs, images, err := translator.TranslateForService(service, req.Messages)
 	if err != nil {
+		raw, _ := json.Marshal(req)
+		g.debugWrapError(r, user.ID, raw, nil, err.Error(), http.StatusBadRequest)
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "invalid_message_sequence",
 			http.StatusBadRequest, err.Error())
 		w.Header().Set("Content-Type", "application/json")
@@ -521,6 +565,19 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 	// Log model name (hides donation identity)
 	logModel := charityModelName(service, backend)
 
+	// 6b. Debug interception.
+	rawCharity, _ := json.Marshal(req)
+	wCharity, dbgFinalize := g.debugWrap(w, r, user.ID, logModel, rawCharity, inputs)
+	if dbgFinalize == nil && wCharity == nil {
+		g.logRequest(user.ID, logModel, service, startedAt, "success", "debug_dry_run", http.StatusOK, "")
+		return
+	}
+	charityWriter := w
+	if dbgFinalize != nil {
+		defer dbgFinalize()
+		charityWriter = wCharity
+	}
+
 	// Build workflow inputs
 	wfInputs := make(map[string]interface{}, len(inputs)+1)
 	for k, v := range inputs {
@@ -534,7 +591,7 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 			log.Printf("[ERROR] charity image files (user %d): %v", user.ID, err)
 			g.logRequest(user.ID, logModel, service, startedAt, "error", "image_upload_failed",
 				difyErrorStatus(err), err.Error())
-			g.writeDifyError(w, err)
+			g.writeDifyError(charityWriter, err)
 			return
 		}
 		wfInputs["input_image_list"] = files
@@ -548,9 +605,9 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 
 	// 7. Forward (streaming or blocking)
 	if req.Stream {
-		g.charityStreaming(w, client, wfReq, logModel, user.ID, service, startedAt, picked)
+		g.charityStreaming(charityWriter, client, wfReq, logModel, user.ID, service, startedAt, picked)
 	} else {
-		g.charityBlocking(w, client, wfReq, logModel, user.ID, service, startedAt, picked)
+		g.charityBlocking(charityWriter, client, wfReq, logModel, user.ID, service, startedAt, picked)
 	}
 }
 
@@ -823,6 +880,27 @@ func (g *Gateway) writeError(w http.ResponseWriter, status int, code, message st
 			"code":    code,
 		},
 	})
+}
+
+// serveMaintenancePage serves the maintenance.html page with placeholder
+// substitution and a 503 status code.  Used by the maintenanceCheck
+// middleware when the site-wide maintenance mode is on.
+func (g *Gateway) serveMaintenancePage(w http.ResponseWriter) {
+	staticFS, err := fs.Sub(web.Static, "static")
+	if err != nil {
+		http.Error(w, "maintenance page not found", http.StatusServiceUnavailable)
+		return
+	}
+	data, err := fs.ReadFile(staticFS, "maintenance.html")
+	if err != nil {
+		http.Error(w, "maintenance page not found", http.StatusServiceUnavailable)
+		return
+	}
+	body := strings.ReplaceAll(string(data), "__SITE_NAME__", g.Config.Admin.SiteName)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	w.Write([]byte(body))
 }
 
 // serve404Page serves the custom 404.html page (from the embedded static

@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"dify2api/db"
 )
 
 func TestForceHTTPS_Redirect(t *testing.T) {
@@ -365,5 +367,132 @@ func TestConfigsCRUD_AndGuards(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("delete twice: status = %d, want 404", rec.Code)
+	}
+}
+
+// TestMaintenanceMode covers the full maintenance-switch behaviour (B4).
+func TestMaintenanceMode(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	h := gw.Wrap(mux)
+
+	enable := func()  { store.SetSetting(db.SettingMaintenanceMode, "true") }
+	disable := func() { store.SetSetting(db.SettingMaintenanceMode, "false") }
+
+	// --- Disabled by default: everything works normally. ---
+	req := httptest.NewRequest(http.MethodGet, "http://localhost/", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("off: / status = %d, want 200", rec.Code)
+	}
+
+	// --- Enable maintenance mode. ---
+	enable()
+
+	// User host: home page → 503 + maintenance.html.
+	req = httptest.NewRequest(http.MethodGet, "http://localhost/", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("on: / status = %d, want 503", rec.Code)
+	}
+	ct := rec.Header().Get("Content-Type")
+	if !strings.Contains(ct, "text/html") {
+		t.Errorf("on: / Content-Type = %q, want text/html", ct)
+	}
+	if !strings.Contains(rec.Body.String(), "站点维护中") {
+		t.Errorf("on: / body should contain 站点维护中: %s", rec.Body.String())
+	}
+	// Placeholder should be replaced.
+	if strings.Contains(rec.Body.String(), "__SITE_NAME__") {
+		t.Error("on: / placeholder __SITE_NAME__ should be replaced")
+	}
+
+	// User host: arbitrary page path → 503 + maintenance.html.
+	req = httptest.NewRequest(http.MethodGet, "http://localhost/dashboard", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("on: /dashboard status = %d, want 503", rec.Code)
+	}
+
+	// User host: API endpoint → 503 JSON error.
+	for _, p := range []string{"/api/me", "/api/configs", "/v1/chat/completions", "/v1/models"} {
+		req = httptest.NewRequest(http.MethodGet, "http://localhost"+p, nil)
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("on: %s status = %d, want 503", p, rec.Code)
+		}
+		var errResp struct {
+			Error struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		json.NewDecoder(rec.Body).Decode(&errResp)
+		if errResp.Error.Code != "maintenance" {
+			t.Errorf("on: %s error.code = %q, want maintenance", p, errResp.Error.Code)
+		}
+		if !strings.Contains(errResp.Error.Message, "站点维护中") {
+			t.Errorf("on: %s error.message should contain 站点维护中: %q", p, errResp.Error.Message)
+		}
+	}
+
+	// Static resources: pass through.
+	for _, p := range []string{"/static/pico.min.css", "/favicon.ico", "/credits-logo", "/privacy", "/terms", "/health"} {
+		req = httptest.NewRequest(http.MethodGet, "http://localhost"+p, nil)
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code == http.StatusServiceUnavailable {
+			t.Errorf("on: %s status = %d, should NOT be blocked by maintenance", p, rec.Code)
+		}
+	}
+
+	// Discord OAuth paths: pass through.
+	for _, p := range []string{"/auth/discord/login", "/auth/discord/callback"} {
+		req = httptest.NewRequest(http.MethodGet, "http://localhost"+p, nil)
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		// /auth/discord/login returns 302, /auth/discord/callback may return
+		// an error (no state param) but NOT 503 maintenance.
+		if rec.Code == http.StatusServiceUnavailable {
+			t.Errorf("on: %s status = %d, should NOT be blocked by maintenance", p, rec.Code)
+		}
+	}
+
+	// Admin host: NOT affected by maintenance.
+	for _, p := range []string{"/", "/api/me", "/api/admin/settings", "/api/site-info", "/privacy", "/terms"} {
+		req = httptest.NewRequest(http.MethodGet, "http://admin.localhost"+p, nil)
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code == http.StatusServiceUnavailable {
+			t.Errorf("on admin host: %s status = %d, should NOT be affected by maintenance", p, rec.Code)
+		}
+	}
+	// Admin host API endpoints should also work.
+	req = httptest.NewRequest(http.MethodGet, "http://admin.localhost/api/admin/users", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code == http.StatusServiceUnavailable {
+		t.Error("on admin host: /api/admin/users should NOT be affected by maintenance")
+	}
+
+	// --- Disable maintenance mode: everything back to normal. ---
+	disable()
+	req = httptest.NewRequest(http.MethodGet, "http://localhost/", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("off after on: / status = %d, want 200", rec.Code)
+	}
+	req = httptest.NewRequest(http.MethodGet, "http://localhost/api/me", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	// /api/me without auth → 401, not 503.
+	if rec.Code == http.StatusServiceUnavailable {
+		t.Error("off after on: /api/me should not be blocked by maintenance")
 	}
 }

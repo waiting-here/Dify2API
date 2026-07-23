@@ -131,8 +131,8 @@ func TestLoadStartup_Alpha3Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.CreditsName != "公益 Dify2API 积分" {
-		t.Errorf("CREDITS_NAME = %q, want default", cfg.CreditsName)
+	if cfg.I18N("credits_name", "zh", DefaultCreditsName) != DefaultCreditsName {
+		t.Errorf("credits_name zh = %q, want %q", cfg.I18N("credits_name", "zh", DefaultCreditsName), DefaultCreditsName)
 	}
 	if cfg.CheckinTZOffset != 0 {
 		t.Errorf("CHECKIN_TZ_OFFSET = %d, want 0", cfg.CheckinTZOffset)

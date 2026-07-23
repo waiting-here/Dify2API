@@ -216,6 +216,131 @@ func TestCheckin_SettingsCustomRange(t *testing.T) {
 	}
 }
 
+// checkinStatusGet is a helper for GET /api/me/checkin/status.
+func checkinStatusGet(gw *Gateway, cookie *http.Cookie) *httptest.ResponseRecorder {
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	req := httptest.NewRequest(http.MethodGet, "/api/me/checkin/status", nil)
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestCheckin_Disabled(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	store.SetSetting(db.SettingCreditsCap, "0")
+
+	u, _ := store.CreateUser("42", "tester", "")
+	store.SetUserCredits(u.ID, 0)
+	sess, _, _ := store.CreateSession(u.ID)
+	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: sess}
+
+	rec := checkinPost(gw, cookie)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("disabled checkin: status %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "checkin_disabled") {
+		t.Errorf("expected 'checkin_disabled' in body, got %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "签到系统未开放") {
+		t.Errorf("expected '签到系统未开放' in body, got %s", rec.Body.String())
+	}
+}
+
+func TestCheckinStatus_NotCheckedIn(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	gw.Config.CheckinTZOffset = 8
+
+	u, _ := store.CreateUser("42", "tester", "")
+	sess, _, _ := store.CreateSession(u.ID)
+	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: sess}
+
+	rec := checkinStatusGet(gw, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: code %d, body %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		CheckedInToday bool  `json:"checked_in_today"`
+		NextCheckinAt  int64 `json:"next_checkin_at"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.CheckedInToday {
+		t.Error("expected checked_in_today=false for fresh user")
+	}
+	if resp.NextCheckinAt <= time.Now().Unix() {
+		t.Errorf("next_checkin_at should be in the future, got %d", resp.NextCheckinAt)
+	}
+}
+
+func TestCheckinStatus_CheckedIn(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	gw.Config.CheckinTZOffset = 8
+
+	u, _ := store.CreateUser("42", "tester", "")
+	store.SetUserCredits(u.ID, 5)
+	sess, _, _ := store.CreateSession(u.ID)
+	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: sess}
+
+	// First, check in.
+	rec := checkinPost(gw, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("checkin: status %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	// Now check status — should show checked_in_today=true.
+	rec = checkinStatusGet(gw, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status after checkin: code %d, body %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		CheckedInToday bool  `json:"checked_in_today"`
+		NextCheckinAt  int64 `json:"next_checkin_at"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if !resp.CheckedInToday {
+		t.Error("expected checked_in_today=true after check-in")
+	}
+	if resp.NextCheckinAt <= time.Now().Unix() {
+		t.Errorf("next_checkin_at should be in the future, got %d", resp.NextCheckinAt)
+	}
+}
+
+func TestCheckinStatus_Disabled(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	store.SetSetting(db.SettingCreditsCap, "0")
+
+	u, _ := store.CreateUser("42", "tester", "")
+	sess, _, _ := store.CreateSession(u.ID)
+	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: sess}
+
+	rec := checkinStatusGet(gw, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("disabled status: code %d, body %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		CheckedInToday bool  `json:"checked_in_today"`
+		NextCheckinAt  int64 `json:"next_checkin_at"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if !resp.CheckedInToday {
+		t.Error("expected checked_in_today=true when credits_cap=0")
+	}
+	if resp.NextCheckinAt != 9999999999 {
+		t.Errorf("expected next_checkin_at=9999999999, got %d", resp.NextCheckinAt)
+	}
+}
+
+func TestCheckinStatus_Unauthenticated(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "s3cret")
+	rec := checkinStatusGet(gw, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("unauthenticated: status = %d, want 401", rec.Code)
+	}
+}
+
 // checkinPost is a helper for POST /api/me/checkin.
 func checkinPost(gw *Gateway, cookie *http.Cookie) *httptest.ResponseRecorder {
 	mux := http.NewServeMux()
