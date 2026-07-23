@@ -372,9 +372,9 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if IsCharityModel(req.Model) {
 		if g.Store.GetSettingString(db.SettingCharityEnabled, "") != "true" {
 			g.logRequest(user.ID, req.Model, service, startedAt, "error", "charity_disabled",
-				http.StatusForbidden, "全局公益开关未开启")
+				http.StatusForbidden, "全局捐赠/公益开关未开启")
 			g.writeError(w, http.StatusForbidden, "charity_disabled",
-				"捐赠与公益系统尚未被管理员启用")
+				"捐赠/公益系统尚未被管理员启用")
 			return
 		}
 	}

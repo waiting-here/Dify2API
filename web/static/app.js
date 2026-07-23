@@ -21,7 +21,7 @@ const i18n = {
   keyHint: "此密钥用于 OpenAI 兼容接口（/v1）鉴权。界面不显示完整密钥，点击按钮复制。",
   copy: "复制",
   copied: "已复制",
-  copyFail: "复制失败（需要 HTTPS 或 localhost 环境）",
+  copyFail: "复制失败，请手动复制",
   resetKey: "重置密钥",
   resetKeyConfirm: "重置后旧密钥立即失效，确定重置？",
   keyResetDone: "密钥已重置，请重新复制。",
@@ -156,10 +156,10 @@ const i18n = {
   charityDeleted: "捐赠条目已删除",
   // User charity toggle
   userCharityToggle: "启用公益资源",
-  userCharityConfirm: "警告：开启公益资源后，您的请求将被转发至捐赠者配置的 Dify App。捐赠者可通过其 Dify App 后台日志查看完整请求内容。平台不保证捐赠 App 的可靠性，对捐赠者可能的恶意行为免除平台责任。\n\n确定开启？",
+  userCharityConfirm: "警告：使用公益资源时，您的请求将被转发至捐赠者配置的 Dify App。捐赠者可通过其 Dify App 后台日志查看完整请求内容。平台不保证捐赠 App 的可靠性，对捐赠者可能的恶意行为免除平台责任。\n\n确定开启？",
   userCharityOn: "公益资源已启用",
   userCharityOff: "公益资源已关闭",
-  userCharityBanner: "捐赠与公益系统尚未被管理员启用",
+  userCharityBanner: "捐赠/公益系统尚未被管理员启用",
   insufficientCredits: "积分不足",
   // Credits & check-in (alpha.3 F2)
   creditsTitle: "公益积分",
@@ -550,18 +550,42 @@ function toast(msg, ms = 2200) {
 }
 
 async function copyKey() {
+  let key;
   try {
-    let { key } = await api("/api/caller-key");
+    const resp = await api("/api/caller-key");
+    key = resp.key;
     if (!key) {
-      // No key yet (e.g. freshly registered) — generate one on the spot.
       const r = await api("/api/caller-key/reset", { method: "POST" });
       key = r.key;
     }
-    await navigator.clipboard.writeText(key);
+  } catch (err) {
+    toast(T('error').replace("{msg}", err.message), 3000);
+    return;
+  }
+
+  // Try Clipboard API first, fall back to execCommand for non-HTTPS contexts.
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(key);
+      toast(T('copied'));
+      return;
+    } catch { /* Clipboard API rejected — try fallback */ }
+  }
+
+  // Fallback: use a temporary textarea (works on HTTP and older browsers).
+  const ta = document.createElement("textarea");
+  ta.value = key;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand("copy");
     toast(T('copied'));
   } catch {
     toast(T('copyFail'), 3200);
   }
+  document.body.removeChild(ta);
 }
 
 /* ---------------- state & init ---------------- */
