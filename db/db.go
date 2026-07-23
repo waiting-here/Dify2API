@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS donations (
 	success_count        INTEGER NOT NULL DEFAULT 0,
 	failure_count        INTEGER NOT NULL DEFAULT 0,
 	consecutive_failures INTEGER NOT NULL DEFAULT 0,
+	rpm_limit            INTEGER NOT NULL DEFAULT 10,
 	status               TEXT NOT NULL DEFAULT 'active',
 	note                 TEXT NOT NULL DEFAULT '',
 	created_at           INTEGER NOT NULL,
@@ -150,6 +151,7 @@ CREATE TABLE IF NOT EXISTS donation_applications (
 	dify_api_key_enc  TEXT NOT NULL,
 	total_count       INTEGER NOT NULL,
 	deadline          INTEGER NOT NULL,
+	rpm_limit         INTEGER NOT NULL DEFAULT 10,
 	note              TEXT NOT NULL DEFAULT '',
 	status            TEXT NOT NULL DEFAULT 'pending',
 	reviewer_id       INTEGER,
@@ -221,6 +223,9 @@ func Open(path, keyPath string) (*Store, error) {
 		`ALTER TABLE bulletins ADD COLUMN lang TEXT NOT NULL DEFAULT 'zh'`,
 		// alpha.4 — donation_applications table.
 		`ALTER TABLE donation_applications ADD COLUMN note TEXT NOT NULL DEFAULT ''`,
+		// beta.1 — per-donation RPM limit.
+		`ALTER TABLE donations ADD COLUMN rpm_limit INTEGER NOT NULL DEFAULT 10`,
+		`ALTER TABLE donation_applications ADD COLUMN rpm_limit INTEGER NOT NULL DEFAULT 10`,
 	} {
 		if _, err := sqldb.Exec(m); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			sqldb.Close()
@@ -233,6 +238,12 @@ func Open(path, keyPath string) (*Store, error) {
 
 // Close closes the database handle.
 func (s *Store) Close() error { return s.db.Close() }
+
+// Exec executes a raw SQL statement with args. Use with care — prefer
+// typed methods when available.
+func (s *Store) Exec(query string, args ...interface{}) (sql.Result, error) {
+	return s.db.Exec(query, args...)
+}
 
 // loadMasterKey reads the base64-encoded 32-byte master key from path,
 // generating a fresh random one (mode 0600) when the file does not exist.

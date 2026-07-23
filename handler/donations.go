@@ -43,39 +43,62 @@ func charityModelName(service, backend string) string {
 }
 
 // pickWeightedDonation selects a donation from candidates using weighted
-// random sampling. Weight_i = 1 / max(deadline_i - now, 60). Returns nil
-// when candidates is empty.
-func pickWeightedDonation(candidates []*db.Donation) *db.Donation {
+// random sampling. Weight_i = 1 / max(deadline_i - now, 60).
+// Candidates that have reached their per-donation RPM limit are filtered
+// out before sampling. When all candidates are rate-limited, returns nil.
+func pickWeightedDonation(candidates []*db.Donation, limiter *donationRateLimiter) *db.Donation {
 	if len(candidates) == 0 {
 		return nil
 	}
+
+	// Filter candidates by per-donation RPM; collect record callbacks.
+	type candidateRec struct {
+		d      *db.Donation
+		record func()
+	}
+	filtered := make([]candidateRec, 0, len(candidates))
+	for _, d := range candidates {
+		if allowed, rec := limiter.allow(d.ID, d.RpmLimit); allowed {
+			filtered = append(filtered, candidateRec{d: d, record: rec})
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+
 	now := time.Now().Unix()
 	type wd struct {
-		d *db.Donation
-		w float64
+		cr candidateRec
+		w  float64
 	}
-	weights := make([]wd, 0, len(candidates))
+	weights := make([]wd, 0, len(filtered))
 	total := 0.0
-	for _, d := range candidates {
-		remaining := d.Deadline - now
+	for _, cr := range filtered {
+		remaining := cr.d.Deadline - now
 		if remaining < 60 {
 			remaining = 60
 		}
 		w := 1.0 / float64(remaining)
-		weights = append(weights, wd{d: d, w: w})
+		weights = append(weights, wd{cr: cr, w: w})
 		total += w
 	}
 	if total <= 0 {
-		return candidates[0]
+		// Record the first candidate's RPM consumption.
+		filtered[0].record()
+		return filtered[0].d
 	}
 	r := rand.Float64() * total
 	for _, wd := range weights {
 		r -= wd.w
 		if r <= 0 {
-			return wd.d
+			wd.cr.record()
+			return wd.cr.d
 		}
 	}
-	return weights[len(weights)-1].d
+	// Fallthrough: pick the last one.
+	last := weights[len(weights)-1]
+	last.cr.record()
+	return last.cr.d
 }
 
 // --- Donation CRUD ---
@@ -96,6 +119,7 @@ func (g *Gateway) handleCreateDonation(w http.ResponseWriter, r *http.Request) {
 		SourceText   string `json:"source_text"`
 		Deadline     int64  `json:"deadline"`
 		TotalCount   int    `json:"total_count"`
+		RpmLimit     int    `json:"rpm_limit"`
 		Note         string `json:"note"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -199,6 +223,7 @@ func (g *Gateway) handleCreateDonation(w http.ResponseWriter, r *http.Request) {
 		SourceText:      sourceText,
 		Deadline:        req.Deadline,
 		TotalCount:      req.TotalCount,
+		RpmLimit:        req.RpmLimit,
 		Status:          db.DonationActive,
 		Note:            req.Note,
 	}
@@ -331,6 +356,236 @@ func (g *Gateway) handleDeleteDonation(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 }
 
+// PATCH /api/admin/donations/{id}
+func (g *Gateway) handlePatchDonation(w http.ResponseWriter, r *http.Request) {
+	if g.requireAdmin(r) == nil {
+		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid donation id")
+		return
+	}
+
+	var req struct {
+		Service     string `json:"service"`
+		Model       string `json:"model"`
+		DifyBaseURL string `json:"dify_base_url"`
+		DifyAPIKey  string `json:"dify_api_key"`
+		RpmLimit    int    `json:"rpm_limit"`
+		Deadline    int64  `json:"deadline"`
+		TotalCount  int    `json:"total_count"`
+		Note        string `json:"note"`
+		Status      string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+
+	d, err := g.Store.GetDonation(id)
+	if err != nil {
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	if d == nil {
+		g.writeError(w, http.StatusNotFound, "not_found", "donation not found")
+		return
+	}
+	if d.Status == db.DonationExpired {
+		g.writeError(w, http.StatusBadRequest, "invalid_request",
+			"已失效的捐赠条目不可修改")
+		return
+	}
+
+	// Build SET clause dynamically.
+	now := time.Now().Unix()
+	var sets []string
+	var args []interface{}
+
+	// Track fields that may need Dify validation.
+	newBaseURL := d.DifyBaseURL
+	newAPIKeyEnc := d.DifyAPIKeyEnc
+	apiKeyChanged := false
+	validateDify := false
+
+	if req.Service != "" && req.Service != d.Service {
+		if !translator.IsSupportedService(req.Service) {
+			g.writeError(w, http.StatusBadRequest, "invalid_request",
+				fmt.Sprintf("不支持的服务 %q", req.Service))
+			return
+		}
+		sets = append(sets, "service=?")
+		args = append(args, req.Service)
+		validateDify = true
+	}
+
+	if req.Model != "" && req.Model != d.Model {
+		if strings.ContainsAny(req.Model, "[]") {
+			g.writeError(w, http.StatusBadRequest, "invalid_request",
+				"模型名不得包含方括号")
+			return
+		}
+		sets = append(sets, "model=?")
+		args = append(args, req.Model)
+	}
+
+	if req.DifyBaseURL != "" {
+		url := strings.TrimRight(strings.TrimSpace(req.DifyBaseURL), "/")
+		if !(strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://")) {
+			g.writeError(w, http.StatusBadRequest, "invalid_request",
+				"dify_base_url 必须为合法的 http(s) URL")
+			return
+		}
+		if url != d.DifyBaseURL {
+			sets = append(sets, "dify_base_url=?")
+			args = append(args, url)
+			newBaseURL = url
+			validateDify = true
+		}
+	}
+
+	if req.DifyAPIKey != "" {
+		enc, encErr := g.Store.Encrypt(req.DifyAPIKey)
+		if encErr != nil {
+			g.writeError(w, http.StatusInternalServerError, "internal", encErr.Error())
+			return
+		}
+		sets = append(sets, "dify_api_key_enc=?")
+		args = append(args, enc)
+		newAPIKeyEnc = enc
+		apiKeyChanged = true
+		validateDify = true
+	}
+
+	if req.RpmLimit > 0 && req.RpmLimit != d.RpmLimit {
+		sets = append(sets, "rpm_limit=?")
+		args = append(args, req.RpmLimit)
+	}
+
+	if req.Deadline > 0 && req.Deadline != d.Deadline {
+		if req.Deadline <= time.Now().Unix() {
+			g.writeError(w, http.StatusBadRequest, "invalid_request",
+				"截止时间必须是将来的 Unix 时间戳")
+			return
+		}
+		sets = append(sets, "deadline=?")
+		args = append(args, req.Deadline)
+	}
+
+	if req.TotalCount > 0 && req.TotalCount != d.TotalCount {
+		sets = append(sets, "total_count=?, remaining_count=remaining_count + (? - ?)")
+		args = append(args, req.TotalCount, req.TotalCount, d.TotalCount)
+	}
+
+	if req.Note != "" && req.Note != d.Note {
+		sets = append(sets, "note=?")
+		args = append(args, strings.TrimSpace(req.Note))
+	}
+
+	if req.Status != "" && req.Status != d.Status {
+		switch req.Status {
+		case db.DonationActive, db.DonationInactive:
+			if d.Status == db.DonationExpired {
+				g.writeError(w, http.StatusBadRequest, "invalid_request",
+					"已失效的捐赠条目不可更改状态")
+				return
+			}
+		case db.DonationExpired:
+			g.writeError(w, http.StatusBadRequest, "invalid_request",
+				"不能手动将捐赠条目设为失效")
+			return
+		default:
+			g.writeError(w, http.StatusBadRequest, "invalid_request",
+				"状态值必须是 'active' 或 'inactive'")
+			return
+		}
+		sets = append(sets, "status=?")
+		args = append(args, req.Status)
+		// Reset consecutive_failures on re-activation.
+		if req.Status == db.DonationActive {
+			sets = append(sets, "consecutive_failures=0")
+		}
+	}
+
+	if len(sets) == 0 {
+		// No changes requested.
+		validation := map[string]interface{}{"compatible": true, "message": "无字段变更"}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":         true,
+			"donation":   g.enrichDonationJSON(d, nil),
+			"validation": validation,
+		})
+		return
+	}
+
+	sets = append(sets, "updated_at=?")
+	args = append(args, now)
+	args = append(args, id)
+
+	query := "UPDATE donations SET " + strings.Join(sets, ", ") + " WHERE id=?"
+	if _, err := g.Store.Exec(query, args...); err != nil {
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+
+	// Refresh from DB.
+	updated, err := g.Store.GetDonation(id)
+	if err != nil {
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+
+	// Dify validation (only when service/base_url/api_key changed).
+	validation := map[string]interface{}{"compatible": true, "message": "无校验需求"}
+	if validateDify {
+		validKeyEnc := newAPIKeyEnc
+		if !apiKeyChanged {
+			// If API key didn't change but service/URL did, use existing key.
+			validKeyEnc = d.DifyAPIKeyEnc
+		}
+		keyPlain, decErr := g.Store.Decrypt(validKeyEnc)
+		if decErr != nil {
+			validation = map[string]interface{}{
+				"compatible": false,
+				"message":    fmt.Sprintf("密钥解密失败: %v", decErr),
+			}
+		} else {
+			client := dify.NewClient(newBaseURL, keyPlain, 15*time.Second)
+			params, fetchErr := client.FetchParameters()
+			if fetchErr != nil {
+				validation = map[string]interface{}{
+					"compatible": false,
+					"message":    fmt.Sprintf("App 不可达: %v", fetchErr),
+				}
+			} else {
+				// Light validation: just count required inputs.
+				required := 0
+				for _, isReq := range params {
+					if isReq {
+						required++
+					}
+				}
+				validation = map[string]interface{}{
+					"compatible":    true,
+					"message":       fmt.Sprintf("App 参数正常（共 %d 个变量，其中 %d 个必填）", len(params), required),
+					"variable_count": len(params),
+					"required_count": required,
+				}
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":         true,
+		"donation":   g.enrichDonationJSON(updated, nil),
+		"validation": validation,
+	})
+}
+
 // donationJSON builds the API representation of a Donation.
 // If keyPlain is non-nil, the Dify API key is included in plaintext
 // (for creation response only). Otherwise, has_key is returned.
@@ -351,6 +606,7 @@ func donationJSON(d *db.Donation, keyPlain *string) map[string]interface{} {
 		"success_count":        d.SuccessCount,
 		"failure_count":        d.FailureCount,
 		"consecutive_failures": d.ConsecutiveFailures,
+		"rpm_limit":            d.RpmLimit,
 		"status":               d.Status,
 		"note":                 d.Note,
 		"created_at":           d.CreatedAt,
@@ -744,6 +1000,7 @@ func (g *Gateway) handleCreateDonationApp(w http.ResponseWriter, r *http.Request
 		DifyAPIKey  string `json:"dify_api_key"`
 		Deadline    int64  `json:"deadline"`
 		TotalCount  int    `json:"total_count"`
+		RpmLimit    int    `json:"rpm_limit"`
 		Note        string `json:"note"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -794,7 +1051,7 @@ func (g *Gateway) handleCreateDonationApp(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	app, err := g.Store.CreateDonationApplication(u.ID, req.Service, req.Model, req.DifyBaseURL, req.DifyAPIKey, req.TotalCount, req.Deadline, strings.TrimSpace(req.Note))
+	app, err := g.Store.CreateDonationApplication(u.ID, req.Service, req.Model, req.DifyBaseURL, req.DifyAPIKey, req.TotalCount, req.Deadline, req.RpmLimit, strings.TrimSpace(req.Note))
 	if err != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
@@ -852,6 +1109,7 @@ func applicationJSON(a *db.DonationApplication) map[string]interface{} {
 		"has_key":     a.DifyAPIKeyEnc != "",
 		"total_count": a.TotalCount,
 		"deadline":    a.Deadline,
+		"rpm_limit":   a.RpmLimit,
 		"note":        a.Note,
 		"status":      a.Status,
 		"review_note": a.ReviewNote,
@@ -917,6 +1175,7 @@ func (g *Gateway) handleApproveApplication(w http.ResponseWriter, r *http.Reques
 		DifyAPIKey  string `json:"dify_api_key"`
 		TotalCount  int    `json:"total_count"`
 		Deadline    int64  `json:"deadline"`
+		RpmLimit    int    `json:"rpm_limit"`
 		ReviewNote  string `json:"review_note"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -946,6 +1205,7 @@ func (g *Gateway) handleApproveApplication(w http.ResponseWriter, r *http.Reques
 		DifyAPIKey:  req.DifyAPIKey,
 		TotalCount:  req.TotalCount,
 		Deadline:    req.Deadline,
+		RpmLimit:    req.RpmLimit,
 	}
 
 	app, donation, err := g.Store.ApproveApplication(id, adminUser.ID, modified, strings.TrimSpace(req.ReviewNote))

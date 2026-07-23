@@ -30,6 +30,7 @@ type Donation struct {
 	SuccessCount        int
 	FailureCount        int
 	ConsecutiveFailures int
+	RpmLimit            int
 	Status              string
 	Note                string
 	CreatedAt           int64
@@ -43,6 +44,7 @@ func scanDonation(row interface{ Scan(...interface{}) error }) (*Donation, error
 		&d.SourceUserID, &d.SourceDiscordID, &d.SourceUsername, &d.SourceText,
 		&d.Deadline, &d.TotalCount, &d.RemainingCount,
 		&d.SuccessCount, &d.FailureCount, &d.ConsecutiveFailures,
+		&d.RpmLimit,
 		&d.Status, &d.Note, &d.CreatedAt, &d.UpdatedAt,
 	); err != nil {
 		return nil, err
@@ -52,12 +54,17 @@ func scanDonation(row interface{ Scan(...interface{}) error }) (*Donation, error
 
 // CreateDonation inserts a new donation entry, encrypting the API key.
 // Validates totalCount > 0 and deadline > 0. remainingCount starts at totalCount.
+// rpmLimit defaults to 10 when <= 0.
 func (s *Store) CreateDonation(d *Donation, apiKeyPlain string) (*Donation, error) {
 	if d.TotalCount <= 0 {
 		return nil, fmt.Errorf("total_count must be positive, got %d", d.TotalCount)
 	}
 	if d.Deadline <= 0 {
 		return nil, fmt.Errorf("deadline must be a positive unix timestamp, got %d", d.Deadline)
+	}
+	rpmLimit := d.RpmLimit
+	if rpmLimit <= 0 {
+		rpmLimit = 10
 	}
 
 	enc, err := s.Encrypt(apiKeyPlain)
@@ -69,12 +76,12 @@ func (s *Store) CreateDonation(d *Donation, apiKeyPlain string) (*Donation, erro
 	res, err := s.db.Exec(
 		`INSERT INTO donations (service, model, dify_base_url, dify_api_key_enc,
 		 source_user_id, source_discord_id, source_username, source_text,
-		 deadline, total_count, remaining_count, status, note,
+		 deadline, total_count, remaining_count, rpm_limit, status, note,
 		 created_at, updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		d.Service, d.Model, d.DifyBaseURL, enc,
 		d.SourceUserID, d.SourceDiscordID, d.SourceUsername, d.SourceText,
-		d.Deadline, d.TotalCount, d.TotalCount, DonationActive, d.Note,
+		d.Deadline, d.TotalCount, d.TotalCount, rpmLimit, DonationActive, d.Note,
 		now, now,
 	)
 	if err != nil {
@@ -91,6 +98,7 @@ func (s *Store) GetDonation(id int64) (*Donation, error) {
 		 source_user_id, source_discord_id, source_username, source_text,
 		 deadline, total_count, remaining_count,
 		 success_count, failure_count, consecutive_failures,
+		 rpm_limit,
 		 status, note, created_at, updated_at
 		 FROM donations WHERE id=?`, id,
 	))
@@ -107,6 +115,7 @@ func (s *Store) ListDonations() ([]*Donation, error) {
 		 source_user_id, source_discord_id, source_username, source_text,
 		 deadline, total_count, remaining_count,
 		 success_count, failure_count, consecutive_failures,
+		 rpm_limit,
 		 status, note, created_at, updated_at
 		 FROM donations ORDER BY created_at DESC`,
 	)
@@ -160,6 +169,7 @@ func (s *Store) ListRoutableDonations(service, model string) ([]*Donation, error
 		 source_user_id, source_discord_id, source_username, source_text,
 		 deadline, total_count, remaining_count,
 		 success_count, failure_count, consecutive_failures,
+		 rpm_limit,
 		 status, note, created_at, updated_at
 		 FROM donations
 		 WHERE service=? AND model=? AND status=? AND deadline > ? AND remaining_count > 0

@@ -682,14 +682,15 @@ func TestPickWeightedDonation(t *testing.T) {
 	now := time.Now().Unix()
 	// Two donations: one with deadline soon (higher weight), one far.
 	donations := []*db.Donation{
-		{ID: 1, Deadline: now + 120},   // 2 min away → weight ~1/120
-		{ID: 2, Deadline: now + 86400}, // 24h away → weight ~1/86400
+		{ID: 1, Deadline: now + 120, RpmLimit: 10000},   // 2 min away → weight ~1/120
+		{ID: 2, Deadline: now + 86400, RpmLimit: 10000}, // 24h away → weight ~1/86400
 	}
+	limiter := newDonationRateLimiter()
 	// Run many trials and count selections.
 	const trials = 500
 	count1 := 0
 	for i := 0; i < trials; i++ {
-		picked := pickWeightedDonation(donations)
+		picked := pickWeightedDonation(donations, limiter)
 		if picked == nil {
 			t.Fatal("pick returned nil")
 		}
@@ -1184,5 +1185,180 @@ func TestDonationAppAdminAccess(t *testing.T) {
 	rec5 := donationRequest(gw, nil, "GET", "/api/me/donations", nil)
 	if rec5.Code != http.StatusUnauthorized {
 		t.Errorf("anonymous list: status = %d, want 401", rec5.Code)
+	}
+}
+
+// TestPickWeightedDonation_RpmFilter verifies that candidates at RPM limit
+// are excluded from selection.
+func TestPickWeightedDonation_RpmFilter(t *testing.T) {
+	now := time.Now().Unix()
+	limiter := newDonationRateLimiter()
+
+	// Fill up donation 1's RPM quota.
+	for i := 0; i < 5; i++ {
+		allowed, rec := limiter.allow(1, 5)
+		if !allowed {
+			t.Fatalf("pre-fill step %d unexpectedly blocked", i)
+		}
+		rec()
+	}
+
+	donations := []*db.Donation{
+		{ID: 1, Deadline: now + 120, RpmLimit: 5},
+		{ID: 2, Deadline: now + 86400, RpmLimit: 10000},
+		{ID: 3, Deadline: now + 600, RpmLimit: 10000},
+	}
+
+	// Run many trials: donation 1 should never be selected.
+	const trials = 200
+	for i := 0; i < trials; i++ {
+		picked := pickWeightedDonation(donations, limiter)
+		if picked == nil {
+			t.Fatal("pick returned nil")
+		}
+		if picked.ID == 1 {
+			t.Errorf("trial %d: donation 1 was selected despite being at RPM limit", i)
+		}
+	}
+}
+
+// TestPickWeightedDonation_AllOverloaded verifies nil return when all
+// candidates are at RPM limit.
+func TestPickWeightedDonation_AllOverloaded(t *testing.T) {
+	now := time.Now().Unix()
+	limiter := newDonationRateLimiter()
+
+	// Fill up both donations' RPM quotas.
+	for i := 0; i < 3; i++ {
+		if allowed, rec := limiter.allow(1, 3); allowed {
+			rec()
+		}
+		if allowed, rec := limiter.allow(2, 3); allowed {
+			rec()
+		}
+	}
+
+	donations := []*db.Donation{
+		{ID: 1, Deadline: now + 120, RpmLimit: 3},
+		{ID: 2, Deadline: now + 86400, RpmLimit: 3},
+	}
+
+	picked := pickWeightedDonation(donations, limiter)
+	if picked != nil {
+		t.Errorf("expected nil when all overloaded, got donation %d", picked.ID)
+	}
+}
+
+// TestPatchDonation verifies partial field updates via PATCH.
+func TestPatchDonation(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	adminC := adminCookie(t, gw)
+
+	// Create a donation.
+	deadline := time.Now().Add(48 * time.Hour).Unix()
+	rec := donationRequest(gw, adminC, "POST", "/api/admin/donations", map[string]interface{}{
+		"service":       "general",
+		"model":         "patch-test",
+		"dify_base_url": "https://dify.example.com/v1",
+		"dify_api_key":  "app-test-key",
+		"deadline":      deadline,
+		"total_count":   100,
+		"source_text":   "test source",
+		"note":          "original note",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create: status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var cr struct {
+		Donation map[string]interface{} `json:"donation"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &cr)
+	donID := int64(cr.Donation["id"].(float64))
+
+	// Verify rpm_limit default is 10.
+	if v, ok := cr.Donation["rpm_limit"]; !ok || int(v.(float64)) != 10 {
+		t.Errorf("default rpm_limit: got %v, want 10", cr.Donation["rpm_limit"])
+	}
+
+	// Patch only rpm_limit.
+	rec2 := donationRequest(gw, adminC, "PATCH", fmt.Sprintf("/api/admin/donations/%d", donID), map[string]interface{}{
+		"rpm_limit": 20,
+	})
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("patch rpm_limit: status = %d, body: %s", rec2.Code, rec2.Body.String())
+	}
+	var pr struct {
+		OK         bool                   `json:"ok"`
+		Donation   map[string]interface{} `json:"donation"`
+		Validation map[string]interface{} `json:"validation"`
+	}
+	json.Unmarshal(rec2.Body.Bytes(), &pr)
+	if !pr.OK {
+		t.Fatal("expected ok=true")
+	}
+	if v := pr.Donation["rpm_limit"]; int(v.(float64)) != 20 {
+		t.Errorf("rpm_limit after patch: got %v, want 20", v)
+	}
+	// Note should be unchanged.
+	if v := pr.Donation["note"]; v != "original note" {
+		t.Errorf("note after patch: got %v, want 'original note'", v)
+	}
+	// Validation: no URL/key change, so "no validation needed".
+	if v := pr.Validation["compatible"]; v != true {
+		t.Errorf("validation.compatible = %v", v)
+	}
+
+	// Patch multiple fields: note + status.
+	rec3 := donationRequest(gw, adminC, "PATCH", fmt.Sprintf("/api/admin/donations/%d", donID), map[string]interface{}{
+		"note":   "updated note",
+		"status": "inactive",
+	})
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("patch note+status: status = %d, body: %s", rec3.Code, rec3.Body.String())
+	}
+	json.Unmarshal(rec3.Body.Bytes(), &pr)
+	if pr.Donation["note"] != "updated note" {
+		t.Errorf("note: got %v", pr.Donation["note"])
+	}
+	if pr.Donation["status"] != "inactive" {
+		t.Errorf("status: got %v", pr.Donation["status"])
+	}
+
+	// Verify in DB.
+	d, _ := store.GetDonation(donID)
+	if d == nil {
+		t.Fatal("donation missing after patch")
+	}
+	if d.RpmLimit != 20 {
+		t.Errorf("db rpm_limit = %d, want 20", d.RpmLimit)
+	}
+	if d.Note != "updated note" {
+		t.Errorf("db note = %q, want 'updated note'", d.Note)
+	}
+	if d.Status != db.DonationInactive {
+		t.Errorf("db status = %s, want inactive", d.Status)
+	}
+
+	// Patch expired donation returns 400.
+	store.SetDonationStatus(donID, db.DonationExpired)
+	rec4 := donationRequest(gw, adminC, "PATCH", fmt.Sprintf("/api/admin/donations/%d", donID), map[string]interface{}{
+		"note": "should fail",
+	})
+	if rec4.Code != http.StatusBadRequest {
+		t.Errorf("patch expired: status = %d, want 400", rec4.Code)
+	}
+
+	// Patch non-existent donation returns 404.
+	rec5 := donationRequest(gw, adminC, "PATCH", "/api/admin/donations/99999", map[string]interface{}{
+		"note": "nope",
+	})
+	if rec5.Code != http.StatusNotFound {
+		t.Errorf("patch missing: status = %d, want 404", rec5.Code)
+	}
+
+	// Unauthenticated / non-admin blocked.
+	rec6 := donationRequest(gw, nil, "PATCH", fmt.Sprintf("/api/admin/donations/%d", donID), map[string]interface{}{})
+	if rec6.Code != http.StatusForbidden {
+		t.Errorf("anonymous patch: status = %d, want 403", rec6.Code)
 	}
 }

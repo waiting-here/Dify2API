@@ -23,6 +23,7 @@ type DonationApplication struct {
 	DifyAPIKeyEnc   string
 	TotalCount      int
 	Deadline        int64
+	RpmLimit        int
 	Note            string
 	Status          string
 	ReviewerID      sql.NullInt64
@@ -39,7 +40,7 @@ func scanDonationApplication(row interface{ Scan(...interface{}) error }) (*Dona
 	var a DonationApplication
 	if err := row.Scan(
 		&a.ID, &a.UserID, &a.Service, &a.Model, &a.DifyBaseURL, &a.DifyAPIKeyEnc,
-		&a.TotalCount, &a.Deadline, &a.Note, &a.Status,
+		&a.TotalCount, &a.Deadline, &a.RpmLimit, &a.Note, &a.Status,
 		&a.ReviewerID, &a.ReviewNote, &a.DonationID, &a.CreatedAt,
 	); err != nil {
 		return nil, err
@@ -48,19 +49,24 @@ func scanDonationApplication(row interface{ Scan(...interface{}) error }) (*Dona
 }
 
 // CreateDonationApplication inserts a new pending application with encrypted API key.
-func (s *Store) CreateDonationApplication(userID int64, service, model, difyBaseURL, difyAPIKey string, totalCount int, deadline int64, note string) (*DonationApplication, error) {
+// rpmLimit defaults to 10 when <= 0.
+func (s *Store) CreateDonationApplication(userID int64, service, model, difyBaseURL, difyAPIKey string, totalCount int, deadline int64, rpmLimit int, note string) (*DonationApplication, error) {
 	enc, err := s.Encrypt(difyAPIKey)
 	if err != nil {
 		return nil, fmt.Errorf("encrypt api key: %w", err)
 	}
 
+	if rpmLimit <= 0 {
+		rpmLimit = 10
+	}
+
 	now := time.Now().Unix()
 	res, err := s.db.Exec(
 		`INSERT INTO donation_applications (user_id, service, model, dify_base_url, dify_api_key_enc,
-		 total_count, deadline, note, status, created_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		 total_count, deadline, rpm_limit, note, status, created_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 		userID, service, model, difyBaseURL, enc,
-		totalCount, deadline, note, AppStatusPending, now,
+		totalCount, deadline, rpmLimit, note, AppStatusPending, now,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create application: %w", err)
@@ -73,7 +79,7 @@ func (s *Store) CreateDonationApplication(userID int64, service, model, difyBase
 func (s *Store) GetApplication(id int64) (*DonationApplication, error) {
 	a, err := scanDonationApplication(s.db.QueryRow(
 		`SELECT id, user_id, service, model, dify_base_url, dify_api_key_enc,
-		 total_count, deadline, note, status,
+		 total_count, deadline, rpm_limit, note, status,
 		 reviewer_id, review_note, donation_id, created_at
 		 FROM donation_applications WHERE id=?`, id,
 	))
@@ -87,7 +93,7 @@ func (s *Store) GetApplication(id int64) (*DonationApplication, error) {
 func (s *Store) ListApplicationsByUser(userID int64) ([]*DonationApplication, error) {
 	rows, err := s.db.Query(
 		`SELECT da.id, da.user_id, da.service, da.model, da.dify_base_url, da.dify_api_key_enc,
-		 da.total_count, da.deadline, da.note, da.status,
+		 da.total_count, da.deadline, da.rpm_limit, da.note, da.status,
 		 da.reviewer_id, da.review_note, da.donation_id, da.created_at
 		 FROM donation_applications da
 		 WHERE da.user_id=?
@@ -113,7 +119,7 @@ func (s *Store) ListApplicationsByUser(userID int64) ([]*DonationApplication, er
 func (s *Store) ListPendingApplications() ([]*DonationApplication, error) {
 	rows, err := s.db.Query(
 		`SELECT da.id, da.user_id, da.service, da.model, da.dify_base_url, da.dify_api_key_enc,
-		 da.total_count, da.deadline, da.note, da.status,
+		 da.total_count, da.deadline, da.rpm_limit, da.note, da.status,
 		 da.reviewer_id, da.review_note, da.donation_id, da.created_at,
 		 u.username, u.discord_id
 		 FROM donation_applications da
@@ -131,7 +137,7 @@ func (s *Store) ListPendingApplications() ([]*DonationApplication, error) {
 		var a DonationApplication
 		if err := rows.Scan(
 			&a.ID, &a.UserID, &a.Service, &a.Model, &a.DifyBaseURL, &a.DifyAPIKeyEnc,
-			&a.TotalCount, &a.Deadline, &a.Note, &a.Status,
+			&a.TotalCount, &a.Deadline, &a.RpmLimit, &a.Note, &a.Status,
 			&a.ReviewerID, &a.ReviewNote, &a.DonationID, &a.CreatedAt,
 			&a.Username, &a.DiscordID,
 		); err != nil {
@@ -161,6 +167,7 @@ type ApproveApplicationFields struct {
 	DifyAPIKey  string `json:"dify_api_key"` // plaintext, re-encrypted
 	TotalCount  int    `json:"total_count"`
 	Deadline    int64  `json:"deadline"`
+	RpmLimit    int    `json:"rpm_limit"`
 }
 
 // ApproveApplication approves a pending application, creates a donation entry
@@ -189,6 +196,7 @@ func (s *Store) ApproveApplication(id int64, reviewerID int64, m *ApproveApplica
 	apiKeyEnc := app.DifyAPIKeyEnc
 	totalCount := app.TotalCount
 	deadline := app.Deadline
+	rpmLimit := app.RpmLimit
 
 	if m.Service != "" {
 		service = m.Service
@@ -212,17 +220,20 @@ func (s *Store) ApproveApplication(id int64, reviewerID int64, m *ApproveApplica
 	if m.Deadline > 0 {
 		deadline = m.Deadline
 	}
+	if m.RpmLimit > 0 {
+		rpmLimit = m.RpmLimit
+	}
 
 	// Create donation entry (inactive).
 	res, err := s.db.Exec(
 		`INSERT INTO donations (service, model, dify_base_url, dify_api_key_enc,
 		 source_user_id, source_discord_id, source_username, source_text,
-		 deadline, total_count, remaining_count, status, note,
+		 deadline, total_count, remaining_count, rpm_limit, status, note,
 		 created_at, updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		service, model, baseURL, apiKeyEnc,
 		sql.NullInt64{Int64: app.UserID, Valid: true}, "", "", "",
-		deadline, totalCount, totalCount, DonationInactive, app.Note,
+		deadline, totalCount, totalCount, rpmLimit, DonationInactive, app.Note,
 		now, now,
 	)
 	if err != nil {

@@ -43,6 +43,8 @@ type Gateway struct {
 	mailer *mailer.Mailer
 	// userDebug manages per-user self-service debug sessions.
 	userDebug *userDebugHub
+	// donationLimiter enforces per-donation RPM limits.
+	donationLimiter *donationRateLimiter
 }
 
 // NewGateway creates a new Gateway.
@@ -57,6 +59,7 @@ func NewGateway(cfg *config.Config, store *db.Store) *Gateway {
 		authFailThrottle: newIPThrottle(cfg.AuthFailRPMPerIP, 60, cfg.IPThrottleWindowSec),
 		mailer:           mailer.New(cfg.SMTP, db.DefaultMailerCoolMinutes),
 		userDebug:        newUserDebugHub(),
+		donationLimiter:  newDonationRateLimiter(),
 	}
 	if gw.mailer != nil {
 		gw.mailer.Start()
@@ -98,6 +101,7 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	// Charity / donation admin endpoints
 	mux.HandleFunc("POST /api/admin/donations", g.handleCreateDonation)
 	mux.HandleFunc("GET /api/admin/donations", g.handleListDonations)
+	mux.HandleFunc("PATCH /api/admin/donations/{id}", g.handlePatchDonation)
 	mux.HandleFunc("POST /api/admin/donations/{id}/status", g.handleDonationStatus)
 	mux.HandleFunc("DELETE /api/admin/donations/{id}", g.handleDeleteDonation)
 
@@ -521,13 +525,13 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// 4. Weighted random selection
-	picked := pickWeightedDonation(donations)
+	// 4. Weighted random selection (with per-donation RPM filtering).
+	picked := pickWeightedDonation(donations, g.donationLimiter)
 	if picked == nil {
-		g.logRequest(user.ID, req.Model, service, startedAt, "error", "service_unavailable",
-			http.StatusServiceUnavailable, "pickWeightedDonation returned nil")
-		g.writeError(w, http.StatusServiceUnavailable, "service_unavailable",
-			"当前该公益模型无可用捐赠条目")
+		g.logRequest(user.ID, req.Model, service, startedAt, "error", "charity_overloaded",
+			http.StatusTooManyRequests, "all routable donations at RPM limit")
+		g.writeError(w, http.StatusTooManyRequests, "charity_overloaded",
+			"当前该公益模型所有捐赠条目均已达速率上限，请稍后重试")
 		return
 	}
 
