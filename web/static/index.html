@@ -62,7 +62,7 @@
   .user-top-cards { display: flex; flex-wrap: wrap; gap: 1.25rem; }
   .user-top-cards > .card { flex: 1 1 16rem; margin-bottom: 1.25rem; }
   /* Admin logs filter grid layout — 3 rows. */
-  #admin-logs-filter { display: grid; grid-template-columns: 1.5fr 1fr 1fr auto; gap: .5rem .75rem; align-items: center; }
+  #admin-logs-filter { display: grid; grid-template-columns: 2fr 1fr auto; gap: .5rem .75rem; align-items: center; }
   #admin-logs-filter label { margin-bottom: 0; }
   #admin-logs-filter input, #admin-logs-filter select { margin-bottom: 0; }
   #admin-logs-filter button { margin-bottom: 0; }
@@ -72,7 +72,7 @@
   #admin-logs-filter .afl-model  { grid-column: 2; grid-row: 2; }
   #admin-logs-filter .afl-since  { grid-column: 1; grid-row: 3; }
   #admin-logs-filter .afl-until  { grid-column: 2; grid-row: 3; }
-  #admin-logs-filter .afl-btn    { grid-column: 4; grid-row: 1 / 4; align-self: center; }
+  #admin-logs-filter .afl-btn    { grid-column: 3; grid-row: 1 / 4; align-self: center; }
   @media (max-width: 800px) {
     #admin-logs-filter { grid-template-columns: 1fr; }
     #admin-logs-filter .afl-btn { grid-column: 1; grid-row: auto; }
@@ -92,6 +92,7 @@
   <a href="/privacy" target="_blank">隐私政策</a> · <a href="/terms" target="_blank">服务协议</a>
 </footer>
 <div id="toast"></div>
+<script src="/static/i18n.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>
