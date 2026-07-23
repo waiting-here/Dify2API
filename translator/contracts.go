@@ -24,7 +24,7 @@ var serviceRegistry = []ServiceInfo{
 	{Name: "custom", Label: "自定义单轮问答（user_0 + 可选 system_prompt）"},
 	{Name: "website-summary", Label: "网页总结（request_url + 可选 request_instruction）"},
 	{Name: "image-processing", Label: "图片理解（system_prompt 可选 + user_request + 图片）"},
-	{Name: "sillytavern-main-trimmed", Label: "SillyTavern 主对话（2–8 条严格布局）"},
+	{Name: "sillytavern-main-trimmed", Label: "SillyTavern 主对话（2–10 条宽松布局）"},
 	{Name: "sillytavern-SP·数据库-填表", Label: "SillyTavern 数据库·填表（system + 可选 user_0 + assistant 打头交替 + 预填充）"},
 }
 
@@ -55,7 +55,7 @@ func IsSupportedService(name string) bool {
 //	image-processing: user -> user_request (required text),
 //	                  system -> system_prompt (optional),
 //	                  image parts -> input_image_list (>=1)
-//	sillytavern:      system, user, then 0-3 assistant/user pairs -> 8 slots
+//	sillytavern:      system + 1-9 positional slots -> 10 slots
 //	                  (database fill-table: system required, user_0 optional,
 //	                  then assistant/user alternation with prefill)
 //
@@ -200,8 +200,8 @@ func ContractVarsFor(service string) ContractVars {
 		return ContractVars{Required: []string{"user_request", "input_image_list"}, Optional: []string{"system_prompt"}}
 	case "sillytavern-main-trimmed":
 		return ContractVars{
-			Required: []string{"user_0"},
-			Optional: []string{"system_prompt", "assistant_1", "user_1", "assistant_2", "user_2", "assistant_3", "user_3"},
+			Required: nil,
+			Optional: []string{"system_prompt", "user_0", "assistant_1", "user_1", "assistant_2", "user_2", "assistant_3", "user_3", "assistant_4", "user_4"},
 		}
 	case "sillytavern-SP·数据库-填表":
 		return ContractVars{

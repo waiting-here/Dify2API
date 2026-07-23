@@ -111,7 +111,7 @@ workflow:
           label: 用户0
           options: []
           placeholder: ''
-          required: true
+          required: false
           type: paragraph
           variable: user_0
         - default: ''
@@ -162,7 +162,23 @@ workflow:
           required: false
           type: paragraph
           variable: user_3
-      height: 318
+        - default: ''
+          hint: ''
+          label: 助手4
+          options: []
+          placeholder: ''
+          required: false
+          type: paragraph
+          variable: assistant_4
+        - default: ''
+          hint: ''
+          label: 用户4
+          options: []
+          placeholder: ''
+          required: false
+          type: paragraph
+          variable: user_4
+      height: 370
       id: '1784230714832'
       position:
         x: 80
@@ -215,6 +231,12 @@ workflow:
         - id: 6692c9d4-942b-4746-b4db-e3501914d195
           role: user
           text: '{{#1784230714832.user_3#}}'
+        - id: 7116732e-ca1f-4ae3-b269-be692811699c
+          role: assistant
+          text: '{{#1784230714832.assistant_4#}}'
+        - id: e12bbe1e-2ac7-4b64-a76d-1d138b2cde26
+          role: user
+          text: '{{#1784230714832.user_4#}}'
         reasoning_format: tagged
         selected: false
         title: LLM

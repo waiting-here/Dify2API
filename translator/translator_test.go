@@ -26,7 +26,7 @@ func TestTranslateToSlots_Minimal(t *testing.T) {
 		t.Errorf("user_0 = %q", inputs["user_0"])
 	}
 	// All optional slots must be present but empty.
-	for _, name := range []string{"assistant_1", "user_1", "assistant_2", "user_2", "assistant_3", "user_3"} {
+	for _, name := range []string{"assistant_1", "user_1", "assistant_2", "user_2", "assistant_3", "user_3", "assistant_4", "user_4"} {
 		v, ok := inputs[name]
 		if !ok {
 			t.Errorf("slot %q missing from result", name)
@@ -37,7 +37,7 @@ func TestTranslateToSlots_Minimal(t *testing.T) {
 }
 
 func TestTranslateToSlots_Full(t *testing.T) {
-	// Longest valid request: all 8 slots filled.
+	// Longest valid request: all 10 slots filled.
 	messages := []openai.Message{
 		{Role: "system", Content: "S"},
 		{Role: "user", Content: "U0"},
@@ -47,6 +47,8 @@ func TestTranslateToSlots_Full(t *testing.T) {
 		{Role: "user", Content: "U2"},
 		{Role: "assistant", Content: "A3"},
 		{Role: "user", Content: "U3"},
+		{Role: "assistant", Content: "A4"},
+		{Role: "user", Content: "U4"},
 	}
 
 	inputs, err := TranslateToSlots(messages)
@@ -63,6 +65,8 @@ func TestTranslateToSlots_Full(t *testing.T) {
 		"user_2":        "U2",
 		"assistant_3":   "A3",
 		"user_3":        "U3",
+		"assistant_4":   "A4",
+		"user_4":        "U4",
 	}
 	for k, v := range want {
 		if inputs[k] != v {
@@ -87,7 +91,7 @@ func TestTranslateToSlots_PartialPairs(t *testing.T) {
 	if inputs["assistant_1"] != "A1" || inputs["user_1"] != "U1" {
 		t.Errorf("pair 1 wrong: assistant_1=%q user_1=%q", inputs["assistant_1"], inputs["user_1"])
 	}
-	for _, name := range []string{"assistant_2", "user_2", "assistant_3", "user_3"} {
+	for _, name := range []string{"assistant_2", "user_2", "assistant_3", "user_3", "assistant_4", "user_4"} {
 		if inputs[name] != "" {
 			t.Errorf("slot %q = %q, want empty", name, inputs[name])
 		}
@@ -137,79 +141,73 @@ func TestTranslateToSlots_TooMany(t *testing.T) {
 		{Role: "assistant", Content: "A3"},
 		{Role: "user", Content: "U3"},
 		{Role: "assistant", Content: "A4"},
+		{Role: "user", Content: "U4"},
+		{Role: "assistant", Content: "A5"},
 	}
 	if _, err := TranslateToSlots(messages); err == nil {
-		t.Fatal("expected error for 9 messages")
-	} else if !strings.Contains(err.Error(), "at most 8") {
+		t.Fatal("expected error for 11 messages")
+	} else if !strings.Contains(err.Error(), "at most 10") {
 		t.Errorf("error = %v", err)
 	}
 }
 
 func TestTranslateToSlots_WrongRole(t *testing.T) {
-	cases := []struct {
-		name     string
-		messages []openai.Message
-		wantIdx  string
-	}{
-		{
-			name: "first must be system",
-			messages: []openai.Message{
-				{Role: "user", Content: "U0"},
-				{Role: "user", Content: "U1"},
-			},
-			wantIdx: "messages[0]",
-		},
-		{
-			name: "second must be user",
-			messages: []openai.Message{
-				{Role: "system", Content: "S"},
-				{Role: "assistant", Content: "A"},
-			},
-			wantIdx: "messages[1]",
-		},
-		{
-			name: "third must be assistant",
-			messages: []openai.Message{
-				{Role: "system", Content: "S"},
-				{Role: "user", Content: "U0"},
-				{Role: "user", Content: "U1"},
-			},
-			wantIdx: "messages[2]",
-		},
-		{
-			name: "no second system allowed",
-			messages: []openai.Message{
-				{Role: "system", Content: "S1"},
-				{Role: "user", Content: "U0"},
-				{Role: "assistant", Content: "A1"},
-				{Role: "system", Content: "S2"},
-			},
-			wantIdx: "messages[3]",
-		},
-	}
+	// Only messages[0] is role-checked.  All other positions fill positionally.
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := TranslateToSlots(tc.messages)
-			if err == nil {
-				t.Fatal("expected error")
-			}
-			if !strings.Contains(err.Error(), tc.wantIdx) {
-				t.Errorf("error %q should mention %s", err.Error(), tc.wantIdx)
-			}
-		})
-	}
+	t.Run("first must be system", func(t *testing.T) {
+		messages := []openai.Message{
+			{Role: "user", Content: "U0"},
+			{Role: "user", Content: "U1"},
+		}
+		_, err := TranslateToSlots(messages)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "messages[0]") {
+			t.Errorf("error %q should mention messages[0]", err.Error())
+		}
+	})
+
+	t.Run("non-system at 0 passes positional fill", func(t *testing.T) {
+		// All non-[0] messages are accepted regardless of role.
+		messages := []openai.Message{
+			{Role: "system", Content: "S"},
+			{Role: "assistant", Content: "A0"}, // would have been illegal before
+			{Role: "assistant", Content: "A1"}, // consecutive assistant → fills assistant_1,assistant_2
+		}
+		inputs, err := TranslateToSlots(messages)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if inputs["user_0"] != "A0" {
+			t.Errorf("user_0 = %q, want A0 (positional fill)", inputs["user_0"])
+		}
+		if inputs["assistant_1"] != "A1" {
+			t.Errorf("assistant_1 = %q, want A1", inputs["assistant_1"])
+		}
+		// user_1 should be empty (no 4th message).
+		if inputs["user_1"] != "" {
+			t.Errorf("user_1 = %q, want empty", inputs["user_1"])
+		}
+	})
 }
 
-func TestTranslateToSlots_EmptyUser0(t *testing.T) {
+func TestTranslateToSlots_EmptySlots(t *testing.T) {
+	// Empty / whitespace content is accepted (all slots are optional).
 	messages := []openai.Message{
 		{Role: "system", Content: "S"},
 		{Role: "user", Content: "   "},
 	}
-	if _, err := TranslateToSlots(messages); err == nil {
-		t.Fatal("expected error for empty user_0")
-	} else if !strings.Contains(err.Error(), "user_0") {
-		t.Errorf("error = %v", err)
+	inputs, err := TranslateToSlots(messages)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if inputs["system_prompt"] != "S" {
+		t.Errorf("system_prompt = %q", inputs["system_prompt"])
+	}
+	// Trimmed whitespace → empty string.
+	if inputs["user_0"] != "" {
+		t.Errorf("user_0 = %q, want empty after trim", inputs["user_0"])
 	}
 }
 
