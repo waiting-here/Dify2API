@@ -254,7 +254,12 @@ func (g *Gateway) handleListBulletins(w http.ResponseWriter, r *http.Request) {
 	out := make([]map[string]interface{}, 0, len(dbList)+3)
 
 	// 1. System bulletins first (injected by handler based on settings).
-	sysBulletins := g.buildSystemBulletins(now)
+	// Determine language from the logged-in user; fall back to "zh".
+	lang := "zh"
+	if u := g.currentUser(r); u != nil && u.Lang != "" {
+		lang = u.Lang
+	}
+	sysBulletins := g.buildSystemBulletins(now, lang)
 	for _, sb := range sysBulletins {
 		out = append(out, sb)
 	}
@@ -269,15 +274,20 @@ func (g *Gateway) handleListBulletins(w http.ResponseWriter, r *http.Request) {
 }
 
 // buildSystemBulletins creates system bulletin entries based on current settings.
-func (g *Gateway) buildSystemBulletins(now int64) []map[string]interface{} {
+// lang is the preferred UI language ("zh" or "en"); falls back to Chinese when unrecognised.
+func (g *Gateway) buildSystemBulletins(now int64, lang string) []map[string]interface{} {
 	var out []map[string]interface{}
 
 	// Checkin disabled (credits_cap == 0).
 	creditsCap := g.Store.GetSettingIntAllowZero(db.SettingCreditsCap, db.DefaultCreditsCap)
 	if creditsCap == 0 {
+		title := "Check-in System Unavailable"
+		if lang == "zh" {
+			title = "签到系统当前未开放"
+		}
 		out = append(out, map[string]interface{}{
 			"id":         sysBulletinCheckinDisabled,
-			"title":      "签到系统当前未开放",
+			"title":      title,
 			"content":    "",
 			"type":       db.BulletinTypeWarning,
 			"sort_order": 100,
@@ -286,16 +296,20 @@ func (g *Gateway) buildSystemBulletins(now int64) []map[string]interface{} {
 			"expires_at": nil,
 			"is_system":  true,
 			"system_key": "checkin_disabled",
-			"lang":       "zh",
+			"lang":       lang,
 		})
 	}
 
 	// Donation disabled.
 	donationEnabled := g.Store.GetSettingString(db.SettingDonationEnabled, "") == "true"
 	if !donationEnabled {
+		title := "Donation System Unavailable"
+		if lang == "zh" {
+			title = "捐赠系统当前未开放"
+		}
 		out = append(out, map[string]interface{}{
 			"id":         sysBulletinDonationDisabled,
-			"title":      "捐赠系统当前未开放",
+			"title":      title,
 			"content":    "",
 			"type":       db.BulletinTypeWarning,
 			"sort_order": 99,
@@ -304,16 +318,20 @@ func (g *Gateway) buildSystemBulletins(now int64) []map[string]interface{} {
 			"expires_at": nil,
 			"is_system":  true,
 			"system_key": "donation_disabled",
-			"lang":       "zh",
+			"lang":       lang,
 		})
 	}
 
 	// Charity disabled.
 	charityEnabled := g.Store.GetSettingString(db.SettingCharityEnabled, "") == "true"
 	if !charityEnabled {
+		title := "Charity System Unavailable"
+		if lang == "zh" {
+			title = "公益系统当前未开放"
+		}
 		out = append(out, map[string]interface{}{
 			"id":         sysBulletinCharityDisabled,
-			"title":      "公益系统当前未开放",
+			"title":      title,
 			"content":    "",
 			"type":       db.BulletinTypeWarning,
 			"sort_order": 98,
@@ -322,7 +340,7 @@ func (g *Gateway) buildSystemBulletins(now int64) []map[string]interface{} {
 			"expires_at": nil,
 			"is_system":  true,
 			"system_key": "charity_disabled",
-			"lang":       "zh",
+			"lang":       lang,
 		})
 	}
 
