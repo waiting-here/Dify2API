@@ -665,7 +665,7 @@ function renderAdminNotice() {
 
 /* ---------------- pagination (shared) ---------------- */
 function newPager(rowFn) {
-  return { data: [], page: 1, size: 10, rowFn };
+  return { data: [], page: 1, size: 10, rowFn, afterRender: null };
 }
 function renderPaged(p, rowsSel, ctrlsSel, emptyCols) {
   const total = p.data.length;
@@ -687,9 +687,11 @@ function renderPaged(p, rowsSel, ctrlsSel, emptyCols) {
     p.size = e.target.value === "inf" ? Infinity : parseInt(e.target.value, 10);
     p.page = 1;
     renderPaged(p, rowsSel, ctrlsSel, emptyCols);
+    if (p.afterRender) p.afterRender();
   };
-  c.querySelector(".pg-prev").onclick = () => { p.page--; renderPaged(p, rowsSel, ctrlsSel, emptyCols); };
-  c.querySelector(".pg-next").onclick = () => { p.page++; renderPaged(p, rowsSel, ctrlsSel, emptyCols); };
+  c.querySelector(".pg-prev").onclick = () => { p.page--; renderPaged(p, rowsSel, ctrlsSel, emptyCols); if (p.afterRender) p.afterRender(); };
+  c.querySelector(".pg-next").onclick = () => { p.page++; renderPaged(p, rowsSel, ctrlsSel, emptyCols); if (p.afterRender) p.afterRender(); };
+  if (p.afterRender) p.afterRender();
 }
 
 /* ---------------- user site: dashboard ---------------- */
@@ -2112,8 +2114,8 @@ function applyUserFilter() {
     (u.discord_id || "").toLowerCase().includes(q)
   ) : _allAdminUsers;
   userPager.page = 1;
+  userPager.afterRender = bindUserRowActions;
   renderPaged(userPager, "#user-rows", "#user-pager", 8);
-  bindUserRowActions();
 }
 
 async function loadAdminUsers() {
