@@ -522,6 +522,7 @@ async function switchLang() {
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const fmtT = (ts) => (ts ? new Date(ts * 1000).toLocaleString() : "—");
+const fmtDate = (ts) => (ts ? new Date(ts * 1000).toLocaleDateString() : "—");
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -861,22 +862,27 @@ function initUserLogsTab() {
 }
 
 // ---- Debug tab state ----
+let _debugActive = false;
+let _debugDryRun = true;
 let _debugEventSource = null;
-let _debugEvents = [];       // newest first
+let _debugEvents = [];
 const _debugMaxEvents = 50;
 
 function initUserDebugTab() {
   const section = $("#debug-section");
   if (!section) return;
 
-  // Check current status from server.
+  // Render immediately based on localStorage (avoids showing placeholder).
+  renderDebugUI();
+
+  // Then check server-side status asynchronously and update if needed.
   api("/api/me/debug/status").then((st) => {
     _debugActive = st.active;
     _debugDryRun = st.dry_run;
     renderDebugUI();
     if (_debugActive) connectDebugSSE();
   }).catch(() => {
-    renderDebugUI();
+    // Server unreachable — keep the immediate render as-is.
   });
 }
 
@@ -1927,7 +1933,7 @@ function userRow(u) {
       <td class="mono">${u.credits != null ? String(u.credits) : "0"}</td>
       <td class="mono">${u.donation_credit != null ? String(u.donation_credit) : "0"}</td>
       <td>${rpm}</td>
-      <td class="muted">${fmtT(u.created_at)}</td>
+      <td class="muted" title="${fmtT(u.created_at)}" style="white-space:nowrap">${fmtDate(u.created_at)}</td>
       <td class="wrap">${userStatusBadges(u)}</td>
       <td class="row-actions">
         <button class="secondary u-ban">${T('ban')}</button>
