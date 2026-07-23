@@ -37,7 +37,6 @@ SillyTavern / Pi ──HTTPS──▶ Nginx ──HTTP──▶ Dify2API ──H
 ├── dify/                 # Dify 客户端（workflows/run、parameters、files/upload）
 ├── handler/              # HTTP 路由、中间件（双站点/HTTPS）、限流背压
 ├── web/static/           # 内嵌 SPA（Pico.css + 原生 JS，i18n 字典）
-│                         # 含隐私政策与服务协议模板
 ├── integrations/         # 客户端集成（pi-dify-subagent）
 ├── SECURITY.md           # 安全漏洞报告指引
 ├── CONTRIBUTING.md       # 贡献指南（含 DCO 要求）
@@ -174,6 +173,9 @@ result_limit: 4000               # 超限结果写临时文件，仅回路径+�
   任一超限返回 403 `rpm_exceeded`（文案含类别与阈值）；管理台可调
   三个全局上限、每用户三个覆盖值、违规累计阈值（默认 5）与
   自动封禁时长（默认 24h）；三类违规合并计数；
+  **公益资源路由**中每条捐赠条目有独立 RPM 上限（默认 10 次/分，60 秒窗口），
+  路由加权选择时自动跳过超限条目，全部超限返回 429 `charity_overloaded`；
+  管理员可为每条捐赠单独调整上限；
 - **IP 限流**：`/api/*` 网页接口按源 IP 限流（默认 120 次/分，超限
   60 秒内 429，不封禁、不影响 `/v1/*`；`WEB_RPM_PER_IP=0` 关闭）；
   `/v1/*` 无效密钥请求按源 IP 节流（默认 30 次/分，防无效密钥
@@ -284,6 +286,7 @@ SMTP_TLS=implicit
 | 415 | `invalid_request` | Content-Type 不是 application/json |
 | 429 | `server_busy` | 全局并发已满（附 Retry-After） |
 | 429 | `rate_limited` | 源 IP 被限流（Web 接口超频或无效密钥过多，附 Retry-After） |
+| 429 | `charity_overloaded` | 当前该公益模型所有捐赠条目均已达速率上限，请稍后重试 |
 | 503 | `service_unavailable` | 当前该公益模型无可用捐赠条目 |
 | 503 | `maintenance` | 站点处于维护模式 |
 | 4xx | （透传上游 code） | Dify 返回 4xx 时原状态码与错误码透传（如 400 `invalid_param`），消息带 `[Dify]` 前缀 |
