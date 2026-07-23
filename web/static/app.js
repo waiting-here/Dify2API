@@ -338,6 +338,12 @@ const i18n = {
   debugDifyInputsLabel: "Dify 输入映射",
   debugResponseBodyLabel: "响应",
   langSwitch: "中/EN",
+  dataManagement: "数据管理",
+  myDonations: "我的捐赠",
+  debugComingSoon: "调试功能将在后续版本中提供",
+  checkinMinLabel: "签到最低积分",
+  checkinMaxLabel: "签到最高积分",
+  creditsCapLabel: "积分上限",
   },
   en: {
   adminTabAlerts: "Alert Center",
@@ -495,6 +501,12 @@ database — debug data exists only within the current browser tab.
   userTabLogs: "Request Logs",
   userCharityBanner: "Charity system has not been enabled by administrator",
   userDonationBanner: "Donation system has not been enabled by administrator",
+  dataManagement: "Data Management",
+  myDonations: "My Donations",
+  debugComingSoon: "Debug features coming soon",
+  checkinMinLabel: "Min Check-in Credits",
+  checkinMaxLabel: "Max Check-in Credits",
+  creditsCapLabel: "Credits Cap",
   }
 };
 
@@ -732,7 +744,7 @@ async function renderUserDashboard() {
         </div>
       </section>
       <section class="card" id="data-card">
-        <h3>数据管理</h3>
+        <h3>${T('dataManagement')}</h3>
         <div class="row-actions">
           <button id="export-data" class="secondary">${T('exportData')}</button>
           <button id="delete-account" class="contrast outline">${T('deleteAccount')}</button>
@@ -778,7 +790,7 @@ async function renderUserDashboard() {
     <div id="utab-charity" class="user-tab-content" style="display:none">
       <section class="card" id="charity-card"></section>
       <section class="card" id="my-donations-section">
-        <h3>我的捐赠</h3>
+        <h3>${T('myDonations')}</h3>
         <div id="my-donations-content"></div>
       </section>
     </div>
@@ -796,7 +808,7 @@ async function renderUserDashboard() {
     <div id="utab-debug" class="user-tab-content" style="display:none">
       <section class="card" id="debug-section">
         <h3>${T('userTabDebug')}</h3>
-        <p class="muted">调试功能将在后续版本中提供</p>
+        <p class="muted">${T('debugComingSoon')}</p>
       </section>
     </div>`;
 
@@ -1725,9 +1737,9 @@ async function renderAdminDashboard() {
           <fieldset>
             <legend>${T('settingsLegendCheckin')}</legend>
             <div style="display:flex;flex-wrap:wrap;gap:.75rem">
-              <label style="flex:1 1 10rem">签到最低积分<input name="checkin_min" type="number" min="1" required></label>
-              <label style="flex:1 1 10rem">签到最高积分<input name="checkin_max" type="number" min="1" required></label>
-              <label style="flex:1 1 10rem">积分上限<input name="credits_cap" type="number" min="0" required></label>
+              <label style="flex:1 1 10rem">${T('checkinMinLabel')}<input name="checkin_min" type="number" min="1" required></label>
+              <label style="flex:1 1 10rem">${T('checkinMaxLabel')}<input name="checkin_max" type="number" min="1" required></label>
+              <label style="flex:1 1 10rem">${T('creditsCapLabel')}<input name="credits_cap" type="number" min="0" required></label>
             </div>
             <div style="display:flex;flex-wrap:wrap;gap:.75rem;margin-top:.25rem">
               <label style="flex:1 1 10rem">${T('creditsGate')}<input name="credits_gate" type="number" min="0" required></label>
