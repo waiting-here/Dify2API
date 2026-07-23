@@ -464,11 +464,6 @@ func (g *Gateway) debugWrapError(r *http.Request, userID int64, rawBody []byte, 
 	if !g.userDebug.isActive(userID) {
 		return
 	}
-	if g.userDebug.isDryRun(userID) {
-		// Dry-run mode already pushes request+inputs in debugWrap;
-		// the mock response was already returned.  No extra push needed.
-		return
-	}
 
 	hdrs := make(map[string]string, 4)
 	for k := range r.Header {

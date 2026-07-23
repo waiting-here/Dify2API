@@ -1544,7 +1544,7 @@ function logRow(l) {
       <td class="mono">${esc(l.model)}</td>
       <td><span class="badge ${l.status === "success" ? "ok" : "err"}">${esc(l.status)}</span></td>
       <td class="mono muted">${esc(l.error_code || "")}</td>
-      <td class="muted wrap" style="max-width:20rem">${esc(l.error_detail || "")}</td>
+      <td class="muted wrap" style="max-width:24rem">${esc(l.error_detail || "")}</td>
     </tr>`;
 }
 
