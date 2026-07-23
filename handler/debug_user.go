@@ -389,7 +389,7 @@ func (g *Gateway) handleDebugDryRun(w http.ResponseWriter, r *http.Request) {
 //   - (nil, nil) — dry_run was active; a mock response has already been
 //     written and the caller MUST return immediately.
 //   - (w, nil) — debug is not active; proceed as normal.
-func (g *Gateway) debugWrap(w http.ResponseWriter, r *http.Request, userID int64, modelName string, rawBody []byte, inputs map[string]string) (http.ResponseWriter, func()) {
+func (g *Gateway) debugWrap(w http.ResponseWriter, r *http.Request, userID int64, modelName string, rawBody []byte, inputs map[string]string, messages []openai.Message) (http.ResponseWriter, func()) {
 	if !g.userDebug.isActive(userID) {
 		return w, nil
 	}
@@ -415,10 +415,11 @@ func (g *Gateway) debugWrap(w http.ResponseWriter, r *http.Request, userID int64
 	}
 
 	evt := debugEvent{
-		Event:     "request",
-		Timestamp: time.Now().Unix(),
-		Request:   reqData,
-		Inputs:    inputMap,
+		Event:         "request",
+		Timestamp:     time.Now().Unix(),
+		Request:       reqData,
+		Inputs:        inputMap,
+		MessageLayout: buildMessageLayout(messages),
 	}
 
 	// Dry-run: push event, write mock, tell caller to stop.

@@ -418,7 +418,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// 4b. Debug interception — after translation, before Dify forward.
-	w2, debugFinalize := g.debugWrap(w, r, user.ID, req.Model, rawBody, inputs)
+	w2, debugFinalize := g.debugWrap(w, r, user.ID, req.Model, rawBody, inputs, req.Messages)
 	if debugFinalize == nil && w2 == nil {
 		// dry-run: mock response already written in debugWrap.
 		g.logRequest(user.ID, req.Model, service, startedAt, "success", "debug_dry_run", http.StatusOK, "")
@@ -567,7 +567,7 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 
 	// 6b. Debug interception.
 	rawCharity, _ := json.Marshal(req)
-	wCharity, dbgFinalize := g.debugWrap(w, r, user.ID, logModel, rawCharity, inputs)
+	wCharity, dbgFinalize := g.debugWrap(w, r, user.ID, logModel, rawCharity, inputs, req.Messages)
 	if dbgFinalize == nil && wCharity == nil {
 		g.logRequest(user.ID, logModel, service, startedAt, "success", "debug_dry_run", http.StatusOK, "")
 		return
