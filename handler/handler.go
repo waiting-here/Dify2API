@@ -402,7 +402,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	// 4. Per-service contract validation & mapping.
 	inputs, images, err := translator.TranslateForService(service, req.Messages)
 	if err != nil {
-		g.debugWrapError(r, user.ID, rawBody, nil, err.Error(), http.StatusBadRequest)
+		g.debugWrapError(r, user.ID, rawBody, nil, req.Messages, err.Error(), http.StatusBadRequest)
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "invalid_message_sequence",
 			http.StatusBadRequest, err.Error())
 		w.Header().Set("Content-Type", "application/json")
@@ -547,7 +547,7 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 	inputs, images, err := translator.TranslateForService(service, req.Messages)
 	if err != nil {
 		raw, _ := json.Marshal(req)
-		g.debugWrapError(r, user.ID, raw, nil, err.Error(), http.StatusBadRequest)
+		g.debugWrapError(r, user.ID, raw, nil, req.Messages, err.Error(), http.StatusBadRequest)
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "invalid_message_sequence",
 			http.StatusBadRequest, err.Error())
 		w.Header().Set("Content-Type", "application/json")

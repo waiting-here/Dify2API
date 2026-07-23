@@ -53,6 +53,10 @@ const i18n = {
   thDuration: "耗时",
   thStatus: "状态",
   thErrorCode: "错误码",
+  thErrorDetail: "错误详情",
+  debugMessageLayout: "消息排布",
+  debugExpectedLayout: "期望排布",
+  debugNoMessages: "（未能解析消息）",
   empty: "（暂无）",
   usersTitle: "用户管理",
   thUser: "用户",
@@ -396,6 +400,9 @@ const i18n = {
   debugDryRunOffConfirm: "After disabling dry-run mode, requests will be sent to Dify — Dify can see your data and may consume quota or incur charges. Continue?",
   debugEventCount: "{n} request(s) intercepted",
   debugExpandAll: "Expand All",
+  debugMessageLayout: "Message Layout",
+  debugExpectedLayout: "Expected Layout",
+  debugNoMessages: "(Could not parse messages)",
   debugNoEvents: "No intercepted data yet. Make an API request and its raw data, Dify input mapping, and server response will appear here.",
   debugRawBody: "Request Body (JSON)",
   debugResponseBodyLabel: "Response",
@@ -780,7 +787,7 @@ async function renderUserDashboard() {
     <div id="utab-logs" class="user-tab-content" style="display:none">
       <section class="card">
         <h3>${T('logsTitle')}</h3>
-        <div class="table-wrap"><table><thead><tr><th>${T('thTime')}</th><th>${T('thDuration')}</th><th>${T('thModel')}</th><th>${T('thStatus')}</th><th>${T('thErrorCode')}</th></tr></thead><tbody id="log-rows"></tbody></table></div>
+        <div class="table-wrap"><table><thead><tr><th>${T('thTime')}</th><th>${T('thDuration')}</th><th>${T('thModel')}</th><th>${T('thStatus')}</th><th>${T('thErrorCode')}</th><th>${T('thErrorDetail')}</th></tr></thead><tbody id="log-rows"></tbody></table></div>
         <div class="row-actions" id="log-pager" style="margin-top:.5rem"></div>
       </section>
     </div>
@@ -1032,12 +1039,24 @@ function renderOneDebugEvent(evt, idx) {
       <div style="margin-top:.5rem">
         <p style="margin:0 0 .25rem"><strong>${T('debugRawBody')}:</strong></p>
         <pre style="max-height:16em;overflow:auto;font-size:.8rem;background:var(--pico-code-bg,#1a1a2e);color:var(--pico-code-color,#e0e0e0);padding:.5rem;border-radius:4px">${esc(reqBodyStr)}</pre>
+        ${renderMessageLayout(evt.message_layout)}
         <p style="margin:.5rem 0 .25rem"><strong>${T('debugDifyInputsLabel')}:</strong></p>
         <pre style="max-height:16em;overflow:auto;font-size:.8rem;background:var(--pico-code-bg,#1a1a2e);color:var(--pico-code-color,#e0e0e0);padding:.5rem;border-radius:4px">${esc(inputsStr)}</pre>
         <p style="margin:.5rem 0 .25rem"><strong>${T('debugResponseBodyLabel')}:</strong></p>
         <pre style="max-height:16em;overflow:auto;font-size:.8rem;background:var(--pico-code-bg,#1a1a2e);color:var(--pico-code-color,#e0e0e0);padding:.5rem;border-radius:4px">${esc(respBodyStr)}</pre>
       </div>
     </details>`;
+}
+
+function renderMessageLayout(layout) {
+  if (!layout || !layout.length) return "";
+  const rows = layout.map(function(s) {
+    const content = s.content ? ` <span class="muted">${esc(s.content.substring(0, 60))}${s.content.length > 60 ? "…" : ""}</span>` : "";
+    return `<tr><td class="mono muted">[${s.index}]</td><td class="mono">${esc(s.role)}</td><td style="font-size:.8rem">${content}</td></tr>`;
+  }).join("");
+  return `
+    <p style="margin:.5rem 0 .25rem"><strong>${T('debugMessageLayout')}:</strong></p>
+    <div class="table-wrap" style="margin-bottom:.5rem"><table style="font-size:.8rem"><thead><tr><th>#</th><th>${currentLang === 'zh' ? '角色' : 'Role'}</th><th>${currentLang === 'zh' ? '内容（前60字）' : 'Content (first 60 chars)'}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 // ---- Debug actions ----
@@ -1525,6 +1544,7 @@ function logRow(l) {
       <td class="mono">${esc(l.model)}</td>
       <td><span class="badge ${l.status === "success" ? "ok" : "err"}">${esc(l.status)}</span></td>
       <td class="mono muted">${esc(l.error_code || "")}</td>
+      <td class="muted wrap" style="max-width:20rem">${esc(l.error_detail || "")}</td>
     </tr>`;
 }
 

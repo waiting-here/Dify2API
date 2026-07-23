@@ -9,18 +9,28 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"dify2api/openai"
 )
 
 // ---- types ----
 
 // debugEvent is pushed to the user's SSE stream for each intercepted request.
 type debugEvent struct {
-	Event     string         `json:"event"` // always "request"
-	Timestamp int64          `json:"timestamp"`
-	Request   debugReqData   `json:"request"`
-	Inputs    map[string]any `json:"dify_inputs"`
-	Response  *debugRespData `json:"response"`
-	Error     string         `json:"error,omitempty"`
+	Event         string               `json:"event"` // always "request"
+	Timestamp     int64                `json:"timestamp"`
+	Request       debugReqData         `json:"request"`
+	Inputs        map[string]any       `json:"dify_inputs"`
+	Response      *debugRespData       `json:"response"`
+	Error         string               `json:"error,omitempty"`
+	MessageLayout []debugMessageSlot   `json:"message_layout,omitempty"`
+}
+
+// debugMessageSlot describes one message position as parsed by the translator.
+type debugMessageSlot struct {
+	Index   int    `json:"index"`
+	Role    string `json:"role"`
+	Content string `json:"content"` // truncated to 200 chars
 }
 
 type debugReqData struct {
@@ -449,7 +459,8 @@ func (g *Gateway) debugWrap(w http.ResponseWriter, r *http.Request, userID int64
 // debugWrapError pushes a debug event for a request that failed before
 // reaching Dify (translation error, etc.).  It should be called when debug
 // is active and the request is being rejected with an error.
-func (g *Gateway) debugWrapError(r *http.Request, userID int64, rawBody []byte, inputs map[string]string, errMsg string, httpStatus int) {
+// messages may be nil when the request couldn't even be parsed to messages.
+func (g *Gateway) debugWrapError(r *http.Request, userID int64, rawBody []byte, inputs map[string]string, messages []openai.Message, errMsg string, httpStatus int) {
 	if !g.userDebug.isActive(userID) {
 		return
 	}
@@ -481,7 +492,8 @@ func (g *Gateway) debugWrapError(r *http.Request, userID int64, rawBody []byte, 
 			Headers: hdrs,
 			Body:    json.RawMessage(rawBody),
 		},
-		Inputs: inputMap,
+		Inputs:        inputMap,
+		MessageLayout: buildMessageLayout(messages),
 		Response: &debugRespData{
 			Status: httpStatus,
 			Body:   errBody,
@@ -541,3 +553,25 @@ func extractErrorMessage(body string) string {
 
 // ---- Gateway field addition ----
 // userDebug is set in NewGateway (see handler.go).
+
+// buildMessageLayout builds a compact positional summary of parsed messages
+// showing each message's index, role, and truncated content.  Returns nil
+// when messages is nil (caller couldn't parse the request at all).
+func buildMessageLayout(messages []openai.Message) []debugMessageSlot {
+	if messages == nil {
+		return nil
+	}
+	slots := make([]debugMessageSlot, len(messages))
+	for i, m := range messages {
+		content := string(m.Content)
+		if len(content) > 200 {
+			content = content[:200] + "…"
+		}
+		slots[i] = debugMessageSlot{
+			Index:   i,
+			Role:    m.Role,
+			Content: content,
+		}
+	}
+	return slots
+}

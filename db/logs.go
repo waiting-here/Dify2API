@@ -18,14 +18,16 @@ const RequestLogRetention = 30 * 24 * time.Hour
 // is a deliberate architectural safeguard against secondary liability for
 // illegal content transmitted by users.
 type RequestLog struct {
-	ID        int64  `json:"id"`
-	UserID    int64  `json:"user_id"`
-	Model     string `json:"model"`
-	Service   string `json:"service"`
-	StartedAt int64  `json:"started_at"`
-	EndedAt   int64  `json:"ended_at"`
-	Status    string `json:"status"`     // "success" | "error"
-	ErrorCode string `json:"error_code"` // "" on success; gateway error code or upstream status otherwise
+	ID          int64  `json:"id"`
+	UserID      int64  `json:"user_id"`
+	Model       string `json:"model"`
+	Service     string `json:"service"`
+	StartedAt   int64  `json:"started_at"`
+	EndedAt     int64  `json:"ended_at"`
+	Status      string `json:"status"`       // "success" | "error"
+	ErrorCode   string `json:"error_code"`   // "" on success; gateway error code or upstream status otherwise
+	HTTPStatus  int    `json:"http_status"`  // HTTP status returned to the caller (0 = unrecorded legacy row)
+	ErrorDetail string `json:"error_detail"` // short error message (never request/response content)
 }
 
 // AddRequestLog records one completed call (no HTTP status / error detail;
@@ -67,7 +69,7 @@ func (s *Store) ListRequestLogs(userID int64, limit int) ([]*RequestLog, error) 
 		limit = 100
 	}
 	rows, err := s.db.Query(
-		`SELECT id, user_id, model, service, started_at, ended_at, status, error_code
+		`SELECT id, user_id, model, service, started_at, ended_at, status, error_code, http_status, error_detail
 		 FROM request_logs WHERE user_id=? ORDER BY started_at DESC LIMIT ?`, userID, limit)
 	if err != nil {
 		return nil, err
@@ -76,7 +78,7 @@ func (s *Store) ListRequestLogs(userID int64, limit int) ([]*RequestLog, error) 
 	var out []*RequestLog
 	for rows.Next() {
 		var l RequestLog
-		if err := rows.Scan(&l.ID, &l.UserID, &l.Model, &l.Service, &l.StartedAt, &l.EndedAt, &l.Status, &l.ErrorCode); err != nil {
+		if err := rows.Scan(&l.ID, &l.UserID, &l.Model, &l.Service, &l.StartedAt, &l.EndedAt, &l.Status, &l.ErrorCode, &l.HTTPStatus, &l.ErrorDetail); err != nil {
 			return nil, err
 		}
 		out = append(out, &l)
