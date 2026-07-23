@@ -201,8 +201,6 @@ workflow:
             context_1m: true
             max_tokens: 128000
             temperature: 0.8
-            thinking: true
-            thinking_budget: 64000
           mode: chat
           name: claude-opus-4-6
           provider: langgenius/anthropic/anthropic
