@@ -27,7 +27,7 @@
   .badge.off { background: #eee; color: #666; }
   table td, table th { vertical-align: middle; }
   .mono { font-family: ui-monospace, monospace; font-size: .9em; }
-  .row-actions { display: flex; gap: .4rem; flex-wrap: wrap; }
+  .row-actions { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; }
   .row-actions button, .row-actions a[role=button] { padding: .15rem .6rem; font-size: .85rem; margin: 0; white-space: nowrap; width: auto; }
   td .row-actions { flex-wrap: nowrap; }
   .muted { color: var(--pico-muted-color); }
@@ -48,7 +48,7 @@
   .bulletin-item h4 { margin: 0; font-size: 1rem; }
   .bulletin-content img { max-width: 100%; }
   /* Admin tab navigation. */
-  .tab-nav { display: flex; gap: .25rem; border-bottom: 2px solid var(--pico-muted-border-color); margin-bottom: 1.25rem; overflow-x: auto; }
+  .tab-nav { display: flex; gap: .25rem; border-bottom: 2px solid var(--pico-muted-border-color); margin-bottom: 1.25rem; overflow-x: auto; overflow-y: hidden; }
   .tab-nav .admin-tab { padding: .5rem 1rem; border: none; border-radius: .35rem .35rem 0 0; background: none; color: var(--pico-muted-color); cursor: pointer; font-size: .9rem; margin-bottom: -2px; border-bottom: 2px solid transparent; transition: color .15s, border-color .15s; }
   .tab-nav .admin-tab:hover { color: var(--pico-color); }
   .tab-nav .admin-tab.active { color: var(--brand); border-bottom-color: var(--brand); font-weight: 600; }
@@ -61,6 +61,12 @@
   /* Key + data cards above user tabs: side-by-side on small screens. */
   .user-top-cards { display: flex; flex-wrap: wrap; gap: 1.25rem; }
   .user-top-cards > .card { flex: 1 1 16rem; margin-bottom: 1.25rem; }
+  /* Admin logs filter grid layout. */
+  #admin-logs-filter { display: grid; grid-template-columns: 2fr 1fr 1fr 0.7fr 1fr 1fr auto; gap: .75rem; align-items: center; }
+  #admin-logs-filter label { margin-bottom: 0; }
+  #admin-logs-filter input, #admin-logs-filter select { margin-bottom: 0; }
+  #admin-logs-filter button { margin-bottom: 0; }
+  @media (max-width: 800px) { #admin-logs-filter { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>

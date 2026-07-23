@@ -1790,17 +1790,17 @@ async function renderAdminDashboard() {
     <div id="tab-logs" class="admin-tab-content" style="display:none">
       <section class="card">
         <h3>${T('adminLogsTitle')}</h3>
-        <div id="admin-logs-filter" style="display:flex;flex-wrap:wrap;gap:.75rem;align-items:flex-end;margin-bottom:.8rem">
-          <label style="flex:1 1 16rem;min-width:14rem;margin-bottom:0">${T('thUser')}
+        <div id="admin-logs-filter" style="margin-bottom:.8rem">
+          <label>${T('thUser')}
             <input id="alf-user" list="alf-user-list" placeholder="${T('adminLogsUserSearch')}" autocomplete="off">
             <datalist id="alf-user-list"></datalist>
           </label>
-          <label style="flex:0 1 12rem;min-width:10rem;margin-bottom:0">${T('thService')}<select id="alf-service"><option value="">${T('adminLogsAllServices')}</option></select></label>
-          <label style="flex:0 1 12rem;min-width:10rem;margin-bottom:0">${T('adminLogsModel')}<input id="alf-model" placeholder="[公益][general]x" style="margin-bottom:0"></label>
-          <label style="flex:0 1 8rem;min-width:7rem;margin-bottom:0">${T('thStatus')}<select id="alf-status"><option value="">${T('adminLogsAllStatus')}</option><option value="success">${T('adminLogsSuccess')}</option><option value="error">${T('adminLogsError')}</option></select></label>
-          <label style="flex:0 1 13rem;min-width:11rem;margin-bottom:0">${T('adminLogsSince')}<input id="alf-since" type="datetime-local"></label>
-          <label style="flex:0 1 13rem;min-width:11rem;margin-bottom:0">${T('adminLogsUntil')}<input id="alf-until" type="datetime-local"></label>
-          <button id="alf-query" style="flex:0 0 auto;width:auto;margin-bottom:0">${T('adminLogsQuery')}</button>
+          <label>${T('thService')}<select id="alf-service"><option value="">${T('adminLogsAllServices')}</option></select></label>
+          <label>${T('adminLogsModel')}<input id="alf-model" placeholder="[公益][general]x"></label>
+          <label>${T('thStatus')}<select id="alf-status"><option value="">${T('adminLogsAllStatus')}</option><option value="success">${T('adminLogsSuccess')}</option><option value="error">${T('adminLogsError')}</option></select></label>
+          <label>${T('adminLogsSince')}<input id="alf-since" type="datetime-local"></label>
+          <label>${T('adminLogsUntil')}<input id="alf-until" type="datetime-local"></label>
+          <button id="alf-query">${T('adminLogsQuery')}</button>
         </div>
         <div class="table-wrap"><table><thead><tr><th>${T('thTime')}</th><th>${T('thUser')}</th><th>${T('thModel')}</th><th>${T('thService')}</th><th>${T('thDuration')}</th><th>${T('thStatus')}</th><th>${T('thHTTPStatus')}</th><th>${T('thErrorCode')}</th><th>${T('thErrorDetail')}</th><th>${T('thDonationSource')}</th></tr></thead><tbody id="alf-rows"></tbody></table></div>
         <div class="row-actions" id="alf-pager" style="margin-top:.5rem"></div>
@@ -1969,9 +1969,9 @@ function userRow(u) {
   const fmtLim = (v) => (v == null ? "" : String(v));
   const rpm = `
     <span style="display:inline-flex;align-items:center;gap:2px">
-      <input class="u-rpm" data-id="${u.id}" data-class="a" type="number" min="1" value="${fmtLim(u.rpm_limit_a)}" placeholder="${T('rpmA')}" style="width:3.5rem;padding:0 .25rem;font-size:.75rem">
-      <input class="u-rpm" data-id="${u.id}" data-class="b" type="number" min="1" value="${fmtLim(u.rpm_limit_b)}" placeholder="${T('rpmB')}" style="width:3.5rem;padding:0 .25rem;font-size:.75rem">
-      <input class="u-rpm" data-id="${u.id}" data-class="c" type="number" min="1" value="${fmtLim(u.rpm_limit_c)}" placeholder="${T('rpmC')}" style="width:3.5rem;padding:0 .25rem;font-size:.75rem">
+      <input class="u-rpm" data-id="${u.id}" data-class="a" type="number" min="1" value="${fmtLim(u.rpm_limit_a)}" placeholder="${T('rpmA')}" style="width:3.5rem;padding:0 .25rem;font-size:.75rem;margin-bottom:0">
+      <input class="u-rpm" data-id="${u.id}" data-class="b" type="number" min="1" value="${fmtLim(u.rpm_limit_b)}" placeholder="${T('rpmB')}" style="width:3.5rem;padding:0 .25rem;font-size:.75rem;margin-bottom:0">
+      <input class="u-rpm" data-id="${u.id}" data-class="c" type="number" min="1" value="${fmtLim(u.rpm_limit_c)}" placeholder="${T('rpmC')}" style="width:3.5rem;padding:0 .25rem;font-size:.75rem;margin-bottom:0">
       <button class="secondary u-rpm-save" data-id="${u.id}" style="padding:.3rem .5rem;font-size:.8rem">${T('rpmSave')}</button>
     </span>`;
   const titleTxt = esc(`${u.username}（${u.discord_id}）`);
