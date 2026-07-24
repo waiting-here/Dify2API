@@ -1748,6 +1748,7 @@ function adminLogRow(l) {
       <td class="mono muted">${l.http_status ? esc(String(l.http_status)) : "—"}</td>
       <td class="mono muted">${esc(l.error_code)}</td>
       <td class="muted wrap" style="max-width:24rem">${esc(l.error_detail || "")}</td>
+      <td class="mono muted">${l.credits_consumed ? esc(String(l.credits_consumed)) : "0"}</td>
       <td class="muted">${esc(donationSrc)}</td>
     </tr>`;
 }
