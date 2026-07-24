@@ -3,11 +3,14 @@ package handler
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"dify2api/db"
+	"dify2api/translator"
 )
 
 // Admin user-management endpoints (admin UI lands in T10; these are the
@@ -182,8 +185,6 @@ func (g *Gateway) handleAdminGetSettings(w http.ResponseWriter, r *http.Request)
 		"checkin_min":            g.Store.GetSettingInt(db.SettingCheckinMin, db.DefaultCheckinMin),
 		"checkin_max":            g.Store.GetSettingInt(db.SettingCheckinMax, db.DefaultCheckinMax),
 		"credits_cap":            g.Store.GetSettingIntAllowZero(db.SettingCreditsCap, db.DefaultCreditsCap),
-		"credits_gate":           g.Store.GetSettingInt(db.SettingCreditsGate, db.DefaultCreditsGate),
-		"charity_cost":           g.Store.GetSettingInt(db.SettingCharityCost, db.DefaultCharityCost),
 		"donation_fail_limit":    g.Store.GetSettingInt(db.SettingDonationFailLimit, db.DefaultDonationFailLimit),
 		"donation_review_limit":  g.Store.GetSettingInt(db.SettingDonationReviewLimit, db.DefaultDonationReviewLimit),
 		"mailer_cool_minutes":    g.Store.GetSettingInt(db.SettingMailerCoolMinutes, db.DefaultMailerCoolMinutes),
@@ -210,8 +211,6 @@ func (g *Gateway) handleAdminPutSettings(w http.ResponseWriter, r *http.Request)
 		CheckinMin           *int   `json:"checkin_min"`
 		CheckinMax           *int   `json:"checkin_max"`
 		CreditsCap           *int   `json:"credits_cap"`
-		CreditsGate          *int   `json:"credits_gate"`
-		CharityCost          *int   `json:"charity_cost"`
 		DonationFailLimit    *int   `json:"donation_fail_limit"`
 		DonationReviewLimit  *int   `json:"donation_review_limit"`
 		MailerCoolMinutes    *int   `json:"mailer_cool_minutes"`
@@ -261,7 +260,6 @@ func (g *Gateway) handleAdminPutSettings(w http.ResponseWriter, r *http.Request)
 	}{
 		{req.CheckinMin, db.SettingCheckinMin},
 		{req.CheckinMax, db.SettingCheckinMax},
-		{req.CharityCost, db.SettingCharityCost},
 		{req.DonationFailLimit, db.SettingDonationFailLimit},
 		{req.MailerCoolMinutes, db.SettingMailerCoolMinutes},
 	} {
@@ -288,18 +286,6 @@ func (g *Gateway) handleAdminPutSettings(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	// credits_gate may be 0 (default).
-	if req.CreditsGate != nil {
-		if *req.CreditsGate < 0 {
-			g.writeError(w, http.StatusBadRequest, "invalid_request", "credits_gate must be >= 0")
-			return
-		}
-		if err := g.Store.SetSetting(db.SettingCreditsGate, strconv.Itoa(*req.CreditsGate)); err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-			return
-		}
-	}
-
 	// Donation review limit (optional, >= 0).
 	if req.DonationReviewLimit != nil {
 		if *req.DonationReviewLimit < 0 {
@@ -543,4 +529,236 @@ func (g *Gateway) handleAdminBatchDonationCredit(w http.ResponseWriter, r *http.
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "updated": updated})
+}
+
+// --- Charity Pricing Admin Endpoints (beta.2) ---
+
+// GET /api/admin/pricing — returns all pricing entries.
+func (g *Gateway) handleListPricing(w http.ResponseWriter, r *http.Request) {
+	if g.requireAdmin(r) == nil {
+		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
+		return
+	}
+	list, err := g.Store.ListPricing()
+	if err != nil {
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	out := make([]map[string]interface{}, 0, len(list))
+	for _, p := range list {
+		out = append(out, pricingJSON(p))
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"pricing": out})
+}
+
+// PUT /api/admin/pricing — upsert a pricing entry.
+func (g *Gateway) handleUpsertPricing(w http.ResponseWriter, r *http.Request) {
+	if g.requireAdmin(r) == nil {
+		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
+		return
+	}
+	var req struct {
+		Service string `json:"service"`
+		Model   string `json:"model"`
+		Price   int    `json:"price"`
+		Reward  int    `json:"reward"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	if !translator.IsSupportedService(req.Service) {
+		g.writeError(w, http.StatusBadRequest, "invalid_request",
+			fmt.Sprintf("不支持的服务 %q", req.Service))
+		return
+	}
+	if strings.ContainsAny(req.Model, "[]") {
+		g.writeError(w, http.StatusBadRequest, "invalid_request",
+			"模型名不得包含方括号")
+		return
+	}
+	if req.Price < 0 {
+		g.writeError(w, http.StatusBadRequest, "invalid_request",
+			"price 必须 >= 0")
+		return
+	}
+	if req.Reward < 0 {
+		g.writeError(w, http.StatusBadRequest, "invalid_request",
+			"reward 必须 >= 0")
+		return
+	}
+
+	p, err := g.Store.UpsertPricing(req.Service, req.Model, req.Price, req.Reward)
+	if err != nil {
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":      true,
+		"pricing": pricingJSON(p),
+	})
+}
+
+// PATCH /api/admin/pricing — partial update pricing fields.
+func (g *Gateway) handlePatchPricing(w http.ResponseWriter, r *http.Request) {
+	if g.requireAdmin(r) == nil {
+		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
+		return
+	}
+	var req struct {
+		Service string `json:"service"`
+		Model   string `json:"model"`
+		Enabled *bool  `json:"enabled"`
+		Price   *int   `json:"price"`
+		Reward  *int   `json:"reward"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	if req.Service == "" || req.Model == "" {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "service and model are required")
+		return
+	}
+
+	p, err := g.Store.GetPricing(req.Service, req.Model)
+	if err != nil {
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	if p == nil {
+		g.writeError(w, http.StatusNotFound, "not_found", "pricing entry not found")
+		return
+	}
+
+	// Handle enabled toggle.
+	if req.Enabled != nil {
+		if err := g.Store.SetPricingEnabled(req.Service, req.Model, *req.Enabled); err != nil {
+			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+	}
+
+	// Handle price/reward update (via UpsertPricing).
+	if req.Price != nil || req.Reward != nil {
+		price := p.Price
+		reward := p.Reward
+		if req.Price != nil {
+			if *req.Price < 0 {
+				g.writeError(w, http.StatusBadRequest, "invalid_request", "price 必须 >= 0")
+				return
+			}
+			price = *req.Price
+		}
+		if req.Reward != nil {
+			if *req.Reward < 0 {
+				g.writeError(w, http.StatusBadRequest, "invalid_request", "reward 必须 >= 0")
+				return
+			}
+			reward = *req.Reward
+		}
+		if _, err := g.Store.UpsertPricing(req.Service, req.Model, price, reward); err != nil {
+			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+	}
+
+	// Re-fetch for accurate response.
+	updated, err := g.Store.GetPricing(req.Service, req.Model)
+	if err != nil {
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":      true,
+		"pricing": pricingJSON(updated),
+	})
+}
+
+// DELETE /api/admin/pricing — delete a pricing entry.
+func (g *Gateway) handleDeletePricing(w http.ResponseWriter, r *http.Request) {
+	if g.requireAdmin(r) == nil {
+		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
+		return
+	}
+	var req struct {
+		Service string `json:"service"`
+		Model   string `json:"model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	if err := g.Store.DeletePricing(req.Service, req.Model); err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+}
+
+// POST /api/admin/pricing/delete/batch — batch delete pricing entries (7.3.1).
+func (g *Gateway) handleBatchDeletePricing(w http.ResponseWriter, r *http.Request) {
+	if g.requireAdmin(r) == nil {
+		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
+		return
+	}
+
+	var req struct {
+		Pairs []struct {
+			Service string `json:"service"`
+			Model   string `json:"model"`
+		} `json:"pairs"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	if len(req.Pairs) == 0 {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "pairs must be a non-empty array")
+		return
+	}
+
+	// Atomic all-or-nothing: validate all pairs first.
+	for _, pair := range req.Pairs {
+		has, err := g.Store.HasDonationsForPair(pair.Service, pair.Model)
+		if err != nil {
+			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+		if has {
+			writeBatchPairError(w,
+				fmt.Sprintf("(%s, %s) 下存在捐赠条目，无法删除定价", pair.Service, pair.Model),
+				pair.Service, pair.Model)
+			return
+		}
+	}
+
+	// All passed: delete each.
+	for _, pair := range req.Pairs {
+		if err := g.Store.DeletePricing(pair.Service, pair.Model); err != nil {
+			g.writeError(w, http.StatusInternalServerError, "internal",
+				fmt.Sprintf("删除定价 (%s, %s) 失败: %v", pair.Service, pair.Model, err))
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":    true,
+		"count": len(req.Pairs),
+	})
+}
+
+func pricingJSON(p *db.CharityPricing) map[string]interface{} {
+	return map[string]interface{}{
+		"service": p.Service,
+		"model":   p.Model,
+		"price":   p.Price,
+		"reward":  p.Reward,
+		"enabled": p.Enabled,
+	}
 }

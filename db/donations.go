@@ -66,6 +66,10 @@ func (s *Store) CreateDonation(d *Donation, apiKeyPlain string) (*Donation, erro
 	if rpmLimit <= 0 {
 		rpmLimit = 10
 	}
+	status := d.Status
+	if status == "" {
+		status = DonationActive
+	}
 
 	enc, err := s.Encrypt(apiKeyPlain)
 	if err != nil {
@@ -81,7 +85,7 @@ func (s *Store) CreateDonation(d *Donation, apiKeyPlain string) (*Donation, erro
 		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		d.Service, d.Model, d.DifyBaseURL, enc,
 		d.SourceUserID, d.SourceDiscordID, d.SourceUsername, d.SourceText,
-		d.Deadline, d.TotalCount, d.TotalCount, rpmLimit, DonationActive, d.Note,
+		d.Deadline, d.TotalCount, d.TotalCount, rpmLimit, status, d.Note,
 		now, now,
 	)
 	if err != nil {
@@ -127,32 +131,6 @@ func (s *Store) ListDonations() ([]*Donation, error) {
 	for rows.Next() {
 		d, err := scanDonation(rows)
 		if err != nil {
-			return nil, err
-		}
-		out = append(out, d)
-	}
-	return out, rows.Err()
-}
-
-// ListRoutableDonationModels returns distinct (service, model) pairs that
-// have at least one routable donation (active, not expired, remaining>0).
-// Used to synthesise charity model entries for /v1/models.
-func (s *Store) ListRoutableDonationModels() ([]struct{ Service, Model string }, error) {
-	now := time.Now().Unix()
-	rows, err := s.db.Query(
-		`SELECT DISTINCT service, model FROM donations
-		 WHERE status=? AND deadline > ? AND remaining_count > 0
-		 ORDER BY service, model`,
-		DonationActive, now,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []struct{ Service, Model string }
-	for rows.Next() {
-		var d struct{ Service, Model string }
-		if err := rows.Scan(&d.Service, &d.Model); err != nil {
 			return nil, err
 		}
 		out = append(out, d)

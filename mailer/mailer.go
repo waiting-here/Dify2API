@@ -82,6 +82,16 @@ func (m *Mailer) DonationInactive(service, model string, donationID int64, conse
 	m.queue(EventDonationInactive, summary)
 }
 
+// PricingMissing queues a notification when a charity request finds pricing
+// is missing for a (service, model) pair that has active donations.
+func (m *Mailer) PricingMissing(service, model string) {
+	if m == nil {
+		return
+	}
+	summary := fmt.Sprintf("公益模型 (%s, %s) 存在捐赠条目但缺少定价配置", service, model)
+	m.queue(EventPricingMissing, summary)
+}
+
 // AdminLoginLocked queues a notification for admin login lockout.
 func (m *Mailer) AdminLoginLocked(ip string, lockUntil time.Time) {
 	if m == nil {

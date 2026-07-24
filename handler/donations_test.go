@@ -284,6 +284,9 @@ func TestDonationStatusToggle(t *testing.T) {
 		t.Errorf("status = %s, want inactive", updated.Status)
 	}
 
+	// Create pricing for the (service, model) before re-activating.
+	store.UpsertPricing("general", "gpt4", 10, 5)
+
 	// Toggle back to active
 	rec2 := donationRequest(gw, admin, "POST", fmt.Sprintf("/api/admin/donations/%d/status", created.ID),
 		map[string]string{"status": "active"})
@@ -530,6 +533,10 @@ func TestCharityRouting_Success(t *testing.T) {
 		t.Fatalf("create donation: %v", err)
 	}
 
+	// beta.2: pricing must exist and be enabled for charity routing.
+	store.UpsertPricing("general", "x", 10, 5)
+	store.SetPricingEnabled("general", "x", true)
+
 	model := "[公益][general]x"
 	rec := chatRequest(gw, key, fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hello"}]}`, model))
 	if rec.Code != http.StatusOK {
@@ -610,6 +617,10 @@ func TestCharityRouting_InsufficientCredits(t *testing.T) {
 
 	// Enable global charity
 	store.SetSetting(db.SettingCharityEnabled, "true")
+
+	// beta.2: pricing must exist and be enabled.
+	store.UpsertPricing("general", "x", 10, 5)
+	store.SetPricingEnabled("general", "x", true)
 
 	model := "[公益][general]x"
 	rec := chatRequest(gw, key, fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}]}`, model))
@@ -793,7 +804,7 @@ func TestDonationAdminLogs(t *testing.T) {
 	gw, store := setupAuthGateway(t, "x")
 	now := time.Now()
 	// logRequestDonation should not panic and should store the donation ID.
-	gw.logRequestDonation(1, "[公益][general]x", "general", now, "success", "", 200, "", 42)
+	gw.logRequestDonation(1, "[公益][general]x", "general", now, "success", "", 200, "", 42, 0)
 
 	logs, _, err := store.ListAllRequestLogs(db.LogFilter{}, 10, 0)
 	if err != nil {
@@ -1360,5 +1371,269 @@ func TestPatchDonation(t *testing.T) {
 	rec6 := donationRequest(gw, nil, "PATCH", fmt.Sprintf("/api/admin/donations/%d", donID), map[string]interface{}{})
 	if rec6.Code != http.StatusForbidden {
 		t.Errorf("anonymous patch: status = %d, want 403", rec6.Code)
+	}
+}
+
+// --- Donation reward + source display + default inactive ---
+
+// TestCreateDonation_DefaultInactive verifies that admin-created donations
+// are created with inactive status (consistent with three-layer safety policy).
+func TestCreateDonation_DefaultInactive(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "x")
+	admin := adminCookie(t, gw)
+
+	deadline := time.Now().Add(24 * time.Hour).Unix()
+	body := map[string]interface{}{
+		"service":       "general",
+		"model":         "default-inactive-test",
+		"dify_base_url": "https://dify.example.com/v1",
+		"dify_api_key":  "app-test-key",
+		"source_text":   "test source",
+		"deadline":      deadline,
+		"total_count":   5,
+		"note":          "test default inactive",
+	}
+	rec := donationRequest(gw, admin, "POST", "/api/admin/donations", body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		OK       bool                   `json:"ok"`
+		Donation map[string]interface{} `json:"donation"`
+		Warning  string                 `json:"warning"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if !resp.OK {
+		t.Fatal("expected ok=true")
+	}
+	if resp.Donation["status"] != "inactive" {
+		t.Errorf("status = %v, want inactive", resp.Donation["status"])
+	}
+	// No pricing exists → warning should be present.
+	if resp.Warning == "" {
+		t.Error("expected pricing warning for un-priced model")
+	}
+}
+
+// TestCharitySuccessAccounting_Reward verifies that the reward is granted
+// to the donor and cost is deducted from the consumer.
+func TestCharitySuccessAccounting_Reward(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+
+	// Create consumer user with 100 credits.
+	consumer, err := store.CreateUser("800", "consumer", "")
+	if err != nil {
+		t.Fatalf("create consumer: %v", err)
+	}
+	store.SetUserCredits(consumer.ID, 100)
+
+	// Create donor user with 0 credits.
+	donor, err := store.CreateUser("801", "donor", "")
+	if err != nil {
+		t.Fatalf("create donor: %v", err)
+	}
+	store.SetUserCredits(donor.ID, 0)
+
+	// Create pricing: price=31, reward=ceil(31*0.5)=16.
+	pricing, err := store.UpsertPricing("general", "reward-test", 31, 0)
+	if err != nil {
+		t.Fatalf("upsert pricing: %v", err)
+	}
+	if pricing.Reward != 16 {
+		t.Fatalf("expected reward=16, got %d", pricing.Reward)
+	}
+
+	// Create donation.
+	donation := &db.Donation{
+		ID:              1,
+		Service:         "general",
+		Model:           "reward-test",
+		DifyBaseURL:     "https://dify.example.com/v1",
+		SourceUserID:    sql.NullInt64{Int64: donor.ID, Valid: true},
+		SourceDiscordID: donor.DiscordID,
+		SourceUsername:  donor.Username,
+		Deadline:        time.Now().Add(24 * time.Hour).Unix(),
+		TotalCount:      10,
+		RemainingCount:  10,
+		Status:          db.DonationActive,
+	}
+	created, err := store.CreateDonation(donation, "app-secret")
+	if err != nil {
+		t.Fatalf("create donation: %v", err)
+	}
+
+	// Call charitySuccessAccounting.
+	gw.charitySuccessAccounting(consumer.ID, created, "[公益][general]reward-test", "general", time.Now(), pricing)
+
+	// Verify consumer: 100 - 31 = 69.
+	cu, _ := store.GetUserByID(consumer.ID)
+	if cu.Credits != 69 {
+		t.Errorf("consumer credits = %d, want 69", cu.Credits)
+	}
+
+	// Verify donor: 0 + 16 = 16.
+	du, _ := store.GetUserByID(donor.ID)
+	if du.Credits != 16 {
+		t.Errorf("donor credits = %d, want 16", du.Credits)
+	}
+}
+
+// TestCharitySuccessAccounting_NoRewardWhenZero verifies that reward=0 does
+// not grant credits.
+func TestCharitySuccessAccounting_NoRewardWhenZero(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+
+	consumer, err := store.CreateUser("802", "consumer2", "")
+	if err != nil {
+		t.Fatalf("create consumer: %v", err)
+	}
+	store.SetUserCredits(consumer.ID, 100)
+
+	donor, err := store.CreateUser("803", "donor2", "")
+	if err != nil {
+		t.Fatalf("create donor: %v", err)
+	}
+	store.SetUserCredits(donor.ID, 0)
+
+	// Pricing with reward=0 (UpsertPricing auto-fills reward from price;
+	// use a low price so reward=ceil(1*0.5)=1 — need to manually set 0 after).
+	// UpsertPricing sets reward=1 for price=1. Override via raw SQL.
+	_, err = store.UpsertPricing("general", "reward-zero", 0, 0)
+	if err != nil {
+		t.Fatalf("upsert pricing: %v", err)
+	}
+	pricing, _ := store.GetPricing("general", "reward-zero")
+	// Force reward=0.
+	store.RawExec(`UPDATE charity_pricing SET reward=0 WHERE service='general' AND model='reward-zero'`)
+	pricing.Reward = 0
+
+	donation := &db.Donation{
+		Service:         "general",
+		Model:           "reward-zero",
+		DifyBaseURL:     "https://dify.example.com/v1",
+		SourceUserID:    sql.NullInt64{Int64: donor.ID, Valid: true},
+		SourceDiscordID: donor.DiscordID,
+		SourceUsername:  donor.Username,
+		Deadline:        time.Now().Add(24 * time.Hour).Unix(),
+		TotalCount:      10,
+		RemainingCount:  10,
+		Status:          db.DonationActive,
+	}
+	created, err := store.CreateDonation(donation, "app-secret")
+	if err != nil {
+		t.Fatalf("create donation: %v", err)
+	}
+
+	gw.charitySuccessAccounting(consumer.ID, created, "[公益][general]reward-zero", "general", time.Now(), pricing)
+
+	// Consumer: 100 - 0 = 100 (price is 0).
+	cu, _ := store.GetUserByID(consumer.ID)
+	if cu.Credits != 100 {
+		t.Errorf("consumer credits = %d, want 100", cu.Credits)
+	}
+
+	// Donor: 0 + 0 = 0.
+	du, _ := store.GetUserByID(donor.ID)
+	if du.Credits != 0 {
+		t.Errorf("donor credits = %d, want 0", du.Credits)
+	}
+}
+
+// TestCharitySuccessAccounting_NoRewardWhenNoSourceUser verifies that no
+// reward is granted when the donation has no source user.
+func TestCharitySuccessAccounting_NoRewardWhenNoSourceUser(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+
+	consumer, err := store.CreateUser("804", "consumer3", "")
+	if err != nil {
+		t.Fatalf("create consumer: %v", err)
+	}
+	store.SetUserCredits(consumer.ID, 100)
+
+	pricing, err := store.UpsertPricing("general", "no-source", 31, 0)
+	if err != nil {
+		t.Fatalf("upsert pricing: %v", err)
+	}
+
+	// No source user — source_text only.
+	donation := &db.Donation{
+		Service:        "general",
+		Model:          "no-source",
+		DifyBaseURL:    "https://dify.example.com/v1",
+		SourceText:     "第三方捐赠",
+		Deadline:       time.Now().Add(24 * time.Hour).Unix(),
+		TotalCount:     10,
+		RemainingCount: 10,
+		Status:         db.DonationActive,
+	}
+	created, err := store.CreateDonation(donation, "app-secret")
+	if err != nil {
+		t.Fatalf("create donation: %v", err)
+	}
+
+	gw.charitySuccessAccounting(consumer.ID, created, "[公益][general]no-source", "general", time.Now(), pricing)
+
+	// Consumer: 100 - 31 = 69.
+	cu, _ := store.GetUserByID(consumer.ID)
+	if cu.Credits != 69 {
+		t.Errorf("consumer credits = %d, want 69", cu.Credits)
+	}
+	// No donor to reward.
+}
+
+// TestListDonations_SourceDisplay verifies that list endpoint returns
+// source_display populated (was a bug where donationJSON was used
+// instead of enrichDonationJSON).
+func TestListDonations_SourceDisplay(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	admin := adminCookie(t, gw)
+
+	// Create a source user and donation.
+	u, err := store.CreateUser("900", "source_user_display", "")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	donation := &db.Donation{
+		Service:         "general",
+		Model:           "display-test",
+		DifyBaseURL:     "https://dify.example.com/v1",
+		SourceUserID:    sql.NullInt64{Int64: u.ID, Valid: true},
+		SourceDiscordID: u.DiscordID,
+		SourceUsername:  u.Username,
+		Deadline:        time.Now().Add(24 * time.Hour).Unix(),
+		TotalCount:      10,
+		Status:          db.DonationActive,
+		Note:            "test",
+	}
+	if _, err := store.CreateDonation(donation, "app-secret"); err != nil {
+		t.Fatalf("create donation: %v", err)
+	}
+
+	rec := donationRequest(gw, admin, "GET", "/api/admin/donations", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Donations []map[string]interface{} `json:"donations"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if len(resp.Donations) == 0 {
+		t.Fatal("expected at least one donation")
+	}
+
+	d := resp.Donations[0]
+	sd, ok := d["source_display"].(string)
+	if !ok || sd == "" {
+		t.Errorf("source_display empty or not a string: %v", d["source_display"])
+	}
+	// Should resolve to the source user's username.
+	if sd != "source_user_display" {
+		t.Errorf("source_display = %q, want %q", sd, "source_user_display")
 	}
 }

@@ -105,10 +105,24 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/admin/donations/{id}/status", g.handleDonationStatus)
 	mux.HandleFunc("DELETE /api/admin/donations/{id}", g.handleDeleteDonation)
 
+	// Charity pricing admin endpoints (beta.2)
+	mux.HandleFunc("GET /api/admin/pricing", g.handleListPricing)
+	mux.HandleFunc("PUT /api/admin/pricing", g.handleUpsertPricing)
+	mux.HandleFunc("PATCH /api/admin/pricing", g.handlePatchPricing)
+	mux.HandleFunc("DELETE /api/admin/pricing", g.handleDeletePricing)
+
 	// Donation application review
 	mux.HandleFunc("GET /api/admin/donations/pending", g.handleListPendingApplications)
 	mux.HandleFunc("POST /api/admin/donations/{id}/approve", g.handleApproveApplication)
 	mux.HandleFunc("POST /api/admin/donations/{id}/reject", g.handleRejectApplication)
+
+	// Batch endpoints (beta.2)
+	mux.HandleFunc("POST /api/admin/donations/approve/batch", g.handleBatchApproveApplications)
+	mux.HandleFunc("POST /api/admin/donations/reject/batch", g.handleBatchRejectApplications)
+	mux.HandleFunc("POST /api/admin/donations/status/batch", g.handleBatchDonationStatus)
+	mux.HandleFunc("POST /api/admin/donations/delete/batch", g.handleBatchDeleteDonations)
+	mux.HandleFunc("POST /api/admin/pricing/delete/batch", g.handleBatchDeletePricing)
+	mux.HandleFunc("POST /api/admin/bulletins/delete/batch", g.handleBatchDeleteBulletins)
 
 	// Bulletin board (admin CRUD + public merged list)
 	mux.HandleFunc("GET /api/admin/bulletins", g.handleAdminListBulletins)
@@ -220,14 +234,16 @@ func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Append charity models when global switch is on and user has opted in.
+	// In beta.2, charity model list is sourced from charity_pricing (enabled=1),
+	// not from the donations table.
 	if user.CharityEnabled && g.Store.GetSettingString(db.SettingCharityEnabled, "") == "true" {
 		seen := make(map[string]bool, len(models))
 		for _, m := range models {
 			seen[m.ID] = true
 		}
-		pairs, err := g.Store.ListRoutableDonationModels()
+		pricings, err := g.Store.ListEnabledPricing()
 		if err == nil {
-			for _, p := range pairs {
+			for _, p := range pricings {
 				charityID := charityModelName(p.Service, p.Model)
 				if !seen[charityID] {
 					models = append(models, openai.Model{
@@ -501,13 +517,36 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// 2. Credits check (gate threshold is admin-tunable).
-	gate := g.Store.GetSettingInt(db.SettingCreditsGate, db.DefaultCreditsGate)
-	if user.Credits <= gate {
+	// 2. Pricing gate (beta.2): check charity_pricing for this (service, backend).
+	pricing, err := g.Store.GetPricing(service, backend)
+	if err != nil {
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	if pricing == nil || !pricing.Enabled {
+		// Pricing missing or disabled — check if donations exist for alert.
+		has, _ := g.Store.HasDonationsForPair(service, backend)
+		if has {
+			// Donations exist but pricing is missing/disabled — alert admin.
+			if g.mailer != nil {
+				g.mailer.PricingMissing(service, backend)
+			}
+		}
+		g.logRequest(user.ID, req.Model, service, startedAt, "error", "service_unavailable",
+			http.StatusServiceUnavailable, "pricing not found or disabled")
+		g.writeError(w, http.StatusServiceUnavailable, "service_unavailable",
+			"当前该公益模型不可用")
+		return
+	}
+
+	// Check credits against pricing.
+	if user.Credits < pricing.Price {
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "insufficient_credits",
-			http.StatusForbidden, fmt.Sprintf("credits <= 0 (%d)", user.Credits))
+			http.StatusForbidden, fmt.Sprintf("credits %d < price %d", user.Credits, pricing.Price))
 		g.writeError(w, http.StatusForbidden, "insufficient_credits",
-			fmt.Sprintf("您的%s不足，无法调用公益模型", g.Config.I18N("credits_name", "zh", config.DefaultCreditsName)))
+			fmt.Sprintf("您的%s不足（需要 %d，当前 %d），无法调用公益模型",
+				g.Config.I18N("credits_name", "zh", config.DefaultCreditsName),
+				pricing.Price, user.Credits))
 		return
 	}
 
@@ -609,9 +648,9 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 
 	// 7. Forward (streaming or blocking)
 	if req.Stream {
-		g.charityStreaming(charityWriter, client, wfReq, logModel, user.ID, service, startedAt, picked)
+		g.charityStreaming(charityWriter, client, wfReq, logModel, user.ID, service, startedAt, picked, pricing)
 	} else {
-		g.charityBlocking(charityWriter, client, wfReq, logModel, user.ID, service, startedAt, picked)
+		g.charityBlocking(charityWriter, client, wfReq, logModel, user.ID, service, startedAt, picked, pricing)
 	}
 }
 
@@ -847,7 +886,7 @@ func (g *Gateway) logRequest(userID int64, model, service string, startedAt time
 	if len(detail) > g.Config.LogDetailMaxChars {
 		detail = detail[:g.Config.LogDetailMaxChars] + "…"
 	}
-	if err := g.Store.AddRequestLogFull(userID, model, service, startedAt, time.Now(), status, errorCode, httpStatus, detail, 0); err != nil {
+	if err := g.Store.AddRequestLogFull(userID, model, service, startedAt, time.Now(), status, errorCode, httpStatus, detail, 0, 0); err != nil {
 		log.Printf("[WARN] write request log: %v", err)
 	}
 }

@@ -151,7 +151,7 @@ func TestPurgeExpiredDonationLogs_CascadeDeletesAlerts(t *testing.T) {
 
 	// Insert an old donation-bound log and an alert bound to it.
 	started := time.Unix(oldCutoff.Unix(), 0)
-	st.AddRequestLogFull(u.ID, "[公益][general]cascade", "general", started, started.Add(30*time.Second), "error", "upstream_error", 502, "test error", created.ID)
+	st.AddRequestLogFull(u.ID, "[公益][general]cascade", "general", started, started.Add(30*time.Second), "error", "upstream_error", 502, "test error", created.ID, 0)
 
 	// Find the log id to construct the alert.
 	logs, _ := st.ListRequestLogs(u.ID, 10)
@@ -205,7 +205,7 @@ func TestPurgeExpiredDonationLogs_ExpiredDonation(t *testing.T) {
 
 	// Add an old log bound to this expired donation.
 	oldTime := time.Unix(oldCutoff, 0)
-	st.AddRequestLogFull(u.ID, "[公益][general]expired", "general", oldTime, oldTime.Add(30*time.Second), "success", "", 200, "", created.ID)
+	st.AddRequestLogFull(u.ID, "[公益][general]expired", "general", oldTime, oldTime.Add(30*time.Second), "success", "", 200, "", created.ID, 0)
 
 	// Should still clean logs even though donation is expired.
 	n, err := st.PurgeExpiredDonationLogs(now.Unix())

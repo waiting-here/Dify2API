@@ -95,6 +95,7 @@ func (g *Gateway) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 		HTTPStatus    int    `json:"http_status"`
 		ErrorDetail   string `json:"error_detail"`
 		DonationID    *int64 `json:"donation_id"`
+		CreditsConsumed int    `json:"credits_consumed"`
 		SourceDisplay string `json:"source_display,omitempty"`
 	}
 
@@ -123,6 +124,7 @@ func (g *Gateway) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 			HTTPStatus:  l.HTTPStatus,
 			ErrorDetail: l.ErrorDetail,
 			DonationID:  l.DonationID,
+			CreditsConsumed: l.CreditsConsumed,
 		}
 		if l.DonationID != nil {
 			el.SourceDisplay = donCache[*l.DonationID]

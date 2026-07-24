@@ -194,8 +194,12 @@ result_limit: 4000               # 超限结果写临时文件，仅回路径+�
   点击弹出详情；系统公告（签到未启用/捐赠未启用/公益未启用）自动生成。
 - **维护模式**：管理员在设置页开启后，用户端显示友好维护页面（503），
   管理员端不受影响。
-- **用户自助捐赠**：用户可提交 Dify App 凭据申请加入公益资源池，管理员审核
-  （可修改字段）后入池；用户可查看自己捐赠的审核状态。
+- **用户自助捐赠**：用户可提交 Dify App 凭据申请加入公益资源池（提交时二次确认 +
+  App 连通性+契约校验），管理员审核（可修改字段）后入池；用户可查看自己捐赠的审核状态。
+- **捐赠积分回报**：公益调用成功时，捐赠者获得 `charity_pricing.reward` 积分配置的积分回报（新建定价时默认按价格的 50% 向上取整，管理员可独立编辑）。
+- **按模型定价表**：公益资源消耗从全局统一 `charity_cost` 改为按 `(service, model)` 组合单独定价（`charity_pricing` 表）；每条定价含价格、捐赠奖励、启用开关；未定价组合禁止激活名下捐赠条目；用户端可查看已启用定价。
+- **捐赠安全层**：三层保险——① 捐赠条目需管理员手动激活 ② 需配置定价表 ③ 需手动开启定价的 enabled 开关。管理员创建捐赠默认未激活。
+- **批量管理**：捐赠审批/公益资源库/价格表/公告管理四处表格支持多选与批量操作（通过/拒绝/激活/停用/删除），采用原子全拒策略——任一项不满足条件即整体拒绝。
 - **多语言**：前端支持中文/英文切换，首次登录自动检测浏览器语言；
   语言偏好保存至服务端（跨设备同步）。站点名称、积分名称等可通过
   `i18n.json` 字典文件提供多语言版本。
@@ -265,33 +269,33 @@ SMTP_TLS=implicit
 
 | HTTP | code | 含义 |
 |------|------|------|
+| 400 | `already_checked_in` | 今日已签到 |
+| 400 | `checkin_disabled` | 签到系统已被管理员关闭（积分上限设为 0） |
 | 400 | `invalid_message_sequence` | 消息布局不符该服务契约 |
 | 400 | `invalid_request` | 请求体/参数非法（含未注册服务名） |
-| 401 | `unauthorized` | 调用方密钥缺失/无效，或网页会话失效 |
-| 400 | `checkin_disabled` | 签到系统已被管理员关闭（积分上限设为 0） |
 | 400 | `too_many_pending` | 待审核捐赠申请已达上限 |
-| 400 | `already_checked_in` | 今日已签到 |
-| 403 | `forbidden` | 管理接口非管理员 |
-| 403 | `rpm_exceeded` | 超出三类 RPM 任一上限（文案含类别、阈值与封禁提示） |
-| 403 | `insufficient_credits` | 调用公益模型时积分不足（含可配置积分名） |
+| 401 | `unauthorized` | 调用方密钥缺失/无效，或网页会话失效 |
 | 403 | `charity_disabled` | 全局公益开关已被管理员关闭 |
 | 403 | `donation_disabled` | 捐赠系统已被管理员关闭 |
-| 403 | `login_locked` | 管理员登录失败过多，锁定中 |
+| 403 | `forbidden` | 管理接口非管理员 |
+| 403 | `insufficient_credits` | 调用公益模型时积分不足（含可配置积分名） |
 | 403 | `login_failed` | OAuth 登录失败（注册条件/封禁等） |
+| 403 | `login_locked` | 管理员登录失败过多，锁定中 |
+| 403 | `rpm_exceeded` | 超出三类 RPM 任一上限（文案含类别、阈值与封禁提示） |
+| 404 | `debug_intercept` | 调试拦截（非真实错误） |
 | 404 | `model_not_found` | 模型未配置或已停用 |
 | 404 | `not_found` | 路径不存在或跨站点访问 |
-| 404 | `debug_intercept` | 调试拦截（非真实错误） |
 | 409 | `conflict` | 模型名已存在 |
 | 413 | `request_too_large` | 请求体超限 |
 | 415 | `invalid_request` | Content-Type 不是 application/json |
-| 429 | `server_busy` | 全局并发已满（附 Retry-After） |
-| 429 | `rate_limited` | 源 IP 被限流（Web 接口超频或无效密钥过多，附 Retry-After） |
 | 429 | `charity_overloaded` | 当前该公益模型所有捐赠条目均已达速率上限，请稍后重试 |
-| 503 | `service_unavailable` | 当前该公益模型无可用捐赠条目 |
-| 503 | `maintenance` | 站点处于维护模式 |
+| 429 | `rate_limited` | 源 IP 被限流（Web 接口超频或无效密钥过多，附 Retry-After） |
+| 429 | `server_busy` | 全局并发已满（附 Retry-After） |
 | 4xx | （透传上游 code） | Dify 返回 4xx 时原状态码与错误码透传（如 400 `invalid_param`），消息带 `[Dify]` 前缀 |
-| 502 | `upstream_error` 等 / `image_upload_failed` | Dify 5xx 或网络错误 / 图片预上传失败 |
 | 500 | `internal` | 网关内部错误 |
+| 502 | `upstream_error` 等 / `image_upload_failed` | Dify 5xx 或网络错误 / 图片预上传失败 |
+| 503 | `maintenance` | 站点处于维护模式 |
+| 503 | `service_unavailable` | 当前该公益模型无可用捐赠条目 |
 
 流式传输中途失败（SSE 已开始后）：流内发送 OpenAI 风格错误帧
 `data: {"error":{"code":"upstream_error",...}}` 且**不发** `data: [DONE]`，

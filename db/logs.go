@@ -26,8 +26,9 @@ type RequestLog struct {
 	EndedAt     int64  `json:"ended_at"`
 	Status      string `json:"status"`       // "success" | "error"
 	ErrorCode   string `json:"error_code"`   // "" on success; gateway error code or upstream status otherwise
-	HTTPStatus  int    `json:"http_status"`  // HTTP status returned to the caller (0 = unrecorded legacy row)
-	ErrorDetail string `json:"error_detail"` // short error message (never request/response content)
+	HTTPStatus      int    `json:"http_status"`       // HTTP status returned to the caller (0 = unrecorded legacy row)
+	ErrorDetail     string `json:"error_detail"`      // short error message (never request/response content)
+	CreditsConsumed int    `json:"credits_consumed"`  // credits deducted for this call (0 for non-charity)
 }
 
 // AddRequestLog records one completed call (no HTTP status / error detail;
@@ -44,14 +45,14 @@ func (s *Store) AddRequestLog(userID int64, model, service string, startedAt, en
 // diagnostic fields: the HTTP status returned to the caller and a short
 // error detail (never request/response content — see the RequestLog
 // design-intent comment). donationID <= 0 stores NULL (not a charity call).
-func (s *Store) AddRequestLogFull(userID int64, model, service string, startedAt, endedAt time.Time, status, errorCode string, httpStatus int, errorDetail string, donationID int64) error {
+func (s *Store) AddRequestLogFull(userID int64, model, service string, startedAt, endedAt time.Time, status, errorCode string, httpStatus int, errorDetail string, donationID int64, creditsConsumed int) error {
 	var don interface{}
 	if donationID > 0 {
 		don = donationID
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO request_logs (user_id, model, service, started_at, ended_at, status, error_code, http_status, error_detail, donation_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		userID, model, service, startedAt.Unix(), endedAt.Unix(), status, errorCode, httpStatus, errorDetail, don,
+		`INSERT INTO request_logs (user_id, model, service, started_at, ended_at, status, error_code, http_status, error_detail, donation_id, credits_consumed) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		userID, model, service, startedAt.Unix(), endedAt.Unix(), status, errorCode, httpStatus, errorDetail, don, creditsConsumed,
 	)
 	return err
 }
@@ -60,7 +61,7 @@ func (s *Store) AddRequestLogFull(userID int64, model, service string, startedAt
 // annotation. This is a separate method (not an overload) to avoid
 // breaking all existing callers.
 func (s *Store) AddRequestLogDonation(userID int64, model, service string, startedAt, endedAt time.Time, status, errorCode string, donationID int64) error {
-	return s.AddRequestLogFull(userID, model, service, startedAt, endedAt, status, errorCode, 0, "", donationID)
+	return s.AddRequestLogFull(userID, model, service, startedAt, endedAt, status, errorCode, 0, "", donationID, 0)
 }
 
 // ListRequestLogs returns a user's recent logs, newest first (bounded).
@@ -69,7 +70,7 @@ func (s *Store) ListRequestLogs(userID int64, limit int) ([]*RequestLog, error) 
 		limit = 100
 	}
 	rows, err := s.db.Query(
-		`SELECT id, user_id, model, service, started_at, ended_at, status, error_code, http_status, error_detail
+		`SELECT id, user_id, model, service, started_at, ended_at, status, error_code, http_status, error_detail, credits_consumed
 		 FROM request_logs WHERE user_id=? ORDER BY started_at DESC LIMIT ?`, userID, limit)
 	if err != nil {
 		return nil, err
@@ -78,7 +79,7 @@ func (s *Store) ListRequestLogs(userID int64, limit int) ([]*RequestLog, error) 
 	var out []*RequestLog
 	for rows.Next() {
 		var l RequestLog
-		if err := rows.Scan(&l.ID, &l.UserID, &l.Model, &l.Service, &l.StartedAt, &l.EndedAt, &l.Status, &l.ErrorCode, &l.HTTPStatus, &l.ErrorDetail); err != nil {
+		if err := rows.Scan(&l.ID, &l.UserID, &l.Model, &l.Service, &l.StartedAt, &l.EndedAt, &l.Status, &l.ErrorCode, &l.HTTPStatus, &l.ErrorDetail, &l.CreditsConsumed); err != nil {
 			return nil, err
 		}
 		out = append(out, &l)
@@ -101,6 +102,7 @@ type AdminRequestLog struct {
 	HTTPStatus  int    `json:"http_status"`  // HTTP status returned to the caller (0 = unrecorded legacy row)
 	ErrorDetail string `json:"error_detail"` // short error message (never request/response content)
 	DonationID  *int64 `json:"donation_id"`  // null when not a charity request
+	CreditsConsumed int `json:"credits_consumed"` // credits deducted for this call (0 for non-charity)
 }
 
 // LogFilter collects optional AND-combined filters for ListAllRequestLogs.
@@ -166,7 +168,7 @@ func (s *Store) ListAllRequestLogs(f LogFilter, limit, offset int) ([]*AdminRequ
 	}
 
 	query := `SELECT l.id, l.user_id, COALESCE(u.username, ''), l.model, l.service,
-		l.started_at, l.ended_at, l.status, l.error_code, l.http_status, l.error_detail, l.donation_id
+		l.started_at, l.ended_at, l.status, l.error_code, l.http_status, l.error_detail, l.donation_id, l.credits_consumed
 		FROM request_logs l
 		LEFT JOIN users u ON l.user_id = u.id` +
 		where + ` ORDER BY l.started_at DESC LIMIT ? OFFSET ?`
@@ -183,7 +185,7 @@ func (s *Store) ListAllRequestLogs(f LogFilter, limit, offset int) ([]*AdminRequ
 		var l AdminRequestLog
 		var donationID sql.NullInt64
 		if err := rows.Scan(&l.ID, &l.UserID, &l.Username, &l.Model, &l.Service,
-			&l.StartedAt, &l.EndedAt, &l.Status, &l.ErrorCode, &l.HTTPStatus, &l.ErrorDetail, &donationID); err != nil {
+			&l.StartedAt, &l.EndedAt, &l.Status, &l.ErrorCode, &l.HTTPStatus, &l.ErrorDetail, &donationID, &l.CreditsConsumed); err != nil {
 			return nil, 0, err
 		}
 		if donationID.Valid {

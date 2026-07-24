@@ -47,15 +47,19 @@
   .bulletin-item.bull-imp { border-left-color: #d93535; }
   .bulletin-item h4 { margin: 0; font-size: 1rem; }
   .bulletin-content img { max-width: 100%; }
-  /* Admin tab navigation. */
+  /* Admin tab navigation.
+     Tabs use flex:1 so they fill the bar evenly on wide screens.
+     min-width (6rem) is enough for the longest label in zh/en
+     ("系统公告" / "Bulletins"). If tabs are added, renamed, or
+     translated into longer labels, review this constant. */
   .tab-nav { display: flex; gap: .25rem; border-bottom: 2px solid var(--pico-muted-border-color); margin-bottom: 1.25rem; overflow-x: auto; overflow-y: hidden; }
-  .tab-nav .admin-tab { padding: .5rem 1rem; border: none; border-radius: .35rem .35rem 0 0; background: none; color: var(--pico-muted-color); cursor: pointer; font-size: .9rem; margin-bottom: -2px; border-bottom: 2px solid transparent; transition: color .15s, border-color .15s; }
+  .tab-nav .admin-tab { flex: 1 1 auto; min-width: 6rem; padding: .5rem 1rem; border: none; border-radius: .35rem .35rem 0 0; background: none; color: var(--pico-muted-color); cursor: pointer; font-size: .9rem; margin-bottom: -2px; border-bottom: 2px solid transparent; transition: color .15s, border-color .15s; }
   .tab-nav .admin-tab:hover { color: var(--pico-color); }
   .tab-nav .admin-tab.active { color: var(--brand); border-bottom-color: var(--brand); font-weight: 600; }
   /* Dropdown menu for user table actions. */
   .dropdown-menu button:hover { background: var(--pico-primary-hover-background); color: var(--pico-primary-inverse); }
   /* User tab navigation. Same look as admin tabs. */
-  .tab-nav .user-tab { padding: .5rem 1rem; border: none; border-radius: .35rem .35rem 0 0; background: none; color: var(--pico-muted-color); cursor: pointer; font-size: .9rem; margin-bottom: -2px; border-bottom: 2px solid transparent; transition: color .15s, border-color .15s; }
+  .tab-nav .user-tab { flex: 1 1 auto; min-width: 6rem; padding: .5rem 1rem; border: none; border-radius: .35rem .35rem 0 0; background: none; color: var(--pico-muted-color); cursor: pointer; font-size: .9rem; margin-bottom: -2px; border-bottom: 2px solid transparent; transition: color .15s, border-color .15s; }
   .tab-nav .user-tab:hover { color: var(--pico-color); }
   .tab-nav .user-tab.active { color: var(--brand); border-bottom-color: var(--brand); font-weight: 600; }
   /* Key + data cards above user tabs: side-by-side on small screens. */

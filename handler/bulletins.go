@@ -3,6 +3,7 @@ package handler
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -236,6 +237,58 @@ func (g *Gateway) handleAdminDeleteBulletin(w http.ResponseWriter, r *http.Reque
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+}
+
+// POST /api/admin/bulletins/delete/batch — batch delete bulletins (7.4.1).
+func (g *Gateway) handleBatchDeleteBulletins(w http.ResponseWriter, r *http.Request) {
+	if g.requireAdmin(r) == nil {
+		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
+		return
+	}
+
+	var req struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	if len(req.IDs) == 0 {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "ids must be a non-empty array")
+		return
+	}
+
+	// Atomic all-or-nothing: validate all first.
+	for _, id := range req.IDs {
+		b, err := g.Store.GetBulletin(id)
+		if err != nil {
+			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+		if b == nil {
+			writeBatchDonationError(w, fmt.Sprintf("公告 %d 不存在", id), id)
+			return
+		}
+		if b.IsSystem {
+			writeBatchDonationError(w, fmt.Sprintf("系统公告 %d 不可删除", id), id)
+			return
+		}
+	}
+
+	// All passed: delete each.
+	for _, id := range req.IDs {
+		if err := g.Store.DeleteBulletin(id); err != nil {
+			g.writeError(w, http.StatusInternalServerError, "internal",
+				fmt.Sprintf("删除公告 %d 失败: %v", id, err))
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":    true,
+		"count": len(req.IDs),
+	})
 }
 
 // --- Public user endpoint ---

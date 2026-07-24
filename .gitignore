@@ -42,3 +42,6 @@ dify2api.exe
 *.db-shm
 *.db-wal
 *.key
+
+# Migration scripts (manual, version-specific, not for git)
+*.sql

@@ -15,7 +15,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -90,7 +89,8 @@ CREATE TABLE IF NOT EXISTS request_logs (
 	error_code  TEXT NOT NULL DEFAULT '',
 	donation_id INTEGER,
 	http_status INTEGER NOT NULL DEFAULT 0,
-	error_detail TEXT NOT NULL DEFAULT ''
+	error_detail TEXT NOT NULL DEFAULT '',
+	credits_consumed INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_request_logs_user ON request_logs(user_id, started_at);
 
@@ -161,6 +161,15 @@ CREATE TABLE IF NOT EXISTS donation_applications (
 );
 CREATE INDEX IF NOT EXISTS idx_da_user ON donation_applications(user_id);
 CREATE INDEX IF NOT EXISTS idx_da_status ON donation_applications(status);
+
+CREATE TABLE IF NOT EXISTS charity_pricing (
+    service TEXT NOT NULL,
+    model   TEXT NOT NULL,
+    price   INTEGER NOT NULL DEFAULT 0,
+    reward  INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (service, model)
+);
 `
 
 // Store wraps the SQLite handle and the master encryption key.
@@ -198,41 +207,6 @@ func Open(path, keyPath string) (*Store, error) {
 		sqldb.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
-	// Idempotent column migrations (V1.0.0 is pre-release; ignore "duplicate column" errors).
-	for _, m := range []string{
-		`ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE users ADD COLUMN banned_until INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE caller_keys ADD COLUMN key_hash TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE app_configs ADD COLUMN note TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE users ADD COLUMN ban_reason TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE users ADD COLUMN auto_banned INTEGER NOT NULL DEFAULT 0`,
-		// alpha.3 S1 — users new columns.
-		`ALTER TABLE users ADD COLUMN credits INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE users ADD COLUMN last_checkin_day TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE users ADD COLUMN rpm_limit_a INTEGER`,
-		`ALTER TABLE users ADD COLUMN rpm_limit_b INTEGER`,
-		`ALTER TABLE users ADD COLUMN rpm_limit_c INTEGER`,
-		`ALTER TABLE users ADD COLUMN donation_credit INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE users ADD COLUMN charity_enabled INTEGER NOT NULL DEFAULT 0`,
-		// alpha.3 S1 — request_logs donation tracking.
-		`ALTER TABLE request_logs ADD COLUMN donation_id INTEGER`,
-		// alpha.3 — admin log detail (HTTP status + error message).
-		`ALTER TABLE request_logs ADD COLUMN http_status INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE request_logs ADD COLUMN error_detail TEXT NOT NULL DEFAULT ''`,
-		// alpha.4 — bulletins table.
-		`ALTER TABLE bulletins ADD COLUMN lang TEXT NOT NULL DEFAULT 'zh'`,
-		// alpha.4 — donation_applications table.
-		`ALTER TABLE donation_applications ADD COLUMN note TEXT NOT NULL DEFAULT ''`,
-		// beta.1 — per-donation RPM limit.
-		`ALTER TABLE donations ADD COLUMN rpm_limit INTEGER NOT NULL DEFAULT 10`,
-		`ALTER TABLE donation_applications ADD COLUMN rpm_limit INTEGER NOT NULL DEFAULT 10`,
-	} {
-		if _, err := sqldb.Exec(m); err != nil && !strings.Contains(err.Error(), "duplicate column") {
-			sqldb.Close()
-			return nil, fmt.Errorf("migrate: %w", err)
-		}
-	}
-
 	return &Store{db: sqldb, key: key}, nil
 }
 

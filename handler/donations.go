@@ -101,6 +101,39 @@ func pickWeightedDonation(candidates []*db.Donation, limiter *donationRateLimite
 	return last.cr.d
 }
 
+// validateDonationApp checks a Dify App's availability and parameter
+// compatibility for a donation entry. Returns a validation result map
+// suitable for inclusion in API responses (informational, never blocks).
+func (g *Gateway) validateDonationApp(service, baseURL, apiKey string) map[string]interface{} {
+	client := dify.NewClient(baseURL, apiKey, 15*time.Second)
+	params, err := client.FetchParameters()
+	if err != nil {
+		return map[string]interface{}{
+			"compatible": false,
+			"message":    fmt.Sprintf("App 不可达: %v", err),
+		}
+	}
+	res := translator.CheckAppParams(service, params)
+	out := map[string]interface{}{
+		"compatible": res.Compatible,
+	}
+	if len(res.MissingContractVars) > 0 {
+		out["missing_contract_vars"] = res.MissingContractVars
+	}
+	if len(res.UncoveredAppRequired) > 0 {
+		out["uncovered_app_required"] = res.UncoveredAppRequired
+	}
+	if len(res.ExtraAppOptional) > 0 {
+		out["extra_app_optional"] = res.ExtraAppOptional
+	}
+	if res.Compatible {
+		out["message"] = "App 参数匹配成功"
+	} else {
+		out["message"] = "App 参数与契约不兼容"
+	}
+	return out
+}
+
 // --- Donation CRUD ---
 
 // POST /api/admin/donations
@@ -224,7 +257,7 @@ func (g *Gateway) handleCreateDonation(w http.ResponseWriter, r *http.Request) {
 		Deadline:        req.Deadline,
 		TotalCount:      req.TotalCount,
 		RpmLimit:        req.RpmLimit,
-		Status:          db.DonationActive,
+		Status:          db.DonationInactive,
 		Note:            req.Note,
 	}
 
@@ -234,6 +267,13 @@ func (g *Gateway) handleCreateDonation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// beta.2: if the (service, model) pair has no pricing, warn admin.
+	pricingWarning := ""
+	pricing, pErr := g.Store.GetPricing(created.Service, created.Model)
+	if pErr == nil && pricing == nil {
+		pricingWarning = "该模型尚未设定价格，捐赠已创建但自动设为未激活状态。请先在定价表中添加该组合后再激活。"
+	}
+
 	// Decrypt key for the creation response only
 	keyPlain, decErr := g.Store.Decrypt(created.DifyAPIKeyEnc)
 	if decErr != nil {
@@ -241,11 +281,18 @@ func (g *Gateway) handleCreateDonation(w http.ResponseWriter, r *http.Request) {
 		keyPlain = "(decrypt error)"
 	}
 
+	validation := g.validateDonationApp(created.Service, created.DifyBaseURL, keyPlain)
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ok":       true,
-		"donation": donationJSON(created, &keyPlain),
-	})
+	resp := map[string]interface{}{
+		"ok":         true,
+		"donation":   donationJSON(created, &keyPlain),
+		"validation": validation,
+	}
+	if pricingWarning != "" {
+		resp["warning"] = pricingWarning
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 // GET /api/admin/donations
@@ -263,7 +310,7 @@ func (g *Gateway) handleListDonations(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]map[string]interface{}, 0, len(list))
 	for _, d := range list {
-		out = append(out, donationJSON(d, nil))
+		out = append(out, g.enrichDonationJSON(d, nil))
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"donations": out})
@@ -305,6 +352,19 @@ func (g *Gateway) handleDonationStatus(w http.ResponseWriter, r *http.Request) {
 			g.writeError(w, http.StatusBadRequest, "invalid_request",
 				"已失效的捐赠条目不可更改状态")
 			return
+		}
+		// beta.2: activating a donation requires pricing to exist.
+		if req.Status == db.DonationActive {
+			pricing, pErr := g.Store.GetPricing(d.Service, d.Model)
+			if pErr != nil {
+				g.writeError(w, http.StatusInternalServerError, "internal", pErr.Error())
+				return
+			}
+			if pricing == nil {
+				g.writeError(w, http.StatusBadRequest, "invalid_request",
+					"该模型尚未设定价格，请先在定价表中添加该 (service, model) 组合")
+				return
+			}
 		}
 	case db.DonationExpired:
 		g.writeError(w, http.StatusBadRequest, "invalid_request",
@@ -543,7 +603,6 @@ func (g *Gateway) handlePatchDonation(w http.ResponseWriter, r *http.Request) {
 	if validateDify {
 		validKeyEnc := newAPIKeyEnc
 		if !apiKeyChanged {
-			// If API key didn't change but service/URL did, use existing key.
 			validKeyEnc = d.DifyAPIKeyEnc
 		}
 		keyPlain, decErr := g.Store.Decrypt(validKeyEnc)
@@ -553,28 +612,7 @@ func (g *Gateway) handlePatchDonation(w http.ResponseWriter, r *http.Request) {
 				"message":    fmt.Sprintf("密钥解密失败: %v", decErr),
 			}
 		} else {
-			client := dify.NewClient(newBaseURL, keyPlain, 15*time.Second)
-			params, fetchErr := client.FetchParameters()
-			if fetchErr != nil {
-				validation = map[string]interface{}{
-					"compatible": false,
-					"message":    fmt.Sprintf("App 不可达: %v", fetchErr),
-				}
-			} else {
-				// Light validation: just count required inputs.
-				required := 0
-				for _, isReq := range params {
-					if isReq {
-						required++
-					}
-				}
-				validation = map[string]interface{}{
-					"compatible":    true,
-					"message":       fmt.Sprintf("App 参数正常（共 %d 个变量，其中 %d 个必填）", len(params), required),
-					"variable_count": len(params),
-					"required_count": required,
-				}
-			}
+			validation = g.validateDonationApp(updated.Service, newBaseURL, keyPlain)
 		}
 	}
 
@@ -671,9 +709,27 @@ func (g *Gateway) handleGetCharity(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusUnauthorized, "unauthorized", "not logged in")
 		return
 	}
+
+	// beta.2: include pricing info for models with enabled pricing + active donations.
+	pricingList := []map[string]interface{}{}
+	pricings, pErr := g.Store.ListEnabledPricing()
+	if pErr == nil {
+		for _, p := range pricings {
+			has, _ := g.Store.HasDonationsForPair(p.Service, p.Model)
+			if has {
+				pricingList = append(pricingList, map[string]interface{}{
+					"service": p.Service,
+					"model":   p.Model,
+					"price":   p.Price,
+				})
+			}
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"charity_enabled": u.CharityEnabled,
+		"pricing":         pricingList,
 	})
 }
 
@@ -713,7 +769,7 @@ func (g *Gateway) handlePutCharity(w http.ResponseWriter, r *http.Request) {
 // --- Charity streaming/blocking handlers ---
 
 // charityStreaming handles streaming charity calls with donation accounting.
-func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time, donation *db.Donation) {
+func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time, donation *db.Donation, pricing *db.CharityPricing) {
 	wfReq.ResponseMode = "streaming"
 	events, errCh := client.StreamWorkflow(wfReq)
 
@@ -745,7 +801,7 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 
 	// Stream started (Dify HTTP 200): record success per §1.2
 	donationID := donation.ID
-	g.charitySuccessAccounting(userID, donation, modelName, service, startedAt)
+	g.charitySuccessAccounting(userID, donation, modelName, service, startedAt, pricing)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -821,11 +877,11 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 		g.limiter.record(rpmClassA, userID, time.Now())
 	}
 
-	g.logRequestDonation(userID, modelName, service, startedAt, status, code, http.StatusOK, detail, donationID)
+	g.logRequestDonation(userID, modelName, service, startedAt, status, code, http.StatusOK, detail, donationID, pricing.Price)
 }
 
 // charityBlocking handles blocking charity calls with donation accounting.
-func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time, donation *db.Donation) {
+func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time, donation *db.Donation, pricing *db.CharityPricing) {
 	wfReq.ResponseMode = "blocking"
 	text, err := client.BlockingWorkflow(wfReq)
 	donationID := donation.ID
@@ -835,11 +891,11 @@ func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wf
 		if errors.As(err, &de) && de.Status == http.StatusOK {
 			// 200-but-failed: success per §1.2, but admin alert
 			g.limiter.record(rpmClassB, userID, time.Now())
-			g.charitySuccessAccounting(userID, donation, modelName, service, startedAt)
+			g.charitySuccessAccounting(userID, donation, modelName, service, startedAt, pricing)
 			g.maybeRecordBlockingFailedAlert(userID, modelName, service, de, &donationID)
 
 			// Log first (we need the log ID for the alert)
-			g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_error", http.StatusOK, de.Error(), donationID)
+			g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_error", http.StatusOK, de.Error(), donationID, pricing.Price)
 			g.writeDifyError(w, err)
 			return
 		}
@@ -852,7 +908,7 @@ func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wf
 
 	// Success
 	g.limiter.record(rpmClassB, userID, time.Now())
-	g.charitySuccessAccounting(userID, donation, modelName, service, startedAt)
+	g.charitySuccessAccounting(userID, donation, modelName, service, startedAt, pricing)
 
 	resp := map[string]interface{}{
 		"id":      fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()/1000%1000000000000),
@@ -874,11 +930,11 @@ func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wf
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 	g.limiter.record(rpmClassA, userID, time.Now())
-	g.logRequestDonation(userID, modelName, service, startedAt, "success", "", http.StatusOK, "", donationID)
+	g.logRequestDonation(userID, modelName, service, startedAt, "success", "", http.StatusOK, "", donationID, pricing.Price)
 }
 
 // charitySuccessAccounting records the success side of donation accounting.
-func (g *Gateway) charitySuccessAccounting(userID int64, donation *db.Donation, modelName, service string, startedAt time.Time) {
+func (g *Gateway) charitySuccessAccounting(userID int64, donation *db.Donation, modelName, service string, startedAt time.Time, pricing *db.CharityPricing) {
 	// 1. Record donation success (remaining_count--, success_count++, may expire)
 	if err := g.Store.RecordDonationSuccess(donation.ID); err != nil {
 		log.Printf("[ERROR] charity success accounting race (donation %d): %v", donation.ID, err)
@@ -900,10 +956,18 @@ func (g *Gateway) charitySuccessAccounting(userID int64, donation *db.Donation, 
 		}
 	}
 
-	// 3. Deduct charity cost from the calling user.
-	cost := g.Store.GetSettingInt(db.SettingCharityCost, db.DefaultCharityCost)
-	if _, err := g.Store.AdjustUserCredits(userID, -cost); err != nil {
-		log.Printf("[ERROR] deduct charity credit (user %d): %v", userID, err)
+	// 3. Deduct charity cost from the calling user (beta.2: per-model pricing).
+	if pricing != nil && pricing.Price > 0 {
+		if _, err := g.Store.AdjustUserCredits(userID, -pricing.Price); err != nil {
+			log.Printf("[ERROR] deduct charity credit (user %d): %v", userID, err)
+		}
+	}
+
+	// 4. Reward donor (beta.2: per-model reward).
+	if pricing != nil && pricing.Reward > 0 && donation.SourceUserID.Valid {
+		if _, err := g.Store.AdjustUserCredits(donation.SourceUserID.Int64, pricing.Reward); err != nil {
+			log.Printf("[ERROR] reward donor credit (user %d): %v", donation.SourceUserID.Int64, err)
+		}
 	}
 }
 
@@ -946,11 +1010,11 @@ func (g *Gateway) maybeRecordBlockingFailedAlert(userID int64, modelName, servic
 }
 
 // logRequestDonation is like logRequest but includes a donation_id for charity calls.
-func (g *Gateway) logRequestDonation(userID int64, model, service string, startedAt time.Time, status, errorCode string, httpStatus int, detail string, donationID int64) {
+func (g *Gateway) logRequestDonation(userID int64, model, service string, startedAt time.Time, status, errorCode string, httpStatus int, detail string, donationID int64, creditsConsumed int) {
 	if len(detail) > g.Config.LogDetailMaxChars {
 		detail = detail[:g.Config.LogDetailMaxChars] + "…"
 	}
-	if err := g.Store.AddRequestLogFull(userID, model, service, startedAt, time.Now(), status, errorCode, httpStatus, detail, donationID); err != nil {
+	if err := g.Store.AddRequestLogFull(userID, model, service, startedAt, time.Now(), status, errorCode, httpStatus, detail, donationID, creditsConsumed); err != nil {
 		log.Printf("[WARN] write request log: %v", err)
 	}
 }
@@ -1061,6 +1125,7 @@ func (g *Gateway) handleCreateDonationApp(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"ok":          true,
 		"application": applicationJSON(app),
+		"validation":  g.validateDonationApp(req.Service, req.DifyBaseURL, req.DifyAPIKey),
 	})
 }
 
@@ -1214,12 +1279,33 @@ func (g *Gateway) handleApproveApplication(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	// beta.2: if the (service, model) pair has no pricing, auto-set to inactive.
+	pricingWarning := ""
+	pricing, pErr := g.Store.GetPricing(donation.Service, donation.Model)
+	if pErr == nil && pricing == nil {
+		if sErr := g.Store.SetDonationStatus(donation.ID, db.DonationInactive); sErr != nil {
+			log.Printf("[ERROR] auto-inactive donation %d (from approval): %v", donation.ID, sErr)
+		} else {
+			donation.Status = db.DonationInactive
+			pricingWarning = "该模型尚未设定价格，捐赠已创建但自动设为未激活状态。请先在定价表中添加该组合后再激活。"
+		}
+	}
+
+	resp := map[string]interface{}{
 		"ok":          true,
 		"application": applicationJSON(app),
 		"donation":    donationJSON(donation, nil),
-	})
+	}
+	if pricingWarning != "" {
+		resp["warning"] = pricingWarning
+	}
+	// beta.2: validate Dify App parameters.
+	keyPlain, decErr := g.Store.Decrypt(donation.DifyAPIKeyEnc)
+	if decErr == nil {
+		resp["validation"] = g.validateDonationApp(donation.Service, donation.DifyBaseURL, keyPlain)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 // POST /api/admin/donations/{id}/reject — reject an application.
@@ -1255,5 +1341,272 @@ func (g *Gateway) handleRejectApplication(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"ok":          true,
 		"application": applicationJSON(app),
+	})
+}
+
+// --- Batch operation helpers ---
+
+// writeBatchDonationError writes a batch error response with failed_id.
+func writeBatchDonationError(w http.ResponseWriter, msg string, id int64) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadRequest)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":        false,
+		"error":     msg,
+		"failed_id": id,
+	})
+}
+
+// writeBatchPairError writes a batch error response with failed_pair.
+func writeBatchPairError(w http.ResponseWriter, msg string, service, model string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadRequest)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":          false,
+		"error":       msg,
+		"failed_pair": map[string]string{"service": service, "model": model},
+	})
+}
+
+// --- Batch donation application endpoints (7.1) ---
+
+// POST /api/admin/donations/approve/batch — batch approve pending applications.
+func (g *Gateway) handleBatchApproveApplications(w http.ResponseWriter, r *http.Request) {
+	if g.requireAdmin(r) == nil {
+		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
+		return
+	}
+	adminUser := g.currentUser(r)
+
+	var req struct {
+		IDs        []int64 `json:"ids"`
+		ReviewNote string  `json:"review_note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	if len(req.IDs) == 0 {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "ids must be a non-empty array")
+		return
+	}
+
+	// Atomic all-or-nothing: validate all first.
+	for _, id := range req.IDs {
+		app, err := g.Store.GetApplication(id)
+		if err != nil {
+			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+		if app == nil {
+			writeBatchDonationError(w, fmt.Sprintf("申请 %d 不存在", id), id)
+			return
+		}
+		if app.Status != db.AppStatusPending {
+			writeBatchDonationError(w,
+				fmt.Sprintf("申请 %d 状态不是 pending（当前：%s）", id, app.Status), id)
+			return
+		}
+	}
+
+	// All passed: approve each.
+	for _, id := range req.IDs {
+		_, _, err := g.Store.ApproveApplication(id, adminUser.ID,
+			&db.ApproveApplicationFields{}, strings.TrimSpace(req.ReviewNote))
+		if err != nil {
+			g.writeError(w, http.StatusInternalServerError, "internal",
+				fmt.Sprintf("批准申请 %d 失败: %v", id, err))
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":    true,
+		"count": len(req.IDs),
+	})
+}
+
+// POST /api/admin/donations/reject/batch — batch reject pending applications.
+func (g *Gateway) handleBatchRejectApplications(w http.ResponseWriter, r *http.Request) {
+	if g.requireAdmin(r) == nil {
+		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
+		return
+	}
+	adminUser := g.currentUser(r)
+
+	var req struct {
+		IDs        []int64 `json:"ids"`
+		ReviewNote string  `json:"review_note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	if len(req.IDs) == 0 {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "ids must be a non-empty array")
+		return
+	}
+
+	// Atomic all-or-nothing: validate all first.
+	for _, id := range req.IDs {
+		app, err := g.Store.GetApplication(id)
+		if err != nil {
+			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+		if app == nil {
+			writeBatchDonationError(w, fmt.Sprintf("申请 %d 不存在", id), id)
+			return
+		}
+		if app.Status != db.AppStatusPending {
+			writeBatchDonationError(w,
+				fmt.Sprintf("申请 %d 状态不是 pending（当前：%s）", id, app.Status), id)
+			return
+		}
+	}
+
+	// All passed: reject each.
+	for _, id := range req.IDs {
+		_, err := g.Store.RejectApplication(id, adminUser.ID, strings.TrimSpace(req.ReviewNote))
+		if err != nil {
+			g.writeError(w, http.StatusInternalServerError, "internal",
+				fmt.Sprintf("拒绝申请 %d 失败: %v", id, err))
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":    true,
+		"count": len(req.IDs),
+	})
+}
+
+// --- Batch donation resource endpoints (7.2) ---
+
+// POST /api/admin/donations/status/batch — batch set donation status.
+func (g *Gateway) handleBatchDonationStatus(w http.ResponseWriter, r *http.Request) {
+	if g.requireAdmin(r) == nil {
+		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
+		return
+	}
+
+	var req struct {
+		IDs    []int64 `json:"ids"`
+		Status string  `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	if len(req.IDs) == 0 {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "ids must be a non-empty array")
+		return
+	}
+
+	// Validate target status.
+	switch req.Status {
+	case db.DonationActive, db.DonationInactive:
+		// OK
+	default:
+		g.writeError(w, http.StatusBadRequest, "invalid_request",
+			"状态值必须是 'active' 或 'inactive'")
+		return
+	}
+
+	// Atomic all-or-nothing: validate all first.
+	for _, id := range req.IDs {
+		d, err := g.Store.GetDonation(id)
+		if err != nil {
+			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+		if d == nil {
+			writeBatchDonationError(w, fmt.Sprintf("捐赠条目 %d 不存在", id), id)
+			return
+		}
+		if d.Status == db.DonationExpired {
+			writeBatchDonationError(w,
+				fmt.Sprintf("已失效的捐赠条目 %d 不可更改状态", id), id)
+			return
+		}
+		// Switching to active: check pricing exists.
+		if req.Status == db.DonationActive {
+			pricing, pErr := g.Store.GetPricing(d.Service, d.Model)
+			if pErr != nil {
+				g.writeError(w, http.StatusInternalServerError, "internal", pErr.Error())
+				return
+			}
+			if pricing == nil {
+				writeBatchDonationError(w,
+					fmt.Sprintf("捐赠条目 %d 的模型 (%s, %s) 尚未设定价格，请先在定价表中添加该组合后再激活",
+						id, d.Service, d.Model), id)
+				return
+			}
+		}
+	}
+
+	// All passed: apply status.
+	for _, id := range req.IDs {
+		if err := g.Store.SetDonationStatus(id, req.Status); err != nil {
+			g.writeError(w, http.StatusInternalServerError, "internal",
+				fmt.Sprintf("设置捐赠条目 %d 状态失败: %v", id, err))
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":    true,
+		"count": len(req.IDs),
+	})
+}
+
+// POST /api/admin/donations/delete/batch — batch delete donations.
+func (g *Gateway) handleBatchDeleteDonations(w http.ResponseWriter, r *http.Request) {
+	if g.requireAdmin(r) == nil {
+		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
+		return
+	}
+
+	var req struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	if len(req.IDs) == 0 {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "ids must be a non-empty array")
+		return
+	}
+
+	// Atomic all-or-nothing: validate all first.
+	for _, id := range req.IDs {
+		d, err := g.Store.GetDonation(id)
+		if err != nil {
+			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+		if d == nil {
+			writeBatchDonationError(w, fmt.Sprintf("捐赠条目 %d 不存在", id), id)
+			return
+		}
+	}
+
+	// All passed: delete each.
+	for _, id := range req.IDs {
+		if err := g.Store.DeleteDonation(id); err != nil {
+			g.writeError(w, http.StatusInternalServerError, "internal",
+				fmt.Sprintf("删除捐赠条目 %d 失败: %v", id, err))
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":    true,
+		"count": len(req.IDs),
 	})
 }

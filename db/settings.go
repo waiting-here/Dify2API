@@ -18,12 +18,10 @@ const (
 	SettingRPMLimitC         = "rpm_limit_c"         // class C: request received (default 18)
 	SettingRPMViolationLimit = "rpm_violation_limit" // violations before auto-ban (default 5)
 	SettingRPMBanHours       = "rpm_ban_hours"       // auto-ban duration in hours (default 24)
-	SettingCheckinMin        = "checkin_min"         // check-in credit lower bound (default 100)
-	SettingCheckinMax        = "checkin_max"         // check-in credit upper bound (default 200)
-	SettingCreditsCap        = "credits_cap"         // check-in credits ceiling (default 500)
+	SettingCheckinMin        = "checkin_min"         // check-in credit lower bound (default 45)
+	SettingCheckinMax        = "checkin_max"         // check-in credit upper bound (default 55)
+	SettingCreditsCap        = "credits_cap"         // check-in credits ceiling (default 250)
 	// alpha.3 — tunable thresholds.
-	SettingCreditsGate       = "credits_gate"        // charity gate: credits must be > this (default 0)
-	SettingCharityCost       = "charity_cost"        // credits deducted per charity success (default 10)
 	SettingDonationFailLimit = "donation_fail_limit" // consecutive failures before auto-inactive (default 10)
 	SettingMailerCoolMinutes = "mailer_cool_minutes" // email aggregation window in minutes (default 10)
 	// alpha.4 — split charity switches (donation / charity routing).
@@ -45,15 +43,13 @@ const (
 
 // Global defaults for the check-in system (alpha.3 F2).
 const (
-	DefaultCheckinMin = 100 // minimum credits awarded per successful check-in
-	DefaultCheckinMax = 200 // maximum credits awarded per successful check-in
-	DefaultCreditsCap = 500 // check-in fails when credits >= this cap
+	DefaultCheckinMin = 45  // minimum credits awarded per successful check-in
+	DefaultCheckinMax = 55  // maximum credits awarded per successful check-in
+	DefaultCreditsCap = 250 // check-in fails when credits >= this cap
 )
 
 // Global defaults for tunable thresholds.
 const (
-	DefaultCreditsGate         = 0  // charity gate: credits must be > this
-	DefaultCharityCost         = 10 // credits deducted per charity success
 	DefaultDonationFailLimit   = 10 // consecutive failures before auto-inactive
 	DefaultDonationReviewLimit = 3  // pending donation application cap per user
 	DefaultMailerCoolMinutes   = 10 // email aggregation window in minutes
