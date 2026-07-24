@@ -6,11 +6,13 @@ import (
 	"time"
 )
 
+func rewardPtr(n int) *int { return &n }
+
 func TestCharityPricing_CRUD(t *testing.T) {
 	st, _ := openTemp(t)
 
 	// Upsert creates.
-	cp, err := st.UpsertPricing("general", "claude-opus", 20, 0)
+	cp, err := st.UpsertPricing("general", "claude-opus", 20, nil)
 	if err != nil {
 		t.Fatalf("UpsertPricing: %v", err)
 	}
@@ -29,7 +31,7 @@ func TestCharityPricing_CRUD(t *testing.T) {
 	}
 
 	// Upsert with explicit reward.
-	cp2, err := st.UpsertPricing("general", "claude-opus", 30, 15)
+	cp2, err := st.UpsertPricing("general", "claude-opus", 30, rewardPtr(15))
 	if err != nil {
 		t.Fatalf("UpsertPricing update: %v", err)
 	}
@@ -97,7 +99,7 @@ func TestCharityPricing_DeleteWithDonations(t *testing.T) {
 	st, _ := openTemp(t)
 
 	// Create pricing + donation.
-	_, err := st.UpsertPricing("general", "test-model", 10, 5)
+	_, err := st.UpsertPricing("general", "test-model", 10, rewardPtr(5))
 	if err != nil {
 		t.Fatalf("UpsertPricing: %v", err)
 	}
@@ -171,13 +173,13 @@ func TestCharityPricing_UpsertValidates(t *testing.T) {
 	st, _ := openTemp(t)
 
 	// Negative price.
-	_, err := st.UpsertPricing("general", "x", -1, 0)
+	_, err := st.UpsertPricing("general", "x", -1, nil)
 	if err == nil {
 		t.Error("expected error for negative price")
 	}
 
 	// Negative reward.
-	_, err = st.UpsertPricing("general", "x", 10, -1)
+	_, err = st.UpsertPricing("general", "x", 10, rewardPtr(-1))
 	if err == nil {
 		t.Error("expected error for negative reward")
 	}
@@ -187,9 +189,9 @@ func TestCharityPricing_ListEnabledMultiple(t *testing.T) {
 	st, _ := openTemp(t)
 
 	// Create 3 pricing entries, enable 2.
-	st.UpsertPricing("general", "m1", 10, 0)
-	st.UpsertPricing("general", "m2", 20, 0)
-	st.UpsertPricing("general", "m3", 30, 0)
+	st.UpsertPricing("general", "m1", 10, nil)
+	st.UpsertPricing("general", "m2", 20, nil)
+	st.UpsertPricing("general", "m3", 30, nil)
 
 	st.SetPricingEnabled("general", "m1", true)
 	st.SetPricingEnabled("general", "m3", true)
@@ -214,7 +216,7 @@ func TestCharityPricing_RewardAutoFillEdge(t *testing.T) {
 	st, _ := openTemp(t)
 
 	// price=0, reward=0 → ceil(0) = 0
-	cp, err := st.UpsertPricing("general", "zero", 0, 0)
+	cp, err := st.UpsertPricing("general", "zero", 0, nil)
 	if err != nil {
 		t.Fatalf("UpsertPricing zero: %v", err)
 	}
@@ -223,7 +225,7 @@ func TestCharityPricing_RewardAutoFillEdge(t *testing.T) {
 	}
 
 	// price=1, reward=0 → ceil(0.5) = 1
-	cp, err = st.UpsertPricing("general", "one", 1, 0)
+	cp, err = st.UpsertPricing("general", "one", 1, nil)
 	if err != nil {
 		t.Fatalf("UpsertPricing one: %v", err)
 	}
@@ -232,7 +234,7 @@ func TestCharityPricing_RewardAutoFillEdge(t *testing.T) {
 	}
 
 	// price=5, reward=0 → ceil(2.5) = 3
-	cp, err = st.UpsertPricing("general", "five", 5, 0)
+	cp, err = st.UpsertPricing("general", "five", 5, nil)
 	if err != nil {
 		t.Fatalf("UpsertPricing five: %v", err)
 	}
@@ -241,7 +243,7 @@ func TestCharityPricing_RewardAutoFillEdge(t *testing.T) {
 	}
 
 	// Explicit reward takes precedence (not auto-filled)
-	cp, err = st.UpsertPricing("general", "explicit", 100, 1)
+	cp, err = st.UpsertPricing("general", "explicit", 100, rewardPtr(1))
 	if err != nil {
 		t.Fatalf("UpsertPricing explicit: %v", err)
 	}
@@ -282,7 +284,7 @@ func TestCharityPricing_ExportBundle(t *testing.T) {
 	}
 
 	// Upsert pricing and verify.
-	cp, err := st.UpsertPricing("general", "export-test", 50, 0)
+	cp, err := st.UpsertPricing("general", "export-test", 50, nil)
 	if err != nil {
 		t.Fatalf("UpsertPricing: %v", err)
 	}

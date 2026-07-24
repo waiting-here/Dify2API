@@ -285,7 +285,7 @@ func TestDonationStatusToggle(t *testing.T) {
 	}
 
 	// Create pricing for the (service, model) before re-activating.
-	store.UpsertPricing("general", "gpt4", 10, 5)
+	store.UpsertPricing("general", "gpt4", 10, ptr(5))
 
 	// Toggle back to active
 	rec2 := donationRequest(gw, admin, "POST", fmt.Sprintf("/api/admin/donations/%d/status", created.ID),
@@ -534,7 +534,7 @@ func TestCharityRouting_Success(t *testing.T) {
 	}
 
 	// beta.2: pricing must exist and be enabled for charity routing.
-	store.UpsertPricing("general", "x", 10, 5)
+	store.UpsertPricing("general", "x", 10, ptr(5))
 	store.SetPricingEnabled("general", "x", true)
 
 	model := "[公益][general]x"
@@ -619,7 +619,7 @@ func TestCharityRouting_InsufficientCredits(t *testing.T) {
 	store.SetSetting(db.SettingCharityEnabled, "true")
 
 	// beta.2: pricing must exist and be enabled.
-	store.UpsertPricing("general", "x", 10, 5)
+	store.UpsertPricing("general", "x", 10, ptr(5))
 	store.SetPricingEnabled("general", "x", true)
 
 	model := "[公益][general]x"
@@ -1438,7 +1438,7 @@ func TestCharitySuccessAccounting_Reward(t *testing.T) {
 	store.SetUserCredits(donor.ID, 0)
 
 	// Create pricing: price=31, reward=ceil(31*0.5)=16.
-	pricing, err := store.UpsertPricing("general", "reward-test", 31, 0)
+	pricing, err := store.UpsertPricing("general", "reward-test", 31, nil)
 	if err != nil {
 		t.Fatalf("upsert pricing: %v", err)
 	}
@@ -1501,7 +1501,7 @@ func TestCharitySuccessAccounting_NoRewardWhenZero(t *testing.T) {
 	// Pricing with reward=0 (UpsertPricing auto-fills reward from price;
 	// use a low price so reward=ceil(1*0.5)=1 — need to manually set 0 after).
 	// UpsertPricing sets reward=1 for price=1. Override via raw SQL.
-	_, err = store.UpsertPricing("general", "reward-zero", 0, 0)
+	_, err = store.UpsertPricing("general", "reward-zero", 0, nil)
 	if err != nil {
 		t.Fatalf("upsert pricing: %v", err)
 	}
@@ -1553,7 +1553,7 @@ func TestCharitySuccessAccounting_NoRewardWhenNoSourceUser(t *testing.T) {
 	}
 	store.SetUserCredits(consumer.ID, 100)
 
-	pricing, err := store.UpsertPricing("general", "no-source", 31, 0)
+	pricing, err := store.UpsertPricing("general", "no-source", 31, nil)
 	if err != nil {
 		t.Fatalf("upsert pricing: %v", err)
 	}

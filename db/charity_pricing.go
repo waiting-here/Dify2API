@@ -85,22 +85,25 @@ func (s *Store) ListEnabledPricing() ([]*CharityPricing, error) {
 // If reward == 0, auto-fills ceil(price * 0.5).
 // enabled is left unchanged (defaults to 0 on insert, preserved on update
 // unless explicitly changed via SetPricingEnabled).
-func (s *Store) UpsertPricing(service, model string, price, reward int) (*CharityPricing, error) {
+func (s *Store) UpsertPricing(service, model string, price int, reward *int) (*CharityPricing, error) {
 	if price < 0 {
 		return nil, fmt.Errorf("price must be >= 0, got %d", price)
 	}
-	if reward < 0 {
-		return nil, fmt.Errorf("reward must be >= 0, got %d", reward)
-	}
-	if reward == 0 {
-		reward = int(math.Ceil(float64(price) * 0.5))
+	r := 0
+	if reward != nil {
+		if *reward < 0 {
+			return nil, fmt.Errorf("reward must be >= 0, got %d", *reward)
+		}
+		r = *reward
+	} else {
+		r = int(math.Ceil(float64(price) * 0.5))
 	}
 
 	_, err := s.db.Exec(
 		`INSERT INTO charity_pricing (service, model, price, reward, enabled)
 		 VALUES (?,?,?,?,0)
 		 ON CONFLICT(service, model) DO UPDATE SET price=excluded.price, reward=excluded.reward`,
-		service, model, price, reward,
+		service, model, price, r,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("upsert pricing: %w", err)

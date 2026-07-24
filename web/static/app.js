@@ -1278,7 +1278,6 @@ async function renderAdminDashboard() {
               <label style="flex:1 1 10rem">${T('checkinMaxLabel')}<input name="checkin_max" type="number" min="1" required></label>
               <label style="flex:1 1 10rem">${T('creditsCapLabel')}<input name="credits_cap" type="number" min="0" required></label>
             </div>
-            </div>
           </fieldset>
           <fieldset>
             <legend>${T('settingsLegendCharity')}</legend>
@@ -1363,9 +1362,9 @@ async function renderAdminDashboard() {
             <label>${T('pricingThService')}<select name="service" id="pricing-service"></select></label>
             <label>${T('pricingThModel')}<input name="model" placeholder="${T('fieldBackend')}" required></label>
             <label>${T('pricingThPrice')}<input name="price" type="number" min="0" value="0" required></label>
-            <label>${T('pricingThReward')}<input name="reward" type="number" min="0" value="0" placeholder="0">
-              <small class="muted">${T('pricingRewardHint')}</small></label>
+            <label>${T('pricingThReward')}<input name="reward" type="number" min="0" placeholder="自动"></label>
           </div>
+          <small class="muted" style="margin-top:.25rem">${T('pricingRewardHint')}</small>
           <div id="pricing-note"></div>
           <button type="submit">${T('pricingAdd')}</button>
         </form>
@@ -2063,9 +2062,9 @@ async function showPricingEditDialog(svc, mdl, curPrice, curReward) {
       <form id="pricing-edit-form">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem">
           <label>${T('pricingThPrice')}<input name="price" type="number" min="0" value="${curPrice}" required></label>
-          <label>${T('pricingThReward')}<input name="reward" type="number" min="0" value="${curReward}">
-            <small class="muted">${T('pricingRewardHint')}</small></label>
+          <label>${T('pricingThReward')}<input name="reward" type="number" min="0" value="${curReward || ""}" placeholder="自动"></label>
         </div>
+        <small class="muted">${T('pricingRewardHint')}</small>
         <div id="pricing-edit-msg" style="margin-bottom:.5rem"></div>
         <footer style="display:flex;gap:.5rem;justify-content:flex-end">
           <button type="button" id="pricing-edit-save">${T('save')}</button>
@@ -2081,7 +2080,8 @@ async function showPricingEditDialog(svc, mdl, curPrice, curReward) {
 
   $("#pricing-edit-save").onclick = async () => {
     const price = parseInt($("#pricing-edit-form [name=price]").value, 10);
-    const reward = parseInt($("#pricing-edit-form [name=reward]").value, 10) || 0;
+    const rewardRaw = $("#pricing-edit-form [name=reward]").value.trim();
+    const reward = rewardRaw !== "" ? parseInt(rewardRaw, 10) : null;
     const msg = $("#pricing-edit-msg");
     msg.innerHTML = `<span class="muted">${T('loading')}</span>`;
     try {
@@ -2108,7 +2108,8 @@ async function onPricingSubmit(e) {
   const svc = f.service.value.trim();
   const mdl = f.model.value.trim();
   const price = parseInt(f.price.value, 10) || 0;
-  const reward = parseInt(f.reward.value, 10) || 0;
+  const rewardRaw = f.reward.value.trim();
+  const reward = rewardRaw !== "" ? parseInt(rewardRaw, 10) : null;
   const note = $("#pricing-note");
   note.innerHTML = `<span class="muted">${T('loading')}</span>`;
   try {

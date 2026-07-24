@@ -72,6 +72,8 @@ func batchCreatePendingApp(t *testing.T, gw *Gateway, store *db.Store, cookie *h
 	return int64(resp.Application["id"].(float64))
 }
 
+func ptr(n int) *int { return &n }
+
 // --- 7.1 Donation application batch approve/reject ---
 
 // TestBatchApprove_AllPending tests that batch approving all pending applications succeeds.
@@ -470,7 +472,7 @@ func TestBatchDeletePricing_AllClean(t *testing.T) {
 		{"general", "p1"}, {"general", "p2"}, {"sillytavern-main-trimmed", "p3"},
 	}
 	for _, p := range pairs {
-		store.UpsertPricing(p.s, p.m, 10, 5)
+		store.UpsertPricing(p.s, p.m, 10, ptr(5))
 	}
 
 	rec := batchRequest(gw, adminC, "POST", "/api/admin/pricing/delete/batch", map[string]interface{}{
@@ -509,7 +511,7 @@ func TestBatchDeletePricing_HasDonation(t *testing.T) {
 	adminC := adminCookie(t, gw)
 
 	// Create pricing with a donation.
-	store.UpsertPricing("general", "has-donation", 10, 5)
+	store.UpsertPricing("general", "has-donation", 10, ptr(5))
 	d := &db.Donation{
 		Service:     "general",
 		Model:       "has-donation",
@@ -522,7 +524,7 @@ func TestBatchDeletePricing_HasDonation(t *testing.T) {
 	store.CreateDonation(d, "app-secret")
 
 	// Create another pricing without donations.
-	store.UpsertPricing("general", "no-donation", 10, 5)
+	store.UpsertPricing("general", "no-donation", 10, ptr(5))
 
 	// Batch delete both — should fail entirely.
 	rec := batchRequest(gw, adminC, "POST", "/api/admin/pricing/delete/batch", map[string]interface{}{

@@ -562,7 +562,7 @@ func (g *Gateway) handleUpsertPricing(w http.ResponseWriter, r *http.Request) {
 		Service string `json:"service"`
 		Model   string `json:"model"`
 		Price   int    `json:"price"`
-		Reward  int    `json:"reward"`
+		Reward  *int   `json:"reward"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
@@ -583,7 +583,7 @@ func (g *Gateway) handleUpsertPricing(w http.ResponseWriter, r *http.Request) {
 			"price 必须 >= 0")
 		return
 	}
-	if req.Reward < 0 {
+	if req.Reward != nil && *req.Reward < 0 {
 		g.writeError(w, http.StatusBadRequest, "invalid_request",
 			"reward 必须 >= 0")
 		return
@@ -644,7 +644,7 @@ func (g *Gateway) handlePatchPricing(w http.ResponseWriter, r *http.Request) {
 	// Handle price/reward update (via UpsertPricing).
 	if req.Price != nil || req.Reward != nil {
 		price := p.Price
-		reward := p.Reward
+		var rewardPtr *int
 		if req.Price != nil {
 			if *req.Price < 0 {
 				g.writeError(w, http.StatusBadRequest, "invalid_request", "price 必须 >= 0")
@@ -657,9 +657,12 @@ func (g *Gateway) handlePatchPricing(w http.ResponseWriter, r *http.Request) {
 				g.writeError(w, http.StatusBadRequest, "invalid_request", "reward 必须 >= 0")
 				return
 			}
-			reward = *req.Reward
+			r := *req.Reward
+			rewardPtr = &r
+		} else {
+			rewardPtr = &p.Reward
 		}
-		if _, err := g.Store.UpsertPricing(req.Service, req.Model, price, reward); err != nil {
+		if _, err := g.Store.UpsertPricing(req.Service, req.Model, price, rewardPtr); err != nil {
 			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
 			return
 		}
