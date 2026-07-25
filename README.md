@@ -296,6 +296,7 @@ SMTP_TLS=implicit
 | 4xx | （透传上游 code） | Dify 返回 4xx 时原状态码与错误码透传（如 400 `invalid_param`），消息带 `[Dify]` 前缀 |
 | 500 | `internal` | 网关内部错误 |
 | 502 | `upstream_error` 等 / `image_upload_failed` | Dify 5xx 或网络错误 / 图片预上传失败 |
+| 504 | `upstream_timeout` | 上游 Dify 响应超时（可能因 Cloudflare 100 秒限制被截断），消息带 `[Dify2API]` 前缀，建议使用流式传输（`stream: true`） |
 | 503 | `maintenance` | 站点处于维护模式 |
 | 503 | `service_unavailable` | 当前该公益模型无可用捐赠条目 |
 

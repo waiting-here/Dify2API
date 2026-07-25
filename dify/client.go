@@ -5,10 +5,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -369,4 +371,35 @@ func parseSSE(r io.Reader, eventCh chan<- StreamEvent, errCh chan<- error, initi
 	if err := scanner.Err(); err != nil {
 		errCh <- fmt.Errorf("sse scan error: %w", err)
 	}
+}
+
+// IsTimeoutError reports whether err indicates that the upstream Dify server
+// likely received and processed the request, but the response was cut short
+// by a transport-level truncation (Cloudflare 100-second timeout on blocking
+// requests, connection reset, etc.).  In these cases the Dify App has already
+// consumed its message quota, so the gateway should account for the usage
+// even though no response text was returned.
+func IsTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Cloudflare 524: "A Timeout Occurred" (origin didn't respond in time).
+	var de *DifyError
+	if errors.As(err, &de) && de.Status == 524 {
+		return true
+	}
+	// Our own HTTP client timeout (context deadline exceeded, etc.).
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	// Connection reset (TCP RST) or truncated response body during
+	// JSON decode — typical when Cloudflare kills the connection
+	// mid-transfer.
+	msg := err.Error()
+	if strings.Contains(msg, "unexpected EOF") ||
+		strings.Contains(msg, "connection reset by peer") {
+		return true
+	}
+	return false
 }

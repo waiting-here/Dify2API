@@ -800,6 +800,17 @@ func (g *Gateway) handleBlocking(w http.ResponseWriter, client *dify.Client, wfR
 			// Write admin alert for 200-but-failed (non-charity path).
 			g.maybeRecordBlockingFailedAlert(userID, modelName, service, de, nil)
 		}
+		// Transport-level truncation (Cloudflare 100s timeout, connection
+		// reset, etc.): the Dify App has likely consumed its quota, but no
+		// response body was returned.  Give the caller a clear diagnosis
+		// and suggest switching to streaming mode.
+		if dify.IsTimeoutError(err) {
+			log.Printf("[ERROR] dify blocking timeout (user %d): %v", userID, err)
+			g.logRequest(userID, modelName, service, startedAt, "error", "upstream_timeout", http.StatusGatewayTimeout, err.Error())
+			g.writeError(w, http.StatusGatewayTimeout, "upstream_timeout",
+				"上游 Dify 服务响应超时：请求可能因 Cloudflare 100 秒限制被截断。建议使用流式传输（stream: true）或拆分任务后重试。")
+			return
+		}
 		log.Printf("[ERROR] dify blocking (user %d): %v", userID, err)
 		g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error())
 		g.writeDifyError(w, err)

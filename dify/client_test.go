@@ -310,3 +310,44 @@ func TestBlockingWorkflow_FailedStatus(t *testing.T) {
 		t.Fatal("expected error for failed status")
 	}
 }
+
+func TestIsTimeoutError_Cloudflare524(t *testing.T) {
+	err := &DifyError{Status: 524, Code: "timeout", Message: "cloudflare timeout"}
+	if !IsTimeoutError(err) {
+		t.Error("IsTimeoutError(524) = false, want true")
+	}
+}
+
+func TestIsTimeoutError_HTTP500(t *testing.T) {
+	err := &DifyError{Status: 500, Code: "internal", Message: "server error"}
+	if IsTimeoutError(err) {
+		t.Error("IsTimeoutError(500) = true, want false")
+	}
+}
+
+func TestIsTimeoutError_UnexpectedEOF(t *testing.T) {
+	err := fmt.Errorf("decode response: unexpected EOF")
+	if !IsTimeoutError(err) {
+		t.Error("IsTimeoutError(unexpected EOF) = false, want true")
+	}
+}
+
+func TestIsTimeoutError_ConnectionReset(t *testing.T) {
+	err := fmt.Errorf("http request: read tcp 10.0.0.1:443: connection reset by peer")
+	if !IsTimeoutError(err) {
+		t.Error("IsTimeoutError(connection reset) = false, want true")
+	}
+}
+
+func TestIsTimeoutError_GenericError(t *testing.T) {
+	err := fmt.Errorf("something went wrong")
+	if IsTimeoutError(err) {
+		t.Error("IsTimeoutError(generic) = true, want false")
+	}
+}
+
+func TestIsTimeoutError_Nil(t *testing.T) {
+	if IsTimeoutError(nil) {
+		t.Error("IsTimeoutError(nil) = true, want false")
+	}
+}

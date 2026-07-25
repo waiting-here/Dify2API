@@ -918,6 +918,18 @@ func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wf
 			g.writeDifyError(w, err)
 			return
 		}
+		// Transport-level truncation (Cloudflare 100s timeout, connection
+		// reset, etc.): Dify App has consumed its quota even though the
+		// response was cut short.  Charge the user normally but surface a
+		// clear timeout diagnosis so they know the request was counted.
+		if dify.IsTimeoutError(err) {
+			g.limiter.record(rpmClassB, userID, time.Now())
+			g.charitySuccessAccounting(userID, donation, modelName, service, startedAt, pricing)
+			g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_timeout", http.StatusGatewayTimeout, err.Error(), donationID, pricing.Price)
+			g.writeError(w, http.StatusGatewayTimeout, "upstream_timeout",
+				"上游 Dify 服务响应超时：请求可能因 Cloudflare 100 秒限制被截断。建议使用流式传输（stream: true）或拆分任务后重试。")
+			return
+		}
 		// Real upstream failure — donation failure
 		g.charityFailAccounting(userID, donation, err)
 		g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error())
