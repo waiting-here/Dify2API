@@ -765,3 +765,80 @@ func pricingJSON(p *db.CharityPricing) map[string]interface{} {
 		"enabled": p.Enabled,
 	}
 }
+
+// --- Anti-abuse admin endpoints ---
+
+// GET /api/admin/anti-abuse — returns all services' anti-abuse configs.
+func (g *Gateway) handleListAntiAbuse(w http.ResponseWriter, r *http.Request) {
+	if g.requireAdmin(r) == nil {
+		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
+		return
+	}
+	list := make([]map[string]interface{}, 0, len(g.antiAbuseCache))
+	for _, c := range g.antiAbuseCache {
+		list = append(list, antiAbuseJSON(c))
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"configs": list})
+}
+
+// PUT /api/admin/anti-abuse — batch upsert anti-abuse configs.
+func (g *Gateway) handlePutAntiAbuse(w http.ResponseWriter, r *http.Request) {
+	if g.requireAdmin(r) == nil {
+		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
+		return
+	}
+	var req struct {
+		Configs []struct {
+			Service             string `json:"service"`
+			Mode                int    `json:"mode"`
+			MinChars            int    `json:"min_chars"`
+			PenaltyDeductCredits int   `json:"penalty_deduct_credits"`
+			PenaltyBanHours     int    `json:"penalty_ban_hours"`
+		} `json:"configs"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	if len(req.Configs) == 0 {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "configs must be a non-empty array")
+		return
+	}
+
+	for _, c := range req.Configs {
+		if !translator.IsSupportedService(c.Service) {
+			g.writeError(w, http.StatusBadRequest, "invalid_request",
+				fmt.Sprintf("不支持的服务 %q", c.Service))
+			return
+		}
+		if _, err := g.Store.UpsertAntiAbuseConfig(c.Service, c.Mode, c.MinChars, c.PenaltyDeductCredits, c.PenaltyBanHours); err != nil {
+			g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+	}
+
+	// Refresh cache so hot path sees the changes.
+	g.refreshAntiAbuseCache()
+
+	// Return updated list.
+	list := make([]map[string]interface{}, 0, len(g.antiAbuseCache))
+	for _, c := range g.antiAbuseCache {
+		list = append(list, antiAbuseJSON(c))
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":      true,
+		"configs": list,
+	})
+}
+
+func antiAbuseJSON(c *db.AntiAbuseConfig) map[string]interface{} {
+	return map[string]interface{}{
+		"service":                c.Service,
+		"mode":                   c.Mode,
+		"min_chars":              c.MinChars,
+		"penalty_deduct_credits": c.PenaltyDeductCredits,
+		"penalty_ban_hours":      c.PenaltyBanHours,
+	}
+}

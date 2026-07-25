@@ -77,6 +77,9 @@ func (c *StreamConverter) Convert(evt dify.StreamEvent) *SSEMessage {
 			c.failed = true
 			msg := evt.Data.Error
 			if msg == "" {
+				msg = evt.Data.Text
+			}
+			if msg == "" {
 				msg = "workflow failed"
 			}
 			c.failMsg = msg

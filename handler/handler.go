@@ -45,6 +45,8 @@ type Gateway struct {
 	userDebug *userDebugHub
 	// donationLimiter enforces per-donation RPM limits.
 	donationLimiter *donationRateLimiter
+	// antiAbuseCache maps service -> per-service anti-abuse config (hot path).
+	antiAbuseCache map[string]*db.AntiAbuseConfig
 }
 
 // NewGateway creates a new Gateway.
@@ -60,6 +62,9 @@ func NewGateway(cfg *config.Config, store *db.Store) *Gateway {
 		mailer:           mailer.New(cfg.SMTP, db.DefaultMailerCoolMinutes),
 		userDebug:        newUserDebugHub(),
 		donationLimiter:  newDonationRateLimiter(),
+	}
+	if err := gw.loadAntiAbuseCache(); err != nil {
+		log.Printf("[WARN] load anti-abuse cache: %v", err)
 	}
 	if gw.mailer != nil {
 		gw.mailer.Start()
@@ -115,6 +120,10 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/donations/pending", g.handleListPendingApplications)
 	mux.HandleFunc("POST /api/admin/donations/{id}/approve", g.handleApproveApplication)
 	mux.HandleFunc("POST /api/admin/donations/{id}/reject", g.handleRejectApplication)
+
+	// Anti-abuse admin endpoints (rc.1)
+	mux.HandleFunc("GET /api/admin/anti-abuse", g.handleListAntiAbuse)
+	mux.HandleFunc("PUT /api/admin/anti-abuse", g.handlePutAntiAbuse)
 
 	// Batch endpoints (beta.2)
 	mux.HandleFunc("POST /api/admin/donations/approve/batch", g.handleBatchApproveApplications)
@@ -348,6 +357,12 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 
 	service := translator.ServiceOfModel(req.Model)
+
+	// 1b. Anti-abuse check — after auth, before RPM.
+	if errResp := g.checkAntiAbuse(req.Messages, req.Model, user.ID, service, startedAt); errResp != nil {
+		g.writeError(w, http.StatusBadRequest, errResp.code, errResp.message)
+		return
+	}
 
 	// 2. Three-class RPM gate. The check runs once here — after auth,
 	// before anything is sent to Dify — against all three windows:
@@ -1007,4 +1022,110 @@ func (g *Gateway) writeDifyError(w http.ResponseWriter, err error) {
 			"code":    code,
 		},
 	})
+}
+
+// --- Anti-abuse ---
+
+// loadAntiAbuseCache loads all anti-abuse configs into memory.
+func (g *Gateway) loadAntiAbuseCache() error {
+	svcInfos := translator.SupportedServices()
+	services := make([]string, len(svcInfos))
+	for i, s := range svcInfos {
+		services[i] = s.Name
+	}
+	configs, err := g.Store.GetAntiAbuseConfigs(services)
+	if err != nil {
+		return err
+	}
+	g.antiAbuseCache = configs
+	return nil
+}
+
+// refreshAntiAbuseCache reloads the cache (called after admin updates).
+func (g *Gateway) refreshAntiAbuseCache() {
+	if err := g.loadAntiAbuseCache(); err != nil {
+		log.Printf("[WARN] refresh anti-abuse cache: %v", err)
+	}
+}
+
+type antiAbuseErr struct {
+	code    string
+	message string
+}
+
+// checkAntiAbuse validates message roles and content length against the
+// per-service anti-abuse config. Returns nil when the check passes.
+// On failure it records a request log, executes penalties, and returns
+// the error response details.
+func (g *Gateway) checkAntiAbuse(messages []openai.Message, model string, userID int64, service string, startedAt time.Time) *antiAbuseErr {
+	// Validate roles and compute total content length.
+	var totalChars int
+	for i, m := range messages {
+		switch m.Role {
+		case "system", "user", "assistant":
+		default:
+			g.logRequest(userID, model, service, startedAt, "error", "invalid_role",
+				http.StatusBadRequest,
+				fmt.Sprintf("messages[%d]: unsupported role %q", i, m.Role))
+			return &antiAbuseErr{
+				code:    "invalid_role",
+				message: "消息包含不支持的角色类型，仅支持 system、user、assistant。",
+			}
+		}
+		totalChars += len(m.Content)
+	}
+
+	// For charity models, use the actual service (strip [公益] prefix).
+	lookupService := service
+	if IsCharityModel(model) {
+		if s, _ := ParseCharityModel(model); s != "" {
+			lookupService = s
+		}
+	}
+
+	// Look up config from cache; fall back to defaults if missing.
+	cfg := g.antiAbuseCache[lookupService]
+	if cfg == nil {
+		cfg = &db.AntiAbuseConfig{Mode: 2, MinChars: 20}
+	}
+
+	// Determine whether the content-length check applies.
+	var shouldCheck bool
+	switch cfg.Mode {
+	case 2:
+		shouldCheck = true
+	case 1:
+		shouldCheck = IsCharityModel(model)
+	case 0:
+		shouldCheck = false
+	}
+
+	if shouldCheck && totalChars < cfg.MinChars {
+		g.logRequest(userID, model, service, startedAt, "error", "content_too_short",
+			http.StatusBadRequest,
+			fmt.Sprintf("total chars %d < min %d (service %s, mode %d)",
+				totalChars, cfg.MinChars, service, cfg.Mode))
+
+		// Execute penalties.
+		if cfg.PenaltyDeductCredits > 0 {
+			if _, err := g.Store.AdjustUserCredits(userID, -cfg.PenaltyDeductCredits); err != nil {
+				log.Printf("[ERROR] anti-abuse deduct credits user %d: %v", userID, err)
+			}
+		}
+		if cfg.PenaltyBanHours > 0 {
+			until := time.Now().Add(time.Duration(cfg.PenaltyBanHours) * time.Hour)
+			if err := g.Store.AutoBanUser(userID, until); err != nil {
+				log.Printf("[ERROR] anti-abuse ban user %d: %v", userID, err)
+			}
+			g.Store.DeleteUserSessions(userID)
+			log.Printf("[AUTH] user %d anti-abuse banned until %v (%d hours)", userID, until, cfg.PenaltyBanHours)
+		}
+
+		return &antiAbuseErr{
+			code:    "content_too_short",
+			message: "请求内容过短，请提供更详细的输入。",
+		}
+	}
+
+	return nil
 }

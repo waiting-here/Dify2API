@@ -46,7 +46,9 @@ func setupAuthGateway(t *testing.T, adminPassword string) (*Gateway, *db.Store) 
 			AdminHost:           "admin.localhost",
 		},
 	}
-	return NewGateway(cfg, store), store
+	gw := NewGateway(cfg, store)
+	disableAntiAbuseForTest(t, gw)
+	return gw, store
 }
 
 func loginCookie(t *testing.T, gw *Gateway, username, password string) *http.Cookie {

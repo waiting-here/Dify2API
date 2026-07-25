@@ -11,6 +11,7 @@ import (
 
 	"dify2api/config"
 	"dify2api/db"
+	"dify2api/translator"
 )
 
 func testConfig() *config.Config {
@@ -38,7 +39,9 @@ func setupTestGateway(t *testing.T) *Gateway {
 		t.Fatalf("open db: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
-	return NewGateway(testConfig(), store)
+	gw := NewGateway(testConfig(), store)
+	disableAntiAbuseForTest(t, gw)
+	return gw
 }
 
 func setupTestGatewayDebug(t *testing.T, dir string) *Gateway {
@@ -51,7 +54,9 @@ func setupTestGatewayDebug(t *testing.T, dir string) *Gateway {
 	cfg := testConfig()
 	cfg.Debug = true
 	cfg.DebugDir = dir
-	return NewGateway(cfg, store)
+	gw := NewGateway(cfg, store)
+	disableAntiAbuseForTest(t, gw)
+	return gw
 }
 
 func TestHandleHealth(t *testing.T) {
@@ -249,4 +254,16 @@ func TestDebug_InvalidLayoutStillDumped(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(folder, "dify_inputs.json")); !os.IsNotExist(err) {
 		t.Error("dify_inputs.json should not exist for a rejected layout")
 	}
+}
+
+// disableAntiAbuseForTest seeds all services with mode=0 so that short test
+// messages are not rejected by the content-length check.
+func disableAntiAbuseForTest(t *testing.T, gw *Gateway) {
+	t.Helper()
+	for _, svc := range translator.SupportedServices() {
+		if _, err := gw.Store.UpsertAntiAbuseConfig(svc.Name, 0, 0, 0, 0); err != nil {
+			t.Fatalf("disable anti-abuse for %q: %v", svc.Name, err)
+		}
+	}
+	gw.refreshAntiAbuseCache()
 }

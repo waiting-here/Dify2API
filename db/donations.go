@@ -1,7 +1,9 @@
 package db
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"time"
 )
@@ -20,6 +22,7 @@ type Donation struct {
 	Model               string
 	DifyBaseURL         string
 	DifyAPIKeyEnc       string
+	DifyAPIKeySHA256    string
 	SourceUserID        sql.NullInt64
 	SourceDiscordID     string
 	SourceUsername      string
@@ -41,6 +44,7 @@ func scanDonation(row interface{ Scan(...interface{}) error }) (*Donation, error
 	var d Donation
 	if err := row.Scan(
 		&d.ID, &d.Service, &d.Model, &d.DifyBaseURL, &d.DifyAPIKeyEnc,
+		&d.DifyAPIKeySHA256,
 		&d.SourceUserID, &d.SourceDiscordID, &d.SourceUsername, &d.SourceText,
 		&d.Deadline, &d.TotalCount, &d.RemainingCount,
 		&d.SuccessCount, &d.FailureCount, &d.ConsecutiveFailures,
@@ -76,14 +80,18 @@ func (s *Store) CreateDonation(d *Donation, apiKeyPlain string) (*Donation, erro
 		return nil, fmt.Errorf("encrypt api key: %w", err)
 	}
 
+	// Compute SHA-256 of the plaintext API key for duplicate detection.
+	sum := sha256.Sum256([]byte(apiKeyPlain))
+	keySHA256 := hex.EncodeToString(sum[:])
+
 	now := time.Now().Unix()
 	res, err := s.db.Exec(
-		`INSERT INTO donations (service, model, dify_base_url, dify_api_key_enc,
+		`INSERT INTO donations (service, model, dify_base_url, dify_api_key_enc, dify_api_key_sha256,
 		 source_user_id, source_discord_id, source_username, source_text,
 		 deadline, total_count, remaining_count, rpm_limit, status, note,
 		 created_at, updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		d.Service, d.Model, d.DifyBaseURL, enc,
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		d.Service, d.Model, d.DifyBaseURL, enc, keySHA256,
 		d.SourceUserID, d.SourceDiscordID, d.SourceUsername, d.SourceText,
 		d.Deadline, d.TotalCount, d.TotalCount, rpmLimit, status, d.Note,
 		now, now,
@@ -98,7 +106,7 @@ func (s *Store) CreateDonation(d *Donation, apiKeyPlain string) (*Donation, erro
 // GetDonation fetches a donation by primary key. Returns (nil, nil) when absent.
 func (s *Store) GetDonation(id int64) (*Donation, error) {
 	d, err := scanDonation(s.db.QueryRow(
-		`SELECT id, service, model, dify_base_url, dify_api_key_enc,
+		`SELECT id, service, model, dify_base_url, dify_api_key_enc, dify_api_key_sha256,
 		 source_user_id, source_discord_id, source_username, source_text,
 		 deadline, total_count, remaining_count,
 		 success_count, failure_count, consecutive_failures,
@@ -115,7 +123,7 @@ func (s *Store) GetDonation(id int64) (*Donation, error) {
 // ListDonations returns all donations, newest first.
 func (s *Store) ListDonations() ([]*Donation, error) {
 	rows, err := s.db.Query(
-		`SELECT id, service, model, dify_base_url, dify_api_key_enc,
+		`SELECT id, service, model, dify_base_url, dify_api_key_enc, dify_api_key_sha256,
 		 source_user_id, source_discord_id, source_username, source_text,
 		 deadline, total_count, remaining_count,
 		 success_count, failure_count, consecutive_failures,
@@ -143,7 +151,7 @@ func (s *Store) ListDonations() ([]*Donation, error) {
 func (s *Store) ListRoutableDonations(service, model string) ([]*Donation, error) {
 	now := time.Now().Unix()
 	rows, err := s.db.Query(
-		`SELECT id, service, model, dify_base_url, dify_api_key_enc,
+		`SELECT id, service, model, dify_base_url, dify_api_key_enc, dify_api_key_sha256,
 		 source_user_id, source_discord_id, source_username, source_text,
 		 deadline, total_count, remaining_count,
 		 success_count, failure_count, consecutive_failures,

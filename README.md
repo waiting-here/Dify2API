@@ -115,7 +115,7 @@ LOGIN_MIN_LATENCY_MS=300     # 登录恒定时延（毫秒）
 | `custom` | `user` 必填，`system` 可选 | `user_0`、`system_prompt` |
 | `website-summary` | `user`→URL（必填）、`system`→要求（可选） | `request_url`、`request_instruction` |
 | `image-processing` | `user`→要求（必填）+ 图片（1–10 张，`image_url` data URI 或 http（s） URL）、`system`→提示词（可选） | `user_request`、`system_prompt`、`input_image_list` |
-| `sillytavern-main-trimmed` | `system, user` 后接 0–3 组 `assistant, user`（2–8 条） | `system_prompt`、`user_0`、`assistant_1..3`、`user_1..3` |
+| `sillytavern-main-trimmed` | `system`（可选）后接 0–10 组 `assistant, user`（1–22 条） | `system_prompt`（可选）、`user_0`、`assistant_1..10`、`user_1..10` |
 | `sillytavern-SP·数据库-填表` | `system` 必填 + `user` 可选 + assistant 打头严格交替 `A U A U A U A`（1–8 条） | `system_prompt`、`user_0`（可选）、`assistant_0`、`user_1`、`assistant_1`、`user_2`、`assistant_2`、`user_3`、`assistant_prefill` |
 
 - 未知服务一律拒绝（严格模式）；多模态图片经 data URI 预上传（`/v1/files/upload`）
@@ -272,7 +272,9 @@ SMTP_TLS=implicit
 | 400 | `already_checked_in` | 今日已签到 |
 | 400 | `checkin_disabled` | 签到系统已被管理员关闭（积分上限设为 0） |
 | 400 | `invalid_message_sequence` | 消息布局不符该服务契约 |
+| 400 | `content_too_short` | 请求内容过短（不暴露阈值） |
 | 400 | `invalid_request` | 请求体/参数非法（含未注册服务名） |
+| 400 | `invalid_role` | 消息包含不支持的角色类型（仅限 system/user/assistant） |
 | 400 | `too_many_pending` | 待审核捐赠申请已达上限 |
 | 401 | `unauthorized` | 调用方密钥缺失/无效，或网页会话失效 |
 | 403 | `charity_disabled` | 全局公益开关已被管理员关闭 |

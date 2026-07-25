@@ -180,14 +180,14 @@ func TestSiteInfoAndStatic(t *testing.T) {
 	req = httptest.NewRequest(http.MethodGet, "/", nil)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "app.js") {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "common.js") {
 		t.Errorf("GET / should serve the SPA shell (status %d)", rec.Code)
 	}
-	req = httptest.NewRequest(http.MethodGet, "/static/app.js", nil)
+	req = httptest.NewRequest(http.MethodGet, "/static/common.js", nil)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "renderUserDashboard") {
-		t.Errorf("GET /static/app.js: status %d", rec.Code)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "function route()") {
+		t.Errorf("GET /static/common.js: status %d", rec.Code)
 	}
 	req = httptest.NewRequest(http.MethodGet, "/static/pico.min.css", nil)
 	rec = httptest.NewRecorder()

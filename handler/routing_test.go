@@ -222,7 +222,7 @@ func TestRouting_ModelNotFound(t *testing.T) {
 	defer srv.Close()
 	gw, key, uid := setupRoutedUser(t, srv.URL, "[general]claude-opus-4-6")
 
-	rec := chatRequest(gw, key, `{"model":"[nope]whatever","messages":[{"role":"user","content":"u"}]}`)
+	rec := chatRequest(gw, key, `{"model":"[nope]whatever","messages":[{"role":"user","content":"this is a long enough message to pass anti-abuse"}]}`)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404; body: %s", rec.Code, rec.Body.String())
 	}

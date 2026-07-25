@@ -178,7 +178,103 @@ workflow:
           required: false
           type: paragraph
           variable: user_4
-      height: 370
+        - default: ''
+          hint: ''
+          label: 助手5
+          options: []
+          placeholder: ''
+          required: false
+          type: paragraph
+          variable: assistant_5
+        - default: ''
+          hint: ''
+          label: 用户5
+          options: []
+          placeholder: ''
+          required: false
+          type: paragraph
+          variable: user_5
+        - default: ''
+          hint: ''
+          label: 助手6
+          options: []
+          placeholder: ''
+          required: false
+          type: paragraph
+          variable: assistant_6
+        - default: ''
+          hint: ''
+          label: 用户6
+          options: []
+          placeholder: ''
+          required: false
+          type: paragraph
+          variable: user_6
+        - default: ''
+          hint: ''
+          label: 助手7
+          options: []
+          placeholder: ''
+          required: false
+          type: paragraph
+          variable: assistant_7
+        - default: ''
+          hint: ''
+          label: 用户7
+          options: []
+          placeholder: ''
+          required: false
+          type: paragraph
+          variable: user_7
+        - default: ''
+          hint: ''
+          label: 助手8
+          options: []
+          placeholder: ''
+          required: false
+          type: paragraph
+          variable: assistant_8
+        - default: ''
+          hint: ''
+          label: 用户8
+          options: []
+          placeholder: ''
+          required: false
+          type: paragraph
+          variable: user_8
+        - default: ''
+          hint: ''
+          label: 助手9
+          options: []
+          placeholder: ''
+          required: false
+          type: paragraph
+          variable: assistant_9
+        - default: ''
+          hint: ''
+          label: 用户9
+          options: []
+          placeholder: ''
+          required: false
+          type: paragraph
+          variable: user_9
+        - default: ''
+          hint: ''
+          label: 助手10
+          options: []
+          placeholder: ''
+          required: false
+          type: paragraph
+          variable: assistant_10
+        - default: ''
+          hint: ''
+          label: 用户10
+          options: []
+          placeholder: ''
+          required: false
+          type: paragraph
+          variable: user_10
+      height: 742
       id: '1784230714832'
       position:
         x: 80
@@ -235,6 +331,42 @@ workflow:
         - id: e12bbe1e-2ac7-4b64-a76d-1d138b2cde26
           role: user
           text: '{{#1784230714832.user_4#}}'
+        - id: 14d72f13-5999-4361-a722-810861a0231f
+          role: assistant
+          text: '{{#1784230714832.assistant_5#}}'
+        - id: c7405485-4540-45ff-afcb-be34f121965f
+          role: user
+          text: '{{#1784230714832.user_5#}}'
+        - id: 410c7426-65da-4d8c-ac58-40ec7602b9b2
+          role: assistant
+          text: '{{#1784230714832.assistant_6#}}'
+        - id: bb56b0cb-fdf0-4c2b-882d-c93a483135be
+          role: user
+          text: '{{#1784230714832.user_6#}}'
+        - id: 76d01734-8737-4ab9-b021-27a6a1f28bb1
+          role: assistant
+          text: '{{#1784230714832.assistant_7#}}'
+        - id: a9838158-f1cb-4fec-aab6-9b37f723e8a8
+          role: user
+          text: '{{#1784230714832.user_7#}}'
+        - id: 8030a77f-297e-487b-b04d-8b13169b2ec3
+          role: assistant
+          text: '{{#1784230714832.assistant_8#}}'
+        - id: a4d31b12-4d5f-4d66-8c9c-f5bf04f97477
+          role: user
+          text: '{{#1784230714832.user_8#}}'
+        - id: 3f8d0ad7-a0c3-40c8-8bd7-f178fbcbe812
+          role: assistant
+          text: '{{#1784230714832.assistant_9#}}'
+        - id: 523b8413-5ede-4d27-88a9-4909fb3c561d
+          role: user
+          text: '{{#1784230714832.user_9#}}'
+        - id: 850c2f2b-d59c-4bd2-afe3-8c49ea5d7a56
+          role: assistant
+          text: '{{#1784230714832.assistant_10#}}'
+        - id: 2037a86a-d857-4ccb-9f4c-6f790ffb2338
+          role: user
+          text: '{{#1784230714832.user_10#}}'
         reasoning_format: tagged
         selected: false
         title: LLM

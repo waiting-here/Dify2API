@@ -1,6 +1,7 @@
 package translator
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -8,7 +9,7 @@ import (
 )
 
 func TestTranslateToSlots_Minimal(t *testing.T) {
-	// Shortest valid request: system + user only.
+	// Shortest valid request with system: system + user only.
 	messages := []openai.Message{
 		{Role: "system", Content: "You are a pirate."},
 		{Role: "user", Content: "Ahoy!"},
@@ -26,7 +27,14 @@ func TestTranslateToSlots_Minimal(t *testing.T) {
 		t.Errorf("user_0 = %q", inputs["user_0"])
 	}
 	// All optional slots must be present but empty.
-	for _, name := range []string{"assistant_1", "user_1", "assistant_2", "user_2", "assistant_3", "user_3", "assistant_4", "user_4"} {
+	emptySlots := []string{
+		"assistant_1", "user_1", "assistant_2", "user_2",
+		"assistant_3", "user_3", "assistant_4", "user_4",
+		"assistant_5", "user_5", "assistant_6", "user_6",
+		"assistant_7", "user_7", "assistant_8", "user_8",
+		"assistant_9", "user_9", "assistant_10", "user_10",
+	}
+	for _, name := range emptySlots {
 		v, ok := inputs[name]
 		if !ok {
 			t.Errorf("slot %q missing from result", name)
@@ -36,8 +44,27 @@ func TestTranslateToSlots_Minimal(t *testing.T) {
 	}
 }
 
+func TestTranslateToSlots_NoSystem(t *testing.T) {
+	// Single user message, no system — should pass (S is optional).
+	messages := []openai.Message{
+		{Role: "user", Content: "Hello!"},
+	}
+
+	inputs, err := TranslateToSlots(messages)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if inputs["system_prompt"] != "" {
+		t.Errorf("system_prompt = %q, want empty", inputs["system_prompt"])
+	}
+	if inputs["user_0"] != "Hello!" {
+		t.Errorf("user_0 = %q, want Hello!", inputs["user_0"])
+	}
+}
+
 func TestTranslateToSlots_Full(t *testing.T) {
-	// Longest valid request: all 10 slots filled.
+	// Longest valid request: all 22 slots filled.
 	messages := []openai.Message{
 		{Role: "system", Content: "S"},
 		{Role: "user", Content: "U0"},
@@ -49,6 +76,18 @@ func TestTranslateToSlots_Full(t *testing.T) {
 		{Role: "user", Content: "U3"},
 		{Role: "assistant", Content: "A4"},
 		{Role: "user", Content: "U4"},
+		{Role: "assistant", Content: "A5"},
+		{Role: "user", Content: "U5"},
+		{Role: "assistant", Content: "A6"},
+		{Role: "user", Content: "U6"},
+		{Role: "assistant", Content: "A7"},
+		{Role: "user", Content: "U7"},
+		{Role: "assistant", Content: "A8"},
+		{Role: "user", Content: "U8"},
+		{Role: "assistant", Content: "A9"},
+		{Role: "user", Content: "U9"},
+		{Role: "assistant", Content: "A10"},
+		{Role: "user", Content: "U10"},
 	}
 
 	inputs, err := TranslateToSlots(messages)
@@ -67,6 +106,18 @@ func TestTranslateToSlots_Full(t *testing.T) {
 		"user_3":        "U3",
 		"assistant_4":   "A4",
 		"user_4":        "U4",
+		"assistant_5":   "A5",
+		"user_5":        "U5",
+		"assistant_6":   "A6",
+		"user_6":        "U6",
+		"assistant_7":   "A7",
+		"user_7":        "U7",
+		"assistant_8":   "A8",
+		"user_8":        "U8",
+		"assistant_9":   "A9",
+		"user_9":        "U9",
+		"assistant_10":  "A10",
+		"user_10":       "U10",
 	}
 	for k, v := range want {
 		if inputs[k] != v {
@@ -91,7 +142,14 @@ func TestTranslateToSlots_PartialPairs(t *testing.T) {
 	if inputs["assistant_1"] != "A1" || inputs["user_1"] != "U1" {
 		t.Errorf("pair 1 wrong: assistant_1=%q user_1=%q", inputs["assistant_1"], inputs["user_1"])
 	}
-	for _, name := range []string{"assistant_2", "user_2", "assistant_3", "user_3", "assistant_4", "user_4"} {
+	emptySlots := []string{
+		"assistant_2", "user_2", "assistant_3", "user_3",
+		"assistant_4", "user_4", "assistant_5", "user_5",
+		"assistant_6", "user_6", "assistant_7", "user_7",
+		"assistant_8", "user_8", "assistant_9", "user_9",
+		"assistant_10", "user_10",
+	}
+	for _, name := range emptySlots {
 		if inputs[name] != "" {
 			t.Errorf("slot %q = %q, want empty", name, inputs[name])
 		}
@@ -120,51 +178,50 @@ func TestTranslateToSlots_TrailingAssistant(t *testing.T) {
 }
 
 func TestTranslateToSlots_TooFew(t *testing.T) {
-	messages := []openai.Message{
-		{Role: "system", Content: "S"},
-	}
+	// 0 messages should error.
+	messages := []openai.Message{}
 	if _, err := TranslateToSlots(messages); err == nil {
-		t.Fatal("expected error for 1 message")
-	} else if !strings.Contains(err.Error(), "at least 2") {
+		t.Fatal("expected error for 0 messages")
+	} else if !strings.Contains(err.Error(), "at least 1") {
 		t.Errorf("error = %v", err)
 	}
 }
 
 func TestTranslateToSlots_TooMany(t *testing.T) {
-	messages := []openai.Message{
-		{Role: "system", Content: "S"},
-		{Role: "user", Content: "U0"},
-		{Role: "assistant", Content: "A1"},
-		{Role: "user", Content: "U1"},
-		{Role: "assistant", Content: "A2"},
-		{Role: "user", Content: "U2"},
-		{Role: "assistant", Content: "A3"},
-		{Role: "user", Content: "U3"},
-		{Role: "assistant", Content: "A4"},
-		{Role: "user", Content: "U4"},
-		{Role: "assistant", Content: "A5"},
+	// 23 messages (22 slots + 1) should error.
+	messages := make([]openai.Message, 23)
+	messages[0] = openai.Message{Role: "system", Content: "S"}
+	for i := 1; i < 23; i++ {
+		role := "user"
+		if i%2 == 0 {
+			role = "assistant"
+		}
+		messages[i] = openai.Message{Role: role, Content: "X"}
 	}
 	if _, err := TranslateToSlots(messages); err == nil {
-		t.Fatal("expected error for 11 messages")
-	} else if !strings.Contains(err.Error(), "at most 10") {
+		t.Fatal("expected error for 23 messages")
+	} else if !strings.Contains(err.Error(), "at most 22") {
 		t.Errorf("error = %v", err)
 	}
 }
 
 func TestTranslateToSlots_WrongRole(t *testing.T) {
-	// Only messages[0] is role-checked.  Others match by role, not position.
+	// system is optional; if present it must be first (no system slot later).
+	// Others match by role, not position.
 
-	t.Run("first must be system", func(t *testing.T) {
+	t.Run("system in non-first position fails", func(t *testing.T) {
+		// [user, system] → user fills user_0, then system can't find a slot
+		// (system_prompt at index 0 already passed by).
 		messages := []openai.Message{
 			{Role: "user", Content: "U0"},
-			{Role: "user", Content: "U1"},
+			{Role: "system", Content: "S"},
 		}
 		_, err := TranslateToSlots(messages)
 		if err == nil {
-			t.Fatal("expected error")
+			t.Fatal("expected error for system in non-first position")
 		}
-		if !strings.Contains(err.Error(), "messages[0]") {
-			t.Errorf("error %q should mention messages[0]", err.Error())
+		if !strings.Contains(err.Error(), "no remaining") {
+			t.Errorf("error %q should mention 'no remaining'", err.Error())
 		}
 	})
 
@@ -203,18 +260,18 @@ func TestTranslateToSlots_WrongRole(t *testing.T) {
 	})
 
 	t.Run("trailing assistant with no more slots", func(t *testing.T) {
-		// Fill assistant_1..assistant_4, then 5th assistant → error.
+		// Fill assistant_1..assistant_10 (all 10 assistant slots), then 11th → error.
 		messages := []openai.Message{
 			{Role: "system", Content: "S"},
-			{Role: "assistant", Content: "A1"},
-			{Role: "assistant", Content: "A2"},
-			{Role: "assistant", Content: "A3"},
-			{Role: "assistant", Content: "A4"},
-			{Role: "assistant", Content: "A5"},
+		}
+		for i := 1; i <= 11; i++ {
+			messages = append(messages, openai.Message{
+				Role: "assistant", Content: openai.MessageContent(fmt.Sprintf("A%d", i)),
+			})
 		}
 		_, err := TranslateToSlots(messages)
 		if err == nil {
-			t.Fatal("expected error for 5th assistant")
+			t.Fatal("expected error for 11th assistant")
 		}
 		if !strings.Contains(err.Error(), "no remaining") {
 			t.Errorf("error = %v", err)

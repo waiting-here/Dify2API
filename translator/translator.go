@@ -10,11 +10,11 @@ import (
 // slotNames lists the Dify App input variables in template order.
 // The Dify App prompt template assigns a fixed role to each variable:
 //
-//	[0] system_prompt (system)
-//	[1] user_0        (user)
-//	[2] assistant_1   (assistant)
-//	[3] user_1        (user)
-//	… alternating assistant/user through [9] user_4
+//	[0]  system_prompt (system)
+//	[1]  user_0        (user)
+//	[2]  assistant_1   (assistant)
+//	[3]  user_1        (user)
+//	… alternating assistant/user through [21] user_10
 //
 // Messages are matched to slots by role: each message consumes the next
 // available slot whose role matches, skipping slots of other roles.
@@ -25,6 +25,12 @@ var slotNames = []string{
 	"assistant_2", "user_2",
 	"assistant_3", "user_3",
 	"assistant_4", "user_4",
+	"assistant_5", "user_5",
+	"assistant_6", "user_6",
+	"assistant_7", "user_7",
+	"assistant_8", "user_8",
+	"assistant_9", "user_9",
+	"assistant_10", "user_10",
 }
 
 // slotRole returns the Dify App prompt-template role of a slot variable.
@@ -44,23 +50,21 @@ func slotRole(name string) string {
 // message consumes the next available slot in template order whose role
 // matches, skipping over slots of the other role.
 //
-// The only hard constraint is messages[0] must be "system".  After that,
-// consecutive messages of the same role are fine — they simply consume
+// The first message may be "system" (optional). If present, it fills
+// system_prompt and slot scanning starts at index 1; otherwise system_prompt
+// stays empty and scanning starts at index 0 (first message matches user_0).
+// Consecutive messages of the same role are fine — they simply consume
 // consecutive slots of that role, leaving intermediate slots empty.
 // Content is trimmed (whitespace-only becomes empty string).
 //
-// Valid range: 2–10 messages.  An error is returned when a message cannot
+// Valid range: 1–22 messages.  An error is returned when a message cannot
 // find a matching slot (all slots of that role consumed).
 func TranslateToSlots(messages []openai.Message) (map[string]string, error) {
-	if len(messages) < 2 {
-		return nil, fmt.Errorf("expected at least 2 messages (system + 1), got %d", len(messages))
+	if len(messages) < 1 {
+		return nil, fmt.Errorf("expected at least 1 message, got %d", len(messages))
 	}
 	if len(messages) > len(slotNames) {
 		return nil, fmt.Errorf("expected at most %d messages, got %d", len(slotNames), len(messages))
-	}
-
-	if messages[0].Role != "system" {
-		return nil, fmt.Errorf("messages[0]: expected role \"system\", got %q", messages[0].Role)
 	}
 
 	// Initialise all slots empty.
@@ -69,13 +73,20 @@ func TranslateToSlots(messages []openai.Message) (map[string]string, error) {
 		inputs[name] = ""
 	}
 
-	// messages[0] → system_prompt (only system slot).
-	inputs["system_prompt"] = strings.TrimSpace(string(messages[0].Content))
+	// system is optional: if first message is system, fill system_prompt
+	// and start scanning after it; otherwise leave system_prompt empty.
+	slotIdx := 0
+	if messages[0].Role == "system" {
+		inputs["system_prompt"] = strings.TrimSpace(string(messages[0].Content))
+		slotIdx = 1
+	}
 
-	// For remaining messages, scan forward through slots to find the next
-	// matching role.
-	slotIdx := 1 // start after system_prompt
-	for mi := 1; mi < len(messages); mi++ {
+	// For remaining messages (or all if no system), scan forward through
+	// slots to find the next matching role.
+	for mi := 0; mi < len(messages); mi++ {
+		if mi == 0 && messages[0].Role == "system" {
+			continue // already handled above
+		}
 		m := messages[mi]
 		// Advance to the next slot whose role matches this message.
 		for slotIdx < len(slotNames) && slotRole(slotNames[slotIdx]) != m.Role {

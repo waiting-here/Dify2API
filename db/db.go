@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -100,6 +101,7 @@ CREATE TABLE IF NOT EXISTS donations (
 	model                TEXT NOT NULL,
 	dify_base_url        TEXT NOT NULL,
 	dify_api_key_enc     TEXT NOT NULL,
+	dify_api_key_sha256  TEXT NOT NULL DEFAULT '',
 	source_user_id       INTEGER,
 	source_discord_id    TEXT NOT NULL DEFAULT '',
 	source_username      TEXT NOT NULL DEFAULT '',
@@ -170,6 +172,16 @@ CREATE TABLE IF NOT EXISTS charity_pricing (
     enabled INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (service, model)
 );
+
+CREATE TABLE IF NOT EXISTS service_anti_abuse (
+    service                TEXT PRIMARY KEY,
+    mode                   INTEGER NOT NULL DEFAULT 2,
+    min_chars              INTEGER NOT NULL DEFAULT 20,
+    penalty_deduct_credits INTEGER NOT NULL DEFAULT 0,
+    penalty_ban_hours      INTEGER NOT NULL DEFAULT 0,
+    created_at             INTEGER NOT NULL DEFAULT 0,
+    updated_at             INTEGER NOT NULL DEFAULT 0
+);
 `
 
 // Store wraps the SQLite handle and the master encryption key.
@@ -207,6 +219,16 @@ func Open(path, keyPath string) (*Store, error) {
 		sqldb.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
+
+	// rc.1: add dify_api_key_sha256 column for key-duplicate detection.
+	if _, err := sqldb.Exec(`ALTER TABLE donations ADD COLUMN dify_api_key_sha256 TEXT NOT NULL DEFAULT ''`); err != nil {
+		// Ignore "duplicate column" error (column already exists).
+		if !strings.Contains(err.Error(), "duplicate column") {
+			sqldb.Close()
+			return nil, fmt.Errorf("add dify_api_key_sha256 column: %w", err)
+		}
+	}
+
 	return &Store{db: sqldb, key: key}, nil
 }
 

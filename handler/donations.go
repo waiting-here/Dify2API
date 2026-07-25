@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -308,9 +310,21 @@ func (g *Gateway) handleListDonations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Compute is_dup_key: count SHA-256 hashes across all donations that have a key.
+	shaCounts := make(map[string]int)
+	for _, d := range list {
+		if d.DifyAPIKeySHA256 != "" {
+			shaCounts[d.DifyAPIKeySHA256]++
+		}
+	}
+
 	out := make([]map[string]interface{}, 0, len(list))
 	for _, d := range list {
-		out = append(out, g.enrichDonationJSON(d, nil))
+		j := g.enrichDonationJSON(d, nil)
+		if d.DifyAPIKeySHA256 != "" && shaCounts[d.DifyAPIKeySHA256] >= 2 {
+			j["is_dup_key"] = true
+		}
+		out = append(out, j)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"donations": out})
@@ -512,8 +526,11 @@ func (g *Gateway) handlePatchDonation(w http.ResponseWriter, r *http.Request) {
 			g.writeError(w, http.StatusInternalServerError, "internal", encErr.Error())
 			return
 		}
-		sets = append(sets, "dify_api_key_enc=?")
-		args = append(args, enc)
+		// Recompute SHA-256 for duplicate detection.
+		sum := sha256.Sum256([]byte(req.DifyAPIKey))
+		keySHA256 := hex.EncodeToString(sum[:])
+		sets = append(sets, "dify_api_key_enc=?", "dify_api_key_sha256=?")
+		args = append(args, enc, keySHA256)
 		newAPIKeyEnc = enc
 		apiKeyChanged = true
 		validateDify = true
@@ -627,6 +644,7 @@ func (g *Gateway) handlePatchDonation(w http.ResponseWriter, r *http.Request) {
 // donationJSON builds the API representation of a Donation.
 // If keyPlain is non-nil, the Dify API key is included in plaintext
 // (for creation response only). Otherwise, has_key is returned.
+// isDupKey is set by the caller after computing duplicates across the list.
 func donationJSON(d *db.Donation, keyPlain *string) map[string]interface{} {
 	out := map[string]interface{}{
 		"id":                   d.ID,
@@ -634,6 +652,7 @@ func donationJSON(d *db.Donation, keyPlain *string) map[string]interface{} {
 		"model":                d.Model,
 		"dify_base_url":        d.DifyBaseURL,
 		"has_key":              d.DifyAPIKeyEnc != "",
+		"is_dup_key":           false,
 		"source_user_id":       nil,
 		"source_discord_id":    d.SourceDiscordID,
 		"source_username":      d.SourceUsername,
@@ -1143,6 +1162,36 @@ func (g *Gateway) handleListMyApplications(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Pre-compute is_dup_key for all approved applications with linked donations.
+	// Collect all linked donation IDs, batch-fetch, compute dup counts.
+	type donationRef struct {
+		appIdx int
+		donID  int64
+	}
+	var refs []donationRef
+	for i, a := range apps {
+		if a.Status == db.AppStatusApproved && a.DonationID.Valid {
+			refs = append(refs, donationRef{appIdx: i, donID: a.DonationID.Int64})
+		}
+	}
+
+	dupSet := make(map[int64]bool) // donation ID -> is_dup_key
+	if len(refs) > 0 {
+		// Fetch all linked donations and compute SHA-256 dup counts.
+		allDons, _ := g.Store.ListDonations()
+		shaCounts := make(map[string]int)
+		for _, d := range allDons {
+			if d.DifyAPIKeySHA256 != "" {
+				shaCounts[d.DifyAPIKeySHA256]++
+			}
+		}
+		for _, d := range allDons {
+			if d.DifyAPIKeySHA256 != "" && shaCounts[d.DifyAPIKeySHA256] >= 2 {
+				dupSet[d.ID] = true
+			}
+		}
+	}
+
 	out := make([]map[string]interface{}, 0, len(apps))
 	for _, a := range apps {
 		aj := applicationJSON(a)
@@ -1154,6 +1203,7 @@ func (g *Gateway) handleListMyApplications(w http.ResponseWriter, r *http.Reques
 				aj["donation_remaining"] = d.RemainingCount
 				aj["donation_total"] = d.TotalCount
 				aj["donation_deadline"] = d.Deadline
+				aj["is_dup_key"] = dupSet[d.ID]
 			}
 		}
 		out = append(out, aj)

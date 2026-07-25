@@ -1,7 +1,9 @@
 package db
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"time"
 )
@@ -224,14 +226,28 @@ func (s *Store) ApproveApplication(id int64, reviewerID int64, m *ApproveApplica
 		rpmLimit = m.RpmLimit
 	}
 
+	// Compute SHA-256 of the plaintext API key for duplicate detection.
+	// We need the plaintext key at this point; it's stored in the application
+	// or may have been modified by the reviewer.
+	plainKey := m.DifyAPIKey
+	if plainKey == "" {
+		// Reviewer did not modify the key; decrypt the original.
+		plainKey, _ = s.Decrypt(app.DifyAPIKeyEnc)
+	}
+	keySHA256 := ""
+	if plainKey != "" {
+		sum := sha256.Sum256([]byte(plainKey))
+		keySHA256 = hex.EncodeToString(sum[:])
+	}
+
 	// Create donation entry (inactive).
 	res, err := s.db.Exec(
-		`INSERT INTO donations (service, model, dify_base_url, dify_api_key_enc,
+		`INSERT INTO donations (service, model, dify_base_url, dify_api_key_enc, dify_api_key_sha256,
 		 source_user_id, source_discord_id, source_username, source_text,
 		 deadline, total_count, remaining_count, rpm_limit, status, note,
 		 created_at, updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		service, model, baseURL, apiKeyEnc,
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		service, model, baseURL, apiKeyEnc, keySHA256,
 		sql.NullInt64{Int64: app.UserID, Valid: true}, "", "", "",
 		deadline, totalCount, totalCount, rpmLimit, DonationInactive, app.Note,
 		now, now,

@@ -24,7 +24,7 @@ var serviceRegistry = []ServiceInfo{
 	{Name: "custom", Label: "自定义单轮问答（user_0 + 可选 system_prompt）"},
 	{Name: "website-summary", Label: "网页总结（request_url + 可选 request_instruction）"},
 	{Name: "image-processing", Label: "图片理解（system_prompt 可选 + user_request + 图片）"},
-	{Name: "sillytavern-main-trimmed", Label: "SillyTavern 主对话（2–10 条宽松布局）"},
+	{Name: "sillytavern-main-trimmed", Label: "SillyTavern 主对话（1–22 条宽松布局）"},
 	{Name: "sillytavern-SP·数据库-填表", Label: "SillyTavern 数据库·填表（system + 可选 user_0 + assistant 打头交替 + 预填充）"},
 }
 
@@ -201,7 +201,14 @@ func ContractVarsFor(service string) ContractVars {
 	case "sillytavern-main-trimmed":
 		return ContractVars{
 			Required: nil,
-			Optional: []string{"system_prompt", "user_0", "assistant_1", "user_1", "assistant_2", "user_2", "assistant_3", "user_3", "assistant_4", "user_4"},
+			Optional: []string{
+				"system_prompt", "user_0",
+				"assistant_1", "user_1", "assistant_2", "user_2",
+				"assistant_3", "user_3", "assistant_4", "user_4",
+				"assistant_5", "user_5", "assistant_6", "user_6",
+				"assistant_7", "user_7", "assistant_8", "user_8",
+				"assistant_9", "user_9", "assistant_10", "user_10",
+			},
 		}
 	case "sillytavern-SP·数据库-填表":
 		return ContractVars{
