@@ -1,4 +1,4 @@
-/* Dify2API i18n dictionary and helpers. Loaded before app.js. */
+/* Dify2API i18n dictionary and helpers. Loaded before common.js. */
 "use strict";
 
 const i18n = {
