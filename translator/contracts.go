@@ -55,7 +55,8 @@ func IsSupportedService(name string) bool {
 //	image-processing: user -> user_request (required text),
 //	                  system -> system_prompt (optional),
 //	                  image parts -> input_image_list (>=1)
-//	sillytavern:      system + 1-9 positional slots -> 10 slots
+//	sillytavern-main-trimmed: system (optional) + 0-10 pairs of assistant/user
+//	                  -> 22 slots (1-22 messages)
 //	                  (database fill-table: system required, user_0 optional,
 //	                  then assistant/user alternation with prefill)
 //
