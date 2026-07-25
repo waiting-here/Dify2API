@@ -15,7 +15,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -218,15 +217,6 @@ func Open(path, keyPath string) (*Store, error) {
 	if _, err := sqldb.Exec(schema); err != nil {
 		sqldb.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
-	}
-
-	// rc.1: add dify_api_key_sha256 column for key-duplicate detection.
-	if _, err := sqldb.Exec(`ALTER TABLE donations ADD COLUMN dify_api_key_sha256 TEXT NOT NULL DEFAULT ''`); err != nil {
-		// Ignore "duplicate column" error (column already exists).
-		if !strings.Contains(err.Error(), "duplicate column") {
-			sqldb.Close()
-			return nil, fmt.Errorf("add dify_api_key_sha256 column: %w", err)
-		}
 	}
 
 	return &Store{db: sqldb, key: key}, nil
