@@ -5,6 +5,66 @@ import (
 	"time"
 )
 
+func TestRequestLogs_AntiAbuseInfoRoundTrip(t *testing.T) {
+	st, _ := openTemp(t)
+	u, err := st.CreateUser("anti-abuse-log", "tester", "")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	now := time.Now()
+	const info = `{"triggered":"content_too_short","penalties":["credits_deducted:5","banned:24h"]}`
+	if err := st.AddRequestLogFull(u.ID, "[general]test", "general", now, now.Add(time.Second), "error", "content_too_short", 400, "too short", 0, 0, info); err != nil {
+		t.Fatalf("AddRequestLogFull: %v", err)
+	}
+	if err := st.AddRequestLog(u.ID, "[general]normal", "general", now.Add(-time.Second), now, "success", ""); err != nil {
+		t.Fatalf("AddRequestLog: %v", err)
+	}
+
+	logs, err := st.ListRequestLogs(u.ID, 10)
+	if err != nil {
+		t.Fatalf("ListRequestLogs: %v", err)
+	}
+	if len(logs) != 2 {
+		t.Fatalf("ListRequestLogs returned %d rows, want 2", len(logs))
+	}
+	byModel := make(map[string]*RequestLog, len(logs))
+	for _, entry := range logs {
+		byModel[entry.Model] = entry
+	}
+	antiAbuseLog, ok := byModel["[general]test"]
+	if !ok {
+		t.Fatal("anti-abuse request log is missing")
+	}
+	if antiAbuseLog.AntiAbuseInfo != info {
+		t.Errorf("user log anti_abuse_info = %q, want %q", antiAbuseLog.AntiAbuseInfo, info)
+	}
+	normalLog, ok := byModel["[general]normal"]
+	if !ok {
+		t.Fatal("normal request log is missing")
+	}
+	if normalLog.AntiAbuseInfo != "" {
+		t.Errorf("normal user log anti_abuse_info = %q, want empty", normalLog.AntiAbuseInfo)
+	}
+
+	adminLogs, total, err := st.ListAllRequestLogs(LogFilter{}, 10, 0)
+	if err != nil {
+		t.Fatalf("ListAllRequestLogs: %v", err)
+	}
+	if total != 2 || len(adminLogs) != 2 {
+		t.Fatalf("admin logs total=%d len=%d, want 2/2", total, len(adminLogs))
+	}
+	var adminInfo string
+	for _, entry := range adminLogs {
+		if entry.Model == "[general]test" {
+			adminInfo = entry.AntiAbuseInfo
+		}
+	}
+	if adminInfo != info {
+		t.Errorf("admin log anti_abuse_info = %q, want %q", adminInfo, info)
+	}
+}
+
 func TestPurgeOldRequestLogs_SkipsDonationLogs(t *testing.T) {
 	st, _ := openTemp(t)
 	now := time.Now()
@@ -151,7 +211,7 @@ func TestPurgeExpiredDonationLogs_CascadeDeletesAlerts(t *testing.T) {
 
 	// Insert an old donation-bound log and an alert bound to it.
 	started := time.Unix(oldCutoff.Unix(), 0)
-	st.AddRequestLogFull(u.ID, "[公益][general]cascade", "general", started, started.Add(30*time.Second), "error", "upstream_error", 502, "test error", created.ID, 0)
+	st.AddRequestLogFull(u.ID, "[公益][general]cascade", "general", started, started.Add(30*time.Second), "error", "upstream_error", 502, "test error", created.ID, 0, "")
 
 	// Find the log id to construct the alert.
 	logs, _ := st.ListRequestLogs(u.ID, 10)
@@ -205,7 +265,7 @@ func TestPurgeExpiredDonationLogs_ExpiredDonation(t *testing.T) {
 
 	// Add an old log bound to this expired donation.
 	oldTime := time.Unix(oldCutoff, 0)
-	st.AddRequestLogFull(u.ID, "[公益][general]expired", "general", oldTime, oldTime.Add(30*time.Second), "success", "", 200, "", created.ID, 0)
+	st.AddRequestLogFull(u.ID, "[公益][general]expired", "general", oldTime, oldTime.Add(30*time.Second), "success", "", 200, "", created.ID, 0, "")
 
 	// Should still clean logs even though donation is expired.
 	n, err := st.PurgeExpiredDonationLogs(now.Unix())

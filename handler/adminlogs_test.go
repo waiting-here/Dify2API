@@ -60,7 +60,10 @@ func TestAdminLogs_BasicListing(t *testing.T) {
 
 	now := time.Now()
 	addTestLog(store, u1.ID, "[general]claude", "general", "success", "", now.Add(-10*time.Minute), now.Add(-9*time.Minute))
-	addTestLog(store, u2.ID, "[custom]gemini", "custom", "error", "upstream_error", now.Add(-5*time.Minute), now.Add(-4*time.Minute))
+	const antiAbuseInfo = `{"triggered":"content_too_short","penalties":[]}`
+	if err := store.AddRequestLogFull(u2.ID, "[custom]gemini", "custom", now.Add(-5*time.Minute), now.Add(-4*time.Minute), "error", "content_too_short", 400, "too short", 0, 0, antiAbuseInfo); err != nil {
+		t.Fatalf("AddRequestLogFull: %v", err)
+	}
 
 	rec := adminGet(gw, adminCookie, "/api/admin/logs?limit=10")
 	if rec.Code != http.StatusOK {
@@ -86,6 +89,12 @@ func TestAdminLogs_BasicListing(t *testing.T) {
 	}
 	if resp.Logs[1].Username != "alice" {
 		t.Errorf("second log should be alice, got %q", resp.Logs[1].Username)
+	}
+	if resp.Logs[0].AntiAbuseInfo != antiAbuseInfo {
+		t.Errorf("admin anti_abuse_info = %q, want %q", resp.Logs[0].AntiAbuseInfo, antiAbuseInfo)
+	}
+	if resp.Logs[1].AntiAbuseInfo != "" {
+		t.Errorf("normal admin anti_abuse_info = %q, want empty", resp.Logs[1].AntiAbuseInfo)
 	}
 }
 

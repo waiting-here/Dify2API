@@ -373,7 +373,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	limits := g.effectiveRPMLimits(user.ID)
 	if ok, violated := g.limiter.check(user.ID, startedAt, limits); !ok {
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "rpm_exceeded",
-			http.StatusForbidden, fmt.Sprintf("超出类别 %s 上限（%d 次/分）", classLabel(violated), limits[violated]))
+			http.StatusForbidden, fmt.Sprintf("超出类别 %s 上限（%d 次/分）", classLabel(violated), limits[violated]), "")
 		violationLimit := g.Store.GetSettingInt(db.SettingRPMViolationLimit, db.DefaultRPMViolationLimit)
 		banHours := g.Store.GetSettingInt(db.SettingRPMBanHours, db.DefaultRPMBanHours)
 		violations, _ := g.Store.CountRecentErrors(user.ID, "rpm_exceeded", startedAt.Add(-24*time.Hour))
@@ -407,7 +407,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if IsCharityModel(req.Model) {
 		if g.Store.GetSettingString(db.SettingCharityEnabled, "") != "true" {
 			g.logRequest(user.ID, req.Model, service, startedAt, "error", "charity_disabled",
-				http.StatusForbidden, "全局捐赠/公益开关未开启")
+				http.StatusForbidden, "全局捐赠/公益开关未开启", "")
 			g.writeError(w, http.StatusForbidden, "charity_disabled",
 				"捐赠/公益系统尚未被管理员启用")
 			return
@@ -428,7 +428,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 	if appCfg == nil {
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "model_not_found",
-			http.StatusNotFound, fmt.Sprintf("model %q not found", req.Model))
+			http.StatusNotFound, fmt.Sprintf("model %q not found", req.Model), "")
 		g.writeError(w, http.StatusNotFound, "model_not_found",
 			fmt.Sprintf("model %q not found in your configs (check the dashboard or /v1/models)", req.Model))
 		return
@@ -439,7 +439,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		g.debugWrapError(r, user.ID, rawBody, nil, req.Messages, err.Error(), http.StatusBadRequest)
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "invalid_message_sequence",
-			http.StatusBadRequest, err.Error())
+			http.StatusBadRequest, err.Error(), "")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -456,7 +456,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	w2, debugFinalize := g.debugWrap(w, r, user.ID, req.Model, rawBody, inputs, req.Messages)
 	if debugFinalize == nil && w2 == nil {
 		// dry-run: mock response already written in debugWrap.
-		g.logRequest(user.ID, req.Model, service, startedAt, "success", "debug_dry_run", http.StatusOK, "")
+		g.logRequest(user.ID, req.Model, service, startedAt, "success", "debug_dry_run", http.StatusOK, "", "")
 		return
 	}
 	writer := w
@@ -470,7 +470,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		log.Printf("[ERROR] decrypt app key (user %d, config %d): %v", user.ID, appCfg.ID, err)
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "internal",
-			http.StatusInternalServerError, "credential decryption error")
+			http.StatusInternalServerError, "credential decryption error", "")
 		g.writeError(w, http.StatusInternalServerError, "internal", "credential error")
 		return
 	}
@@ -489,7 +489,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		if err != nil {
 			log.Printf("[ERROR] image files (user %d): %v", user.ID, err)
 			g.logRequest(user.ID, req.Model, service, startedAt, "error", "image_upload_failed",
-				difyErrorStatus(err), err.Error())
+				difyErrorStatus(err), err.Error(), "")
 			g.writeDifyError(writer, err)
 			return
 		}
@@ -526,7 +526,7 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 	// 1. User charity_enabled (model_not_found to not leak existence)
 	if !user.CharityEnabled {
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "model_not_found",
-			http.StatusNotFound, fmt.Sprintf("model %q not found", req.Model))
+			http.StatusNotFound, fmt.Sprintf("model %q not found", req.Model), "")
 		g.writeError(w, http.StatusNotFound, "model_not_found",
 			fmt.Sprintf("model %q not found in your configs", req.Model))
 		return
@@ -548,7 +548,7 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 			}
 		}
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "service_unavailable",
-			http.StatusServiceUnavailable, "pricing not found or disabled")
+			http.StatusServiceUnavailable, "pricing not found or disabled", "")
 		g.writeError(w, http.StatusServiceUnavailable, "service_unavailable",
 			"当前该公益模型不可用")
 		return
@@ -557,7 +557,7 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 	// Check credits against pricing.
 	if user.Credits < pricing.Price {
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "insufficient_credits",
-			http.StatusForbidden, fmt.Sprintf("credits %d < price %d", user.Credits, pricing.Price))
+			http.StatusForbidden, fmt.Sprintf("credits %d < price %d", user.Credits, pricing.Price), "")
 		g.writeError(w, http.StatusForbidden, "insufficient_credits",
 			fmt.Sprintf("您的%s不足（需要 %d，当前 %d），无法调用公益模型",
 				g.Config.I18N("credits_name", "zh", config.DefaultCreditsName),
@@ -573,7 +573,7 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 	}
 	if len(donations) == 0 {
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "service_unavailable",
-			http.StatusServiceUnavailable, "no routable donations")
+			http.StatusServiceUnavailable, "no routable donations", "")
 		g.writeError(w, http.StatusServiceUnavailable, "service_unavailable",
 			"当前该公益模型无可用捐赠条目")
 		return
@@ -583,7 +583,7 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 	picked := pickWeightedDonation(donations, g.donationLimiter)
 	if picked == nil {
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "charity_overloaded",
-			http.StatusTooManyRequests, "all routable donations at RPM limit")
+			http.StatusTooManyRequests, "all routable donations at RPM limit", "")
 		g.writeError(w, http.StatusTooManyRequests, "charity_overloaded",
 			"当前该公益模型所有捐赠条目均已达速率上限，请稍后重试")
 		return
@@ -594,7 +594,7 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		log.Printf("[ERROR] decrypt donation key (donation %d): %v", picked.ID, err)
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "internal",
-			http.StatusInternalServerError, "credential decryption error")
+			http.StatusInternalServerError, "credential decryption error", "")
 		g.writeError(w, http.StatusInternalServerError, "internal", "credential error")
 		return
 	}
@@ -607,7 +607,7 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 		raw, _ := json.Marshal(req)
 		g.debugWrapError(r, user.ID, raw, nil, req.Messages, err.Error(), http.StatusBadRequest)
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "invalid_message_sequence",
-			http.StatusBadRequest, err.Error())
+			http.StatusBadRequest, err.Error(), "")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -627,7 +627,7 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 	rawCharity, _ := json.Marshal(req)
 	wCharity, dbgFinalize := g.debugWrap(w, r, user.ID, logModel, rawCharity, inputs, req.Messages)
 	if dbgFinalize == nil && wCharity == nil {
-		g.logRequest(user.ID, logModel, service, startedAt, "success", "debug_dry_run", http.StatusOK, "")
+		g.logRequest(user.ID, logModel, service, startedAt, "success", "debug_dry_run", http.StatusOK, "", "")
 		return
 	}
 	charityWriter := w
@@ -648,7 +648,7 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 		if err != nil {
 			log.Printf("[ERROR] charity image files (user %d): %v", user.ID, err)
 			g.logRequest(user.ID, logModel, service, startedAt, "error", "image_upload_failed",
-				difyErrorStatus(err), err.Error())
+				difyErrorStatus(err), err.Error(), "")
 			g.writeDifyError(charityWriter, err)
 			return
 		}
@@ -688,7 +688,7 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 		// (if any) is picked up from errCh below.
 	case err := <-errCh:
 		if err != nil {
-			g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error())
+			g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error(), "")
 			g.writeDifyError(w, err)
 			return
 		}
@@ -699,7 +699,7 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 		select {
 		case err := <-errCh:
 			if err != nil {
-				g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error())
+				g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error(), "")
 				g.writeDifyError(w, err)
 				return
 			}
@@ -718,7 +718,7 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 	w.Header().Set("X-Accel-Buffering", "no")
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		g.logRequest(userID, modelName, service, startedAt, "error", "stream_unsupported", http.StatusInternalServerError, "response writer does not support streaming")
+		g.logRequest(userID, modelName, service, startedAt, "error", "stream_unsupported", http.StatusInternalServerError, "response writer does not support streaming", "")
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
 		return
 	}
@@ -784,7 +784,7 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 	// Streaming responses always went out with HTTP 200 (headers were
 	// committed before the body); mid-stream failures surface via the
 	// error frame, not the status code.
-	g.logRequest(userID, modelName, service, startedAt, status, code, http.StatusOK, detail)
+	g.logRequest(userID, modelName, service, startedAt, status, code, http.StatusOK, detail, "")
 }
 
 func (g *Gateway) handleBlocking(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time) {
@@ -806,18 +806,18 @@ func (g *Gateway) handleBlocking(w http.ResponseWriter, client *dify.Client, wfR
 		// and suggest switching to streaming mode.
 		if dify.IsTimeoutError(err) {
 			log.Printf("[ERROR] dify blocking timeout (user %d): %v", userID, err)
-			g.logRequest(userID, modelName, service, startedAt, "error", "upstream_timeout", http.StatusGatewayTimeout, err.Error())
+			g.logRequest(userID, modelName, service, startedAt, "error", "upstream_timeout", http.StatusGatewayTimeout, err.Error(), "")
 			g.writeError(w, http.StatusGatewayTimeout, "upstream_timeout",
 				"上游 Dify 服务响应超时：请求可能因 Cloudflare 100 秒限制被截断。建议使用流式传输（stream: true）或拆分任务后重试。")
 			return
 		}
 		log.Printf("[ERROR] dify blocking (user %d): %v", userID, err)
-		g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error())
+		g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error(), "")
 		g.writeDifyError(w, err)
 		return
 	}
 	g.limiter.record(rpmClassB, userID, time.Now())
-	g.logRequest(userID, modelName, service, startedAt, "success", "", http.StatusOK, "")
+	g.logRequest(userID, modelName, service, startedAt, "success", "", http.StatusOK, "", "")
 
 	resp := map[string]interface{}{
 		"id":      fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()/1000%1000000000000),
@@ -908,11 +908,11 @@ func parseDataURI(uri string) (mime string, data []byte, err error) {
 // logRequest records one completed call (metadata only). httpStatus is the
 // status returned to the caller; detail is a short error message for admin
 // diagnostics (never request/response content — see db.RequestLog).
-func (g *Gateway) logRequest(userID int64, model, service string, startedAt time.Time, status, errorCode string, httpStatus int, detail string) {
+func (g *Gateway) logRequest(userID int64, model, service string, startedAt time.Time, status, errorCode string, httpStatus int, detail string, antiAbuseInfo string) {
 	if len(detail) > g.Config.LogDetailMaxChars {
 		detail = detail[:g.Config.LogDetailMaxChars] + "…"
 	}
-	if err := g.Store.AddRequestLogFull(userID, model, service, startedAt, time.Now(), status, errorCode, httpStatus, detail, 0, 0); err != nil {
+	if err := g.Store.AddRequestLogFull(userID, model, service, startedAt, time.Now(), status, errorCode, httpStatus, detail, 0, 0, antiAbuseInfo); err != nil {
 		log.Printf("[WARN] write request log: %v", err)
 	}
 }
@@ -1077,7 +1077,8 @@ func (g *Gateway) checkAntiAbuse(messages []openai.Message, model string, userID
 		default:
 			g.logRequest(userID, model, service, startedAt, "error", "invalid_role",
 				http.StatusBadRequest,
-				fmt.Sprintf("messages[%d]: unsupported role %q", i, m.Role))
+				fmt.Sprintf("messages[%d]: unsupported role %q", i, m.Role),
+				`{"triggered":"invalid_role","penalties":[]}`)
 			return &antiAbuseErr{
 				code:    "invalid_role",
 				message: "消息包含不支持的角色类型，仅支持 system、user、assistant。",
@@ -1112,10 +1113,20 @@ func (g *Gateway) checkAntiAbuse(messages []openai.Message, model string, userID
 	}
 
 	if shouldCheck && totalChars < cfg.MinChars {
+		// Build anti-abuse info JSON for logging.
+		var aaPenalties []string
+		if cfg.PenaltyDeductCredits > 0 {
+			aaPenalties = append(aaPenalties, fmt.Sprintf(`"credits_deducted:%d"`, cfg.PenaltyDeductCredits))
+		}
+		if cfg.PenaltyBanHours > 0 {
+			aaPenalties = append(aaPenalties, fmt.Sprintf(`"banned:%dh"`, cfg.PenaltyBanHours))
+		}
+		antiAbuseInfo := fmt.Sprintf(`{"triggered":"content_too_short","penalties":[%s]}`, strings.Join(aaPenalties, ","))
 		g.logRequest(userID, model, service, startedAt, "error", "content_too_short",
 			http.StatusBadRequest,
 			fmt.Sprintf("total chars %d < min %d (service %s, mode %d)",
-				totalChars, cfg.MinChars, service, cfg.Mode))
+				totalChars, cfg.MinChars, service, cfg.Mode),
+			antiAbuseInfo)
 
 		// Execute penalties.
 		if cfg.PenaltyDeductCredits > 0 {

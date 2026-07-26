@@ -266,7 +266,7 @@ async function renderAdminDashboard() {
           <label class="afl-until">${T('adminLogsUntil')}<input id="alf-until" type="datetime-local"></label>
           <button id="alf-query" class="afl-btn">${T('adminLogsQuery')}</button>
         </div>
-        <div class="table-wrap"><table><thead><tr><th>${T('thTime')}</th><th>${T('thUser')}</th><th>${T('thModel')}</th><th>${T('thService')}</th><th>${T('thDuration')}</th><th>${T('thStatus')}</th><th>${T('thHTTPStatus')}</th><th>${T('thErrorCode')}</th><th>${T('thErrorDetail')}</th><th>${T('thCreditsConsumed')}</th><th>${T('thDonationSource')}</th></tr></thead><tbody id="alf-rows"></tbody></table></div>
+        <div class="table-wrap"><table><thead><tr><th>${T('thTime')}</th><th>${T('thUser')}</th><th>${T('thModel')}</th><th>${T('thService')}</th><th>${T('thDuration')}</th><th>${T('thStatus')}</th><th>${T('thHTTPStatus')}</th><th>${T('thErrorCode')}</th><th>${T('thErrorDetail')}</th><th>${T('thCreditsConsumed')}</th><th>${T('thAntiAbuse')}</th><th>${T('thDonationSource')}</th></tr></thead><tbody id="alf-rows"></tbody></table></div>
         <div class="row-actions" id="alf-pager" style="margin-top:.5rem"></div>
       </section>
     </div>
@@ -712,6 +712,7 @@ function adminLogRow(l) {
       <td class="mono muted">${esc(l.error_code)}</td>
       <td class="muted wrap" style="max-width:48rem">${esc(l.error_detail || "")}</td>
       <td class="mono muted">${l.credits_consumed ? esc(String(l.credits_consumed)) : "0"}</td>
+      <td class="mono muted" style="max-width:16rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(l.anti_abuse_info || "")}">${esc(l.anti_abuse_info || "")}</td>
       <td class="muted">${esc(donationSrc)}</td>
     </tr>`;
 }
@@ -720,7 +721,7 @@ async function loadAdminLogs() {
   const params = new URLSearchParams();
   const resolved = resolveLogUserFilter($("#alf-user").value);
   if (resolved.error) {
-    $("#alf-rows").innerHTML = `<tr><td colspan="11" class="muted">${esc(resolved.error)}</td></tr>`;
+    $("#alf-rows").innerHTML = `<tr><td colspan="12" class="muted">${esc(resolved.error)}</td></tr>`;
     $("#alf-pager").innerHTML = "";
     return;
   }
@@ -744,7 +745,7 @@ async function loadAdminLogs() {
     const data = await api(`/api/admin/logs?${params.toString()}`);
     renderAdminLogs(data);
   } catch (err) {
-    $("#alf-rows").innerHTML = `<tr><td colspan="11" class="muted">${T('error').replace("{msg}", err.message)}</td></tr>`;
+    $("#alf-rows").innerHTML = `<tr><td colspan="12" class="muted">${T('error').replace("{msg}", err.message)}</td></tr>`;
     $("#alf-pager").innerHTML = "";
   }
 }
@@ -759,7 +760,7 @@ function renderAdminLogs(data) {
 
   $("#alf-rows").innerHTML = logs.length
     ? logs.map(adminLogRow).join("")
-    : `<tr><td colspan="10" class="muted">${T('empty')}</td></tr>`;
+    : `<tr><td colspan="12" class="muted">${T('empty')}</td></tr>`;
 
   $("#alf-pager").innerHTML = `
     <select class="pg-size">

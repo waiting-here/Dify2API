@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -28,6 +29,66 @@ func TestOpen_CreatesTables(t *testing.T) {
 			t.Errorf("table %q missing: %v", table, err)
 		}
 	}
+}
+
+func TestOpen_MigratesRequestLogsAntiAbuseInfo(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "legacy.db")
+	keyPath := filepath.Join(dir, "legacy.key")
+
+	legacy, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open legacy db: %v", err)
+	}
+	_, err = legacy.Exec(`CREATE TABLE request_logs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER NOT NULL,
+		model TEXT NOT NULL DEFAULT '',
+		service TEXT NOT NULL DEFAULT '',
+		started_at INTEGER NOT NULL,
+		ended_at INTEGER NOT NULL DEFAULT 0,
+		status TEXT NOT NULL DEFAULT '',
+		error_code TEXT NOT NULL DEFAULT '',
+		donation_id INTEGER,
+		http_status INTEGER NOT NULL DEFAULT 0,
+		error_detail TEXT NOT NULL DEFAULT '',
+		credits_consumed INTEGER NOT NULL DEFAULT 0
+	)`)
+	if err != nil {
+		legacy.Close()
+		t.Fatalf("create legacy request_logs: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	st, err := Open(dbPath, keyPath)
+	if err != nil {
+		t.Fatalf("Open legacy db: %v", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO request_logs (user_id, started_at) VALUES (1, 1)`); err != nil {
+		st.Close()
+		t.Fatalf("insert using migrated schema: %v", err)
+	}
+	var antiAbuseInfo string
+	if err := st.db.QueryRow(`SELECT anti_abuse_info FROM request_logs WHERE user_id=1`).Scan(&antiAbuseInfo); err != nil {
+		st.Close()
+		t.Fatalf("read migrated anti_abuse_info: %v", err)
+	}
+	if antiAbuseInfo != "" {
+		st.Close()
+		t.Fatalf("migrated anti_abuse_info = %q, want empty default", antiAbuseInfo)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close migrated db: %v", err)
+	}
+
+	// Reopening exercises the duplicate-column path and must remain idempotent.
+	st, err = Open(dbPath, keyPath)
+	if err != nil {
+		t.Fatalf("reopen migrated db: %v", err)
+	}
+	defer st.Close()
 }
 
 func TestMasterKey_GeneratedAndReused(t *testing.T) {

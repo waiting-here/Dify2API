@@ -804,7 +804,7 @@ func TestDonationAdminLogs(t *testing.T) {
 	gw, store := setupAuthGateway(t, "x")
 	now := time.Now()
 	// logRequestDonation should not panic and should store the donation ID.
-	gw.logRequestDonation(1, "[公益][general]x", "general", now, "success", "", 200, "", 42, 0)
+	gw.logRequestDonation(1, "[公益][general]x", "general", now, "success", "", 200, "", 42, 0, "")
 
 	logs, _, err := store.ListAllRequestLogs(db.LogFilter{}, 10, 0)
 	if err != nil {

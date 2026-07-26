@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // mockDifyApp is a minimal Dify Workflow endpoint for routing tests.
@@ -213,6 +214,107 @@ func TestRouting_ShujukuFilling(t *testing.T) {
 	}
 	if captured != nil {
 		t.Error("invalid alternation must not be forwarded")
+	}
+}
+
+func TestRouting_AntiAbuseInfo(t *testing.T) {
+	tests := []struct {
+		name          string
+		role          string
+		content       string
+		deductCredits int
+		banHours      int
+		wantCode      string
+		wantInfo      string
+		wantCredits   int
+		wantBanned    bool
+	}{
+		{
+			name:          "invalid role has no penalties",
+			role:          "tool",
+			content:       "this content is long enough",
+			deductCredits: 5,
+			banHours:      24,
+			wantCode:      "invalid_role",
+			wantInfo:      `{"triggered":"invalid_role","penalties":[]}`,
+			wantCredits:   10,
+		},
+		{
+			name:        "short content without penalties",
+			role:        "user",
+			content:     "short",
+			wantCode:    "content_too_short",
+			wantInfo:    `{"triggered":"content_too_short","penalties":[]}`,
+			wantCredits: 10,
+		},
+		{
+			name:          "short content with both penalties",
+			role:          "user",
+			content:       "short",
+			deductCredits: 5,
+			banHours:      24,
+			wantCode:      "content_too_short",
+			wantInfo:      `{"triggered":"content_too_short","penalties":["credits_deducted:5","banned:24h"]}`,
+			wantCredits:   5,
+			wantBanned:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var captured map[string]interface{}
+			srv := mockDifyApp(t, &captured)
+			defer srv.Close()
+			gw, key, uid := setupRoutedUser(t, srv.URL, "[general]claude-opus-4-6")
+			if err := gw.Store.SetUserCredits(uid, 10); err != nil {
+				t.Fatalf("SetUserCredits: %v", err)
+			}
+			if _, err := gw.Store.UpsertAntiAbuseConfig("general", 2, 20, tt.deductCredits, tt.banHours); err != nil {
+				t.Fatalf("UpsertAntiAbuseConfig: %v", err)
+			}
+			gw.refreshAntiAbuseCache()
+
+			body := fmt.Sprintf(`{"model":"[general]claude-opus-4-6","messages":[{"role":%q,"content":%q}]}`, tt.role, tt.content)
+			rec := chatRequest(gw, key, body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), tt.wantCode) {
+				t.Errorf("response body should contain %q: %s", tt.wantCode, rec.Body.String())
+			}
+			if captured != nil {
+				t.Error("anti-abuse rejection must not be forwarded to Dify")
+			}
+
+			logs, err := gw.Store.ListRequestLogs(uid, 10)
+			if err != nil {
+				t.Fatalf("ListRequestLogs: %v", err)
+			}
+			if len(logs) != 1 {
+				t.Fatalf("request logs = %d, want 1", len(logs))
+			}
+			if logs[0].ErrorCode != tt.wantCode {
+				t.Errorf("error_code = %q, want %q", logs[0].ErrorCode, tt.wantCode)
+			}
+			if logs[0].AntiAbuseInfo != tt.wantInfo {
+				t.Errorf("anti_abuse_info = %q, want %q", logs[0].AntiAbuseInfo, tt.wantInfo)
+			}
+
+			u, err := gw.Store.GetUserByID(uid)
+			if err != nil {
+				t.Fatalf("GetUserByID: %v", err)
+			}
+			if u.Credits != tt.wantCredits {
+				t.Errorf("credits = %d, want %d", u.Credits, tt.wantCredits)
+			}
+			if tt.wantBanned {
+				if u.BannedUntil < time.Now().Add(23*time.Hour).Unix() {
+					t.Errorf("banned_until = %d, want roughly 24 hours in the future", u.BannedUntil)
+				}
+			} else if u.BannedUntil != 0 {
+				t.Errorf("banned_until = %d, want 0", u.BannedUntil)
+			}
+		})
 	}
 }
 

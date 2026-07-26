@@ -144,7 +144,7 @@ async function renderUserDashboard() {
     <div id="utab-logs" class="user-tab-content" style="display:none">
       <section class="card">
         <h3>${T('logsTitle')}</h3>
-        <div class="table-wrap"><table><thead><tr><th>${T('thTime')}</th><th>${T('thDuration')}</th><th>${T('thModel')}</th><th>${T('thStatus')}</th><th>${T('thErrorCode')}</th><th>${T('thErrorDetail')}</th><th>${T('thCreditsConsumed')}</th></tr></thead><tbody id="log-rows"></tbody></table></div>
+        <div class="table-wrap"><table><thead><tr><th>${T('thTime')}</th><th>${T('thDuration')}</th><th>${T('thModel')}</th><th>${T('thStatus')}</th><th>${T('thErrorCode')}</th><th>${T('thErrorDetail')}</th><th>${T('thCreditsConsumed')}</th><th>${T('thAntiAbuse')}</th></tr></thead><tbody id="log-rows"></tbody></table></div>
         <div class="row-actions" id="log-pager" style="margin-top:.5rem"></div>
       </section>
     </div>
@@ -909,6 +909,31 @@ async function onConfigSubmit(e) {
 }
 
 function logRow(l) {
+  // Parse anti-abuse info into user-friendly text.
+  let aaText = "";
+  if (l.anti_abuse_info) {
+    try {
+      const obj = JSON.parse(l.anti_abuse_info);
+      if (obj.penalties && obj.penalties.length > 0) {
+        let deducted = 0, banned = 0;
+        for (const p of obj.penalties) {
+          const dm = p.match(/^credits_deducted:(\d+)$/);
+          if (dm) deducted = parseInt(dm[1], 10);
+          const bm = p.match(/^banned:(\d+)h$/);
+          if (bm) banned = parseInt(bm[1], 10);
+        }
+        if (deducted > 0 && banned > 0) {
+          aaText = T('antiAbusePenaltyFormat').replace('{credits}', String(deducted)).replace('{hours}', String(banned));
+        } else if (deducted > 0) {
+          aaText = T('antiAbusePenaltyDeduct').replace('{credits}', String(deducted));
+        } else if (banned > 0) {
+          aaText = T('antiAbusePenaltyBan').replace('{hours}', String(banned));
+        }
+      } else if (obj.triggered) {
+        aaText = T('antiAbuseNone');
+      }
+    } catch { aaText = ""; }
+  }
   return `
     <tr>
       <td class="muted">${fmtT(l.started_at)}</td>
@@ -918,12 +943,13 @@ function logRow(l) {
       <td class="mono muted">${esc(l.error_code || "")}</td>
       <td class="muted wrap" style="max-width:48rem">${esc(l.error_detail || "")}</td>
       <td class="mono muted">${l.credits_consumed ? esc(String(l.credits_consumed)) : "0"}</td>
+      <td class="muted">${esc(aaText)}</td>
     </tr>`;
 }
 
 async function loadLogs() {
   const { logs } = await api("/api/logs");
   logPager.data = logs || [];
-  renderPaged(logPager, "#log-rows", "#log-pager", 7);
+  renderPaged(logPager, "#log-rows", "#log-pager", 8);
 }
 

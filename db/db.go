@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -90,7 +91,8 @@ CREATE TABLE IF NOT EXISTS request_logs (
 	donation_id INTEGER,
 	http_status INTEGER NOT NULL DEFAULT 0,
 	error_detail TEXT NOT NULL DEFAULT '',
-	credits_consumed INTEGER NOT NULL DEFAULT 0
+	credits_consumed INTEGER NOT NULL DEFAULT 0,
+	anti_abuse_info TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_request_logs_user ON request_logs(user_id, started_at);
 
@@ -217,6 +219,14 @@ func Open(path, keyPath string) (*Store, error) {
 	if _, err := sqldb.Exec(schema); err != nil {
 		sqldb.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
+	}
+
+	// Idempotent migration: add anti_abuse_info column (ignore duplicate).
+	if _, err := sqldb.Exec(`ALTER TABLE request_logs ADD COLUMN anti_abuse_info TEXT NOT NULL DEFAULT ''`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			sqldb.Close()
+			return nil, fmt.Errorf("add anti_abuse_info column: %w", err)
+		}
 	}
 
 	return &Store{db: sqldb, key: key}, nil

@@ -829,7 +829,7 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		g.logRequest(userID, modelName, service, startedAt, "error", "stream_unsupported",
-			http.StatusInternalServerError, "response writer does not support streaming")
+			http.StatusInternalServerError, "response writer does not support streaming", "")
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
 		return
 	}
@@ -896,7 +896,7 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 		g.limiter.record(rpmClassA, userID, time.Now())
 	}
 
-	g.logRequestDonation(userID, modelName, service, startedAt, status, code, http.StatusOK, detail, donationID, pricing.Price)
+	g.logRequestDonation(userID, modelName, service, startedAt, status, code, http.StatusOK, detail, donationID, pricing.Price, "")
 }
 
 // charityBlocking handles blocking charity calls with donation accounting.
@@ -914,7 +914,7 @@ func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wf
 			g.maybeRecordBlockingFailedAlert(userID, modelName, service, de, &donationID)
 
 			// Log first (we need the log ID for the alert)
-			g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_error", http.StatusOK, de.Error(), donationID, pricing.Price)
+			g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_error", http.StatusOK, de.Error(), donationID, pricing.Price, "")
 			g.writeDifyError(w, err)
 			return
 		}
@@ -925,14 +925,14 @@ func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wf
 		if dify.IsTimeoutError(err) {
 			g.limiter.record(rpmClassB, userID, time.Now())
 			g.charitySuccessAccounting(userID, donation, modelName, service, startedAt, pricing)
-			g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_timeout", http.StatusGatewayTimeout, err.Error(), donationID, pricing.Price)
+			g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_timeout", http.StatusGatewayTimeout, err.Error(), donationID, pricing.Price, "")
 			g.writeError(w, http.StatusGatewayTimeout, "upstream_timeout",
 				"上游 Dify 服务响应超时：请求可能因 Cloudflare 100 秒限制被截断。建议使用流式传输（stream: true）或拆分任务后重试。")
 			return
 		}
 		// Real upstream failure — donation failure
 		g.charityFailAccounting(userID, donation, err)
-		g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error())
+		g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error(), "")
 		g.writeDifyError(w, err)
 		return
 	}
@@ -961,7 +961,7 @@ func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wf
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 	g.limiter.record(rpmClassA, userID, time.Now())
-	g.logRequestDonation(userID, modelName, service, startedAt, "success", "", http.StatusOK, "", donationID, pricing.Price)
+	g.logRequestDonation(userID, modelName, service, startedAt, "success", "", http.StatusOK, "", donationID, pricing.Price, "")
 }
 
 // charitySuccessAccounting records the success side of donation accounting.
@@ -1041,11 +1041,11 @@ func (g *Gateway) maybeRecordBlockingFailedAlert(userID int64, modelName, servic
 }
 
 // logRequestDonation is like logRequest but includes a donation_id for charity calls.
-func (g *Gateway) logRequestDonation(userID int64, model, service string, startedAt time.Time, status, errorCode string, httpStatus int, detail string, donationID int64, creditsConsumed int) {
+func (g *Gateway) logRequestDonation(userID int64, model, service string, startedAt time.Time, status, errorCode string, httpStatus int, detail string, donationID int64, creditsConsumed int, antiAbuseInfo string) {
 	if len(detail) > g.Config.LogDetailMaxChars {
 		detail = detail[:g.Config.LogDetailMaxChars] + "…"
 	}
-	if err := g.Store.AddRequestLogFull(userID, model, service, startedAt, time.Now(), status, errorCode, httpStatus, detail, donationID, creditsConsumed); err != nil {
+	if err := g.Store.AddRequestLogFull(userID, model, service, startedAt, time.Now(), status, errorCode, httpStatus, detail, donationID, creditsConsumed, antiAbuseInfo); err != nil {
 		log.Printf("[WARN] write request log: %v", err)
 	}
 }

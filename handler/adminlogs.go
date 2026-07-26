@@ -83,20 +83,21 @@ func (g *Gateway) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 
 	// Enrich logs with donation source_display.
 	type enrichedLog struct {
-		ID            int64  `json:"id"`
-		UserID        int64  `json:"user_id"`
-		Username      string `json:"username"`
-		Model         string `json:"model"`
-		Service       string `json:"service"`
-		StartedAt     int64  `json:"started_at"`
-		EndedAt       int64  `json:"ended_at"`
-		Status        string `json:"status"`
-		ErrorCode     string `json:"error_code"`
-		HTTPStatus    int    `json:"http_status"`
-		ErrorDetail   string `json:"error_detail"`
-		DonationID    *int64 `json:"donation_id"`
+		ID              int64  `json:"id"`
+		UserID          int64  `json:"user_id"`
+		Username        string `json:"username"`
+		Model           string `json:"model"`
+		Service         string `json:"service"`
+		StartedAt       int64  `json:"started_at"`
+		EndedAt         int64  `json:"ended_at"`
+		Status          string `json:"status"`
+		ErrorCode       string `json:"error_code"`
+		HTTPStatus      int    `json:"http_status"`
+		ErrorDetail     string `json:"error_detail"`
+		DonationID      *int64 `json:"donation_id"`
 		CreditsConsumed int    `json:"credits_consumed"`
-		SourceDisplay string `json:"source_display,omitempty"`
+		AntiAbuseInfo   string `json:"anti_abuse_info"`
+		SourceDisplay   string `json:"source_display,omitempty"`
 	}
 
 	// Build a cache of donation source displays for this batch.
@@ -112,19 +113,20 @@ func (g *Gateway) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 	out := make([]enrichedLog, 0, len(logs))
 	for _, l := range logs {
 		el := enrichedLog{
-			ID:          l.ID,
-			UserID:      l.UserID,
-			Username:    l.Username,
-			Model:       l.Model,
-			Service:     l.Service,
-			StartedAt:   l.StartedAt,
-			EndedAt:     l.EndedAt,
-			Status:      l.Status,
-			ErrorCode:   l.ErrorCode,
-			HTTPStatus:  l.HTTPStatus,
-			ErrorDetail: l.ErrorDetail,
-			DonationID:  l.DonationID,
+			ID:              l.ID,
+			UserID:          l.UserID,
+			Username:        l.Username,
+			Model:           l.Model,
+			Service:         l.Service,
+			StartedAt:       l.StartedAt,
+			EndedAt:         l.EndedAt,
+			Status:          l.Status,
+			ErrorCode:       l.ErrorCode,
+			HTTPStatus:      l.HTTPStatus,
+			ErrorDetail:     l.ErrorDetail,
+			DonationID:      l.DonationID,
 			CreditsConsumed: l.CreditsConsumed,
+			AntiAbuseInfo:   l.AntiAbuseInfo,
 		}
 		if l.DonationID != nil {
 			el.SourceDisplay = donCache[*l.DonationID]
