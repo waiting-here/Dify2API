@@ -973,7 +973,7 @@ function donationRow(d) {
   if (d.status !== "expired") {
     actions += `<button class="contrast outline don-delete" data-id="${d.id}" style="width:auto;margin:0">${T('charityBtnDelete')}</button>`;
   }
-  return `<tr><td><input type="checkbox" class="don-chk" data-id="${d.id}"></td><td>${esc(d.service)}</td><td class="mono">${esc(d.model)}</td><td>${source}</td><td>${keyCell}</td><td>${statusBadge}</td><td>${remaining}</td><td class="mono">${rpmDisplay}</td><td class="muted">${deadline}</td><td class="muted wrap" style="max-width:28rem">${esc(d.note || "—")}</td><td><div class="row-actions">${actions}</div></td></tr>`;
+  return `<tr><td><input type="checkbox" class="don-chk" data-id="${d.id}"></td><td>${esc(d.service)}</td><td class="mono">${esc(d.model)}</td><td>${source}</td><td>${keyCell}</td><td>${statusBadge}</td><td>${remaining}</td><td class="mono">${rpmDisplay}</td><td class="muted">${deadline}</td><td class="muted wrap" style="max-width:56rem">${esc(d.note || "—")}</td><td><div class="row-actions">${actions}</div></td></tr>`;
 }
 
 async function loadAdminDonations() {
@@ -1231,7 +1231,7 @@ async function renderAdminDonationReview() {
       <th><input type="checkbox" id="review-select-all" title="${T('batchSelectAll')}"></th>
       <th>${T('donationAppThApplicant')}</th><th>${T('donationAppThService')}</th><th>${T('donationAppThModel')}</th>
       <th>${T('donationAppThDeadline')}</th><th>${T('donationAppThCount')}</th><th>${T('donationAppThNote')}</th>
-      <th>${T('donationAppThCreated')}</th><th>${T('thActions')}</th>
+      <th>${T('adminReviewNote')}</th><th>${T('donationAppThCreated')}</th><th>${T('thActions')}</th>
     </tr></thead><tbody>`;
     for (const a of apps) {
       const applicant = a.username ? `${esc(a.username)} <span class="muted mono">(${esc(a.discord_id || "")})</span>` : esc(String(a.user_id));
@@ -1241,7 +1241,8 @@ async function renderAdminDonationReview() {
         <td>${esc(a.service)}</td><td class="mono">${esc(a.model)}</td>
         <td class="muted">${fmtT(a.deadline)}</td>
         <td class="mono">${esc(String(a.total_count))}</td>
-        <td class="muted wrap" style="max-width:28rem">${esc(a.note || "—")}</td>
+        <td class="muted wrap" style="max-width:56rem">${esc(a.note || "—")}</td>
+        <td class="muted wrap">${esc(a.review_note || "—")}</td>
         <td class="muted">${fmtT(a.created_at)}</td>
         <td><div class="row-actions">
           <button class="secondary don-review-btn" data-id="${a.id}">${T('donationReviewBtn')}</button>
