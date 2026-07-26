@@ -815,7 +815,6 @@ async function renderMyDonations() {
   }
 }
 
-let editingId = null;
 const cfgPager = newPager(cfgRow);
 const logPager = newPager(logRow);
 
@@ -852,22 +851,83 @@ async function loadConfigs() {
     const id = e.target.closest("tr").dataset.id;
     const c = cfgPager.data.find((x) => String(x.id) === id);
     if (!c) return;
-    editingId = id;
-    const f = $("#cfg-form");
-    const m = c.model.match(/^\[([^\]]+)\](.*)$/);
-    if (m) {
-      f.service.value = m[1];
-      f.backend.value = m[2];
-    } else {
-      f.backend.value = c.model;
-    }
-    f.dify_base_url.value = c.dify_base_url;
-    f.dify_api_key.value = "";
-    f.dify_api_key.placeholder = T('fieldAPIKey');
-    f.note.value = c.note || "";
-    $("#cfg-submit").textContent = T('save');
-    f.scrollIntoView({ behavior: "smooth" });
+    showConfigEditDialog(c);
   }));
+}
+
+async function showConfigEditDialog(c) {
+  const old = $("#cfg-edit-dialog");
+  if (old) old.remove();
+
+  const dialog = document.createElement("dialog");
+  dialog.id = "cfg-edit-dialog";
+  document.body.appendChild(dialog);
+
+  // Parse [service]backend format
+  let svc = "", backend = c.model;
+  const m = c.model.match(/^\[([^\]]+)\](.*)$/);
+  if (m) { svc = m[1]; backend = m[2]; }
+
+  // Populate services dropdown
+  let svcOpts = "";
+  try {
+    const { services } = await api("/api/services");
+    svcOpts = (services || []).map((s) => `<option value="${esc(s.name)}" ${s.name === svc ? "selected" : ""}>${esc(s.name)}</option>`).join("");
+  } catch (_) { /* keep empty */ }
+
+  dialog.innerHTML = `
+    <article>
+      <header><h3>${T('editConfig')}</h3></header>
+      <form id="cfg-edit-form">
+        <label>${T('thService')}<select name="service">${svcOpts}</select></label>
+        <label>${T('thModel')}<input name="backend" value="${esc(backend)}" placeholder="${T('fieldBackend')}${T('fieldBackendHint')}" required></label>
+        <label>${T('thBaseURL')}<input name="dify_base_url" value="${esc(c.dify_base_url)}" placeholder="${T('fieldBaseURL')}" required></label>
+        <label>API Key<input name="dify_api_key" placeholder="${T('fieldAPIKey')}"></label>
+        <label>${T('thNote')}<input name="note" value="${esc(c.note || '')}" placeholder="${T('fieldNote')}"></label>
+        <div id="cfg-edit-msg" style="margin-bottom:.5rem"></div>
+        <footer style="display:flex;gap:.5rem;justify-content:flex-end">
+          <button type="button" id="cfg-edit-save">${T('save')}</button>
+          <button type="button" id="cfg-edit-cancel">${T('cancelEdit')}</button>
+        </footer>
+      </form>
+    </article>`;
+  dialog.showModal();
+
+  const close = () => { dialog.close(); dialog.remove(); };
+  $("#cfg-edit-cancel").onclick = close;
+  dialog.addEventListener("click", (e) => { if (e.target === dialog) close(); });
+
+  $("#cfg-edit-save").onclick = async () => {
+    const f = $("#cfg-edit-form");
+    const body = {
+      model: `[${f.service.value}]${f.backend.value.trim()}`,
+      dify_base_url: f.dify_base_url.value,
+      dify_api_key: f.dify_api_key.value,
+      note: f.note.value,
+    };
+    const msg = $("#cfg-edit-msg");
+    msg.innerHTML = `<p class="muted">${T('loading')}</p>`;
+    try {
+      const resp = await api(`/api/configs/${c.id}`, { method: "PUT", body });
+      const check = resp.app_check || {};
+      let cls = "ok", html = "";
+      if (check.error) {
+        cls = "warn"; html = `${T('checkError')}: ${esc(check.error)}`;
+      } else if (check.compatible) {
+        html = `${T('checkCompatible')}`;
+        if (check.extra_app_optional?.length) html += `<br><span class="muted">${T('checkExtra').replace("{list}", esc(check.extra_app_optional.join(", ")))}</span>`;
+      } else {
+        cls = "err";
+        html = `${T('checkIncompatible')}`;
+        if (check.missing_contract_vars?.length) html += `<br>${T('checkMissing').replace("{list}", esc(check.missing_contract_vars.join(", ")))}`;
+        if (check.uncovered_app_required?.length) html += `<br>${T('checkUncovered').replace("{list}", esc(check.uncovered_app_required.join(", ")))}`;
+      }
+      msg.innerHTML = `<div class="note ${cls}">${html}</div>`;
+      await loadConfigs();
+    } catch (err) {
+      msg.innerHTML = `<div class="note err">${T('error').replace("{msg}", esc(err.message))}</div>`;
+    }
+  };
 }
 
 async function onConfigSubmit(e) {
@@ -882,11 +942,7 @@ async function onConfigSubmit(e) {
   const note = $("#check-note");
   note.innerHTML = `<p class="muted">${T('loading')}</p>`;
   try {
-    const resp = editingId
-      ? await api(`/api/configs/${editingId}`, { method: "PUT", body })
-      : await api("/api/configs", { method: "POST", body });
-    editingId = null;
-    $("#cfg-submit").textContent = T('addConfig');
+    const resp = await api("/api/configs", { method: "POST", body });
     f.reset();
     const c = resp.app_check || {};
     let cls = "ok", html = "";
