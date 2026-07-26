@@ -15,7 +15,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -219,14 +218,6 @@ func Open(path, keyPath string) (*Store, error) {
 	if _, err := sqldb.Exec(schema); err != nil {
 		sqldb.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
-	}
-
-	// Idempotent migration: add anti_abuse_info column (ignore duplicate).
-	if _, err := sqldb.Exec(`ALTER TABLE request_logs ADD COLUMN anti_abuse_info TEXT NOT NULL DEFAULT ''`); err != nil {
-		if !strings.Contains(err.Error(), "duplicate column") {
-			sqldb.Close()
-			return nil, fmt.Errorf("add anti_abuse_info column: %w", err)
-		}
 	}
 
 	return &Store{db: sqldb, key: key}, nil
