@@ -47,6 +47,15 @@ SillyTavern / Pi ──HTTPS──▶ Nginx ──HTTP──▶ Dify2API ──H
 
 ## 部署
 
+### 最小部署流程
+
+1. 获取源码：`git clone` 本仓库
+2. 安装 Go **≥1.25**
+3. 复制 `admin.env.example` 为 `admin.env`，填写必填项（Discord OAuth、管理员密码等）
+4. 构建：`go build -o dify2api .`
+5. 配置反代：参考 `nginx/` 目录下的示例配置（详见下方 §3.启动）
+6. 后台常驻：使用 systemd、screen 或 Supervisor 保持服务运行
+
 ### 1. 准备
 
 - Go **≥1.25**（`go build -o dify2api .`）；
@@ -70,8 +79,7 @@ SITE_BASE_URL=https://dify2api.example.com
 
 # 可选（全部有默认值）
 ADMIN_HOST=admin.dify2api.example.com
-SITE_NAME=Dify2API             # 网站对外显示的名称
-I18N_FILE=i18n.json           # 多语言字典文件（可选，为站点名称/积分名称等提供多语言版本）
+I18N_FILE=i18n.json           # 多语言字典文件（可选；站点名称通过字典中 site_name 键配置，参考 i18n.json.example）
 REPORT_EMAIL=report@example.com  # DMCA/CSAM 举报联络邮箱（展示于服务协议与隐私政策页）
 FAVICON_PATH=                  # 浏览器标签页图标文件路径（可选,支持 .ico/.png/.svg/.webp）
 LISTEN_ADDR=localhost:10086
@@ -87,7 +95,7 @@ LOGIN_LOCK_MIN=60            # 锁定时长（分钟）
 LOGIN_MIN_LATENCY_MS=300     # 登录恒定时延（毫秒）
 ```
 
-### 3. 启动与 Nginx
+### 3. 启动
 
 ```bash
 ./dify2api -admin /path/to/admin.env
@@ -95,8 +103,10 @@ LOGIN_MIN_LATENCY_MS=300     # 登录恒定时延（毫秒）
 # -debug        调试拦截模式（见下）
 ```
 
-- 双域名（`<域名>` 与 `admin.<域名>`）均需解析与证书，参考 `nginx/` 两份示例；
-- SSE 流式必须 `proxy_buffering off`；超时建议 ≥900s；
+- 双域名（`<域名>` 与 `admin.<域名>`）均需解析与证书；
+  **⚠️ 公网部署必须置于可信反代后**（如 nginx），因为网关信任 `X-Forwarded-*` 头部；
+  直接暴露到公网存在安全风险；
+- SSE 流式必须 `proxy_buffering off`；超时建议 ≥900s（与 `DIFY_HTTP_TIMEOUT_MS` 默认值一致）；
 - 未加 `-force-https` 时启动日志会警告 HTTP 风险（本机部署可忽略）。
 
 ### 4. 首次使用
@@ -182,9 +192,9 @@ result_limit: 4000               # 超限结果写临时文件，仅回路径+�
   `/v1/*` 无效密钥请求按源 IP 节流（默认 30 次/分，防无效密钥
   洪泛；有效密钥不受影响）；
 - **封禁 vs 删除**：封禁（定时/永久）保留记录且禁止再注册；删除清空记录并允许再注册；
-- **内置加固**：HTTP 服务超时（Slowloris）、4MB+ 可配请求体上限、并发背压（429）、
+- **内置加固**：HTTP 服务超时（Slowloris）、可配请求体上限（默认 10 MiB）、并发背压（429）、
   管理员登录爆破锁定（IP+用户名滑窗，5 次/10 分钟 → 锁 1h）、密钥 AES-GCM 加密存储；
-- **日志**：`request_logs` 仅存元数据（时间/模型/状态/错误码）；防滥用触发时
+- **日志**：`request_logs` 仅存元数据（时间/模型/状态/错误码/服务/HTTP状态/详情/扣分）；防滥用触发时
   额外记录 `anti_abuse_info` JSON（触发类型与惩罚内容）；服务启动时及
   此后每 24 小时自动清理 30 天以上的日志与过期会话（启动日志含
   `[CLEANUP]` 行）；用户台自查；管理台“请求日志”面板可按用户（关键字
@@ -210,13 +220,13 @@ result_limit: 4000               # 超限结果写临时文件，仅回路径+�
 - **数据权利**：用户可在网页控制台自助导出全部个人数据（JSON 下载，含解密凭据），
   或自助删除账号（二次确认，清空全部记录）；管理员可从后台为单个用户导出数据。
 - **法律页面**：内嵌 `/privacy`（隐私政策）和 `/terms`（服务协议，含 DMCA/NCMEC 条款）。
-  部署者通过 `SITE_NAME` / `REPORT_EMAIL` 配置后自动填充。
+  部署者通过 `I18N_FILE` 字典中的 `site_name` 与 `REPORT_EMAIL` 配置后自动填充。
   **⚠️ 部署前必须审核并修改**：模板中的 DMCA 程序等条款基于美国法律；
   非美国部署者需按当地法律替换相关内容（详见 HTML 注释与 §合规提示）。
 - **网站图标**：通过 `FAVICON_PATH` 配置浏览器标签页图标文件路径（支持常见图片格式）。
-- **邮件提醒**：配置 SMTP 后，以下三类事件自动发送邮件通知——
+- **邮件提醒**：配置 SMTP 后，以下四类事件自动发送邮件通知——
   ① 用户因 RPM 违规被自动封禁、② 捐赠条目连续 10 次失败自动转为未激活、
-  ③ 管理员登录被爆破锁定。未配置 `SMTP_HOST` 时邮件功能静默关闭（启动日志
+  ③ 管理员登录被爆破锁定、④ 公益定价缺失（无可用定价条目）。未配置 `SMTP_HOST` 时邮件功能静默关闭（启动日志
   显示 `[MAILER] disabled`）。详见下方 §邮件提醒。
 
 ## 邮件提醒
@@ -275,17 +285,20 @@ SMTP_TLS=implicit
 |------|------|------|
 | 400 | `already_checked_in` | 今日已签到 |
 | 400 | `checkin_disabled` | 签到系统已被管理员关闭（积分上限设为 0） |
-| 400 | `invalid_message_sequence` | 消息布局不符该服务契约 |
+| 400 | `confirmation_required` | 数据导出/删除操作需在请求体中提供确认字符串（`confirm_delete` 或 `confirm_export`） |
 | 400 | `content_too_short` | 请求内容过短（不暴露阈值） |
+| 400 | `credits_capped` | 签到积分已达上限 |
+| 400 | `debug_not_active` | 用户自助调试模式未开启 |
+| 400 | `invalid_message_sequence` | 消息布局不符该服务契约 |
 | 400 | `invalid_request` | 请求体/参数非法（含未注册服务名） |
 | 400 | `invalid_role` | 消息包含不支持的角色类型（仅限 system/user/assistant） |
 | 400 | `too_many_pending` | 待审核捐赠申请已达上限 |
+| 401 | `invalid_credentials` | 管理员登录用户名或密码错误 |
 | 401 | `unauthorized` | 调用方密钥缺失/无效，或网页会话失效 |
 | 403 | `charity_disabled` | 全局公益开关已被管理员关闭 |
 | 403 | `donation_disabled` | 捐赠系统已被管理员关闭 |
 | 403 | `forbidden` | 管理接口非管理员 |
 | 403 | `insufficient_credits` | 调用公益模型时积分不足（含可配置积分名） |
-| 403 | `login_failed` | OAuth 登录失败（注册条件/封禁等） |
 | 403 | `login_locked` | 管理员登录失败过多，锁定中 |
 | 403 | `rpm_exceeded` | 超出三类 RPM 任一上限（文案含类别、阈值与封禁提示） |
 | 404 | `debug_intercept` | 调试拦截（非真实错误） |
@@ -299,10 +312,10 @@ SMTP_TLS=implicit
 | 429 | `server_busy` | 全局并发已满（附 Retry-After） |
 | 4xx | （透传上游 code） | Dify 返回 4xx 时原状态码与错误码透传（如 400 `invalid_param`），消息带 `[Dify]` 前缀 |
 | 500 | `internal` | 网关内部错误 |
-| 502 | `upstream_error` 等 / `image_upload_failed` | Dify 5xx 或网络错误 / 图片预上传失败 |
-| 504 | `upstream_timeout` | 上游 Dify 响应超时（可能因 Cloudflare 100 秒限制被截断），消息带 `[Dify2API]` 前缀，建议使用流式传输（`stream: true`） |
+| 502 | `upstream_error` 等 | Dify 5xx 或网络错误 |
 | 503 | `maintenance` | 站点处于维护模式 |
-| 503 | `service_unavailable` | 当前该公益模型无可用捐赠条目 |
+| 503 | `service_unavailable` | 当前该公益模型无可用捐赠条目，或定价缺失/停用 |
+| 504 | `upstream_timeout` | 上游 Dify 响应超时（可能因 Cloudflare 100 秒限制被截断），消息带 `[Dify2API]` 前缀，建议使用流式传输（`stream: true`） |
 
 流式传输中途失败（SSE 已开始后）：流内发送 OpenAI 风格错误帧
 `data: {"error":{"code":"upstream_error",...}}` 且**不发** `data: [DONE]`，
