@@ -43,6 +43,7 @@ type ExportUser struct {
 	RPMLimitC      *int64 `json:"rpm_limit_c"`
 	DonationCredit int    `json:"donation_credit"`
 	CharityEnabled bool   `json:"charity_enabled"`
+	Lang           string `json:"lang"`
 	CreatedAt      int64  `json:"created_at"`
 	UpdatedAt      int64  `json:"updated_at"`
 }
@@ -67,8 +68,10 @@ type ExportDonationApp struct {
 	DifyAPIKey  string `json:"dify_api_key"` // decrypted
 	TotalCount  int    `json:"total_count"`
 	Deadline    int64  `json:"deadline"`
+	RpmLimit    int    `json:"rpm_limit"`
 	Note        string `json:"note"`
 	Status      string `json:"status"`
+	ReviewerID  *int64 `json:"reviewer_id"`
 	ReviewNote  string `json:"review_note"`
 	DonationID  *int64 `json:"donation_id"`
 	CreatedAt   int64  `json:"created_at"`
@@ -76,12 +79,16 @@ type ExportDonationApp struct {
 
 // ExportLog mirrors one request_log entry.
 type ExportLog struct {
-	Model     string `json:"model"`
-	Service   string `json:"service"`
-	StartedAt int64  `json:"started_at"`
-	EndedAt   int64  `json:"ended_at"`
-	Status    string `json:"status"`
-	ErrorCode string `json:"error_code"`
+	Model           string `json:"model"`
+	Service         string `json:"service"`
+	StartedAt       int64  `json:"started_at"`
+	EndedAt         int64  `json:"ended_at"`
+	Status          string `json:"status"`
+	ErrorCode       string `json:"error_code"`
+	HttpStatus      int    `json:"http_status"`
+	ErrorDetail     string `json:"error_detail"`
+	CreditsConsumed int    `json:"credits_consumed"`
+	AntiAbuseInfo   string `json:"anti_abuse_info"`
 }
 
 // ExportUserData assembles the full export bundle for a single user.
@@ -114,6 +121,7 @@ func (s *Store) ExportUserData(userID int64) (*ExportBundle, error) {
 			RPMLimitC:      nullableIntPtr(u.RPMLimitC),
 			DonationCredit: u.DonationCredit,
 			CharityEnabled: u.CharityEnabled,
+			Lang:           u.Lang,
 			CreatedAt:      u.CreatedAt,
 			UpdatedAt:      u.UpdatedAt,
 		},
@@ -146,20 +154,24 @@ func (s *Store) ExportUserData(userID int64) (*ExportBundle, error) {
 		bundle.CallerKey = key
 	}
 
-	// Request logs (up to 500, newest first — same as the dashboard).
-	logs, err := s.ListRequestLogs(userID, 500)
+	// Request logs (complete, without limit — exports are infrequent).
+	logs, err := s.ExportRequestLogs(userID)
 	if err != nil {
 		return nil, err
 	}
 	bundle.Logs = make([]ExportLog, 0, len(logs))
 	for _, l := range logs {
 		bundle.Logs = append(bundle.Logs, ExportLog{
-			Model:     l.Model,
-			Service:   l.Service,
-			StartedAt: l.StartedAt,
-			EndedAt:   l.EndedAt,
-			Status:    l.Status,
-			ErrorCode: l.ErrorCode,
+			Model:           l.Model,
+			Service:         l.Service,
+			StartedAt:       l.StartedAt,
+			EndedAt:         l.EndedAt,
+			Status:          l.Status,
+			ErrorCode:       l.ErrorCode,
+			HttpStatus:      l.HTTPStatus,
+			ErrorDetail:     l.ErrorDetail,
+			CreditsConsumed: l.CreditsConsumed,
+			AntiAbuseInfo:   l.AntiAbuseInfo,
 		})
 	}
 
@@ -182,10 +194,14 @@ func (s *Store) ExportUserData(userID int64) (*ExportBundle, error) {
 			DifyAPIKey:  key,
 			TotalCount:  a.TotalCount,
 			Deadline:    a.Deadline,
+			RpmLimit:    a.RpmLimit,
 			Note:        a.Note,
 			Status:      a.Status,
 			ReviewNote:  a.ReviewNote,
 			CreatedAt:   a.CreatedAt,
+		}
+		if a.ReviewerID.Valid {
+			expApp.ReviewerID = &a.ReviewerID.Int64
 		}
 		if a.DonationID.Valid {
 			expApp.DonationID = &a.DonationID.Int64

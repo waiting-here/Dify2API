@@ -287,6 +287,8 @@ func (s *Store) DeleteUser(id int64) error {
 		`DELETE FROM app_configs WHERE user_id=?`,
 		`DELETE FROM caller_keys WHERE user_id=?`,
 		`DELETE FROM request_logs WHERE user_id=?`,
+		`DELETE FROM donation_applications WHERE user_id=?`,
+		`UPDATE donations SET source_user_id=NULL, source_discord_id='', source_username='' WHERE source_user_id=?`,
 		`DELETE FROM users WHERE id=? AND is_admin=0`,
 	} {
 		if _, err := s.db.Exec(q, id); err != nil {

@@ -90,6 +90,27 @@ func (s *Store) ListRequestLogs(userID int64, limit int) ([]*RequestLog, error) 
 	return out, rows.Err()
 }
 
+// ExportRequestLogs returns ALL of a user's request logs (newest first),
+// without any LIMIT — intended only for the GDPR export path.
+func (s *Store) ExportRequestLogs(userID int64) ([]*RequestLog, error) {
+	rows, err := s.db.Query(
+		`SELECT id, user_id, model, service, started_at, ended_at, status, error_code, http_status, error_detail, credits_consumed, anti_abuse_info
+		 FROM request_logs WHERE user_id=? ORDER BY started_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*RequestLog
+	for rows.Next() {
+		var l RequestLog
+		if err := rows.Scan(&l.ID, &l.UserID, &l.Model, &l.Service, &l.StartedAt, &l.EndedAt, &l.Status, &l.ErrorCode, &l.HTTPStatus, &l.ErrorDetail, &l.CreditsConsumed, &l.AntiAbuseInfo); err != nil {
+			return nil, err
+		}
+		out = append(out, &l)
+	}
+	return out, rows.Err()
+}
+
 // AdminRequestLog extends RequestLog with the username obtained via LEFT JOIN
 // and the optional donation tracking column (admin-only).
 type AdminRequestLog struct {

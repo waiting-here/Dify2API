@@ -50,7 +50,7 @@ const DEFAULTS = {
 	timeoutFloorMs: 1_000,
 	timeoutCeilMs: 900_000,
 	previewChars: 500,
-	preset: "general-preview",
+	preset: "general",
 	tmpSubdir: "dify-subagent",
 	modelsFetchTimeoutMs: 15_000,
 } as const;

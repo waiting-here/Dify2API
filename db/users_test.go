@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -143,6 +144,76 @@ func TestSettings(t *testing.T) {
 	v, err := st.GetSetting(SettingGuildID)
 	if err != nil || v != "g2" {
 		t.Errorf("setting = %q, want g2 (err %v)", v, err)
+	}
+}
+
+func TestDeleteUser_WithDonationApplication(t *testing.T) {
+	st, _ := openTemp(t)
+	u, _ := st.CreateUser("999", "u_da", "")
+
+	// Create a donation application for this user.
+	deadline := time.Now().Add(48 * time.Hour).Unix()
+	_, err := st.CreateDonationApplication(u.ID, "general", "claude-opus-4-6",
+		"https://dify.example.com/v1", "app-secret-key", 100, deadline, 10, "test")
+	if err != nil {
+		t.Fatalf("CreateDonationApplication: %v", err)
+	}
+
+	// DeleteUser should succeed (no FK violation).
+	if err := st.DeleteUser(u.ID); err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+
+	// Confirm user is gone.
+	gone, err := st.GetUserByID(u.ID)
+	if err != nil {
+		t.Fatalf("GetUserByID: %v", err)
+	}
+	if gone != nil {
+		t.Error("user should be deleted after DeleteUser")
+	}
+}
+
+func TestDeleteUser_AnonymizesDonationSource(t *testing.T) {
+	st, _ := openTemp(t)
+	u, _ := st.CreateUser("998", "u_src", "")
+
+	// Create a donation with source_user_id pointing to this user.
+	d := &Donation{
+		Service:         "general",
+		Model:           "claude-opus-4-6",
+		DifyBaseURL:     "https://dify.example.com/v1",
+		TotalCount:      100,
+		RemainingCount:  100,
+		Deadline:        time.Now().Add(48 * time.Hour).Unix(),
+		RpmLimit:        10,
+		SourceUserID:    sql.NullInt64{Int64: u.ID, Valid: true},
+		SourceDiscordID: "998",
+		SourceUsername:  "u_src",
+		Status:          DonationActive,
+	}
+	don, err := st.CreateDonation(d, "app-secret-key")
+	if err != nil {
+		t.Fatalf("CreateDonation: %v", err)
+	}
+
+	if err := st.DeleteUser(u.ID); err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+
+	// Verify donation source info is anonymized.
+	don2, err := st.GetDonation(don.ID)
+	if err != nil {
+		t.Fatalf("GetDonation: %v", err)
+	}
+	if don2.SourceUserID.Valid {
+		t.Error("SourceUserID should be NULL after DeleteUser")
+	}
+	if don2.SourceDiscordID != "" {
+		t.Errorf("SourceDiscordID = %q, want empty", don2.SourceDiscordID)
+	}
+	if don2.SourceUsername != "" {
+		t.Errorf("SourceUsername = %q, want empty", don2.SourceUsername)
 	}
 }
 
