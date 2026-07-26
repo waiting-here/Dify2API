@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -17,21 +18,21 @@ const (
 
 // DonationApplication represents a user-submitted donation application.
 type DonationApplication struct {
-	ID              int64
-	UserID          int64
-	Service         string
-	Model           string
-	DifyBaseURL     string
-	DifyAPIKeyEnc   string
-	TotalCount      int
-	Deadline        int64
-	RpmLimit        int
-	Note            string
-	Status          string
-	ReviewerID      sql.NullInt64
-	ReviewNote      string
-	DonationID      sql.NullInt64
-	CreatedAt       int64
+	ID            int64
+	UserID        int64
+	Service       string
+	Model         string
+	DifyBaseURL   string
+	DifyAPIKeyEnc string
+	TotalCount    int
+	Deadline      int64
+	RpmLimit      int
+	Note          string
+	Status        string
+	ReviewerID    sql.NullInt64
+	ReviewNote    string
+	DonationID    sql.NullInt64
+	CreatedAt     int64
 	// Joined fields (populated by list queries).
 	Username       string // applicant username
 	DiscordID      string // applicant discord_id
@@ -308,4 +309,36 @@ func (s *Store) RejectApplication(id int64, reviewerID int64, reviewNote string)
 	}
 
 	return s.GetApplication(id)
+}
+
+// GetReviewNotesByDonationIDs returns a map of donation_id → review_note
+// for the given donation IDs. Only donations that originated from an
+// application (with a review_note set) are included in the result.
+func (s *Store) GetReviewNotesByDonationIDs(ids []int64) (map[int64]string, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := `SELECT donation_id, review_note FROM donation_applications
+		WHERE donation_id IN (` + strings.Join(placeholders, ",") + `) AND review_note != ''`
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[int64]string)
+	for rows.Next() {
+		var donID int64
+		var note string
+		if err := rows.Scan(&donID, &note); err != nil {
+			return nil, err
+		}
+		out[donID] = note
+	}
+	return out, rows.Err()
 }

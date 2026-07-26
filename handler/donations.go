@@ -319,11 +319,26 @@ func (g *Gateway) handleListDonations(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Batch-load review notes from original applications.
+	donIDs := make([]int64, len(list))
+	for i, d := range list {
+		donIDs[i] = d.ID
+	}
+	reviewNotes, err := g.Store.GetReviewNotesByDonationIDs(donIDs)
+	if err != nil {
+		// Non-fatal: proceed without review notes.
+		log.Printf("[WARN] load review notes: %v", err)
+		reviewNotes = nil
+	}
+
 	out := make([]map[string]interface{}, 0, len(list))
 	for _, d := range list {
 		j := g.enrichDonationJSON(d, nil)
 		if d.DifyAPIKeySHA256 != "" && shaCounts[d.DifyAPIKeySHA256] >= 2 {
 			j["is_dup_key"] = true
+		}
+		if rn, ok := reviewNotes[d.ID]; ok {
+			j["review_note"] = rn
 		}
 		out = append(out, j)
 	}

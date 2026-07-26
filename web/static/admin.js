@@ -336,7 +336,7 @@ async function renderAdminDashboard() {
           <th>${T('charityThService')}</th><th>${T('charityThModel')}</th><th>${T('charityThSource')}</th>
           <th>Key</th>
           <th>${T('charityThStatus')}</th><th>${T('charityThRemaining')}</th><th>RPM</th><th>${T('charityThDeadline')}</th>
-          <th>${T('thNote')}</th><th>${T('thActions')}</th>
+          <th>${T('thNote')}</th><th>${T('adminReviewNote')}</th><th>${T('thActions')}</th>
         </tr></thead><tbody id="don-rows"></tbody></table></div>
         <div class="row-actions" id="don-pager" style="margin-top:.5rem"></div>
       </section>
@@ -973,7 +973,7 @@ function donationRow(d) {
   if (d.status !== "expired") {
     actions += `<button class="contrast outline don-delete" data-id="${d.id}" style="width:auto;margin:0">${T('charityBtnDelete')}</button>`;
   }
-  return `<tr><td><input type="checkbox" class="don-chk" data-id="${d.id}"></td><td>${esc(d.service)}</td><td class="mono">${esc(d.model)}</td><td>${source}</td><td>${keyCell}</td><td>${statusBadge}</td><td>${remaining}</td><td class="mono">${rpmDisplay}</td><td class="muted">${deadline}</td><td class="muted wrap" style="max-width:56rem">${esc(d.note || "—")}</td><td><div class="row-actions">${actions}</div></td></tr>`;
+  return `<tr><td><input type="checkbox" class="don-chk" data-id="${d.id}"></td><td>${esc(d.service)}</td><td class="mono">${esc(d.model)}</td><td>${source}</td><td>${keyCell}</td><td>${statusBadge}</td><td>${remaining}</td><td class="mono">${rpmDisplay}</td><td class="muted">${deadline}</td><td class="muted wrap" style="max-width:56rem">${esc(d.note || "—")}</td><td class="muted wrap">${esc(d.review_note || "—")}</td><td><div class="row-actions">${actions}</div></td></tr>`;
 }
 
 async function loadAdminDonations() {
@@ -985,9 +985,9 @@ async function loadAdminDonations() {
       clearBatchSelection("#don-select-all", ".don-chk", "don-batch-bar");
       bindBatchSelectAll("#don-select-all", ".don-chk", () => refBatchBar("don-batch-bar", ".don-chk"));
     };
-    renderPaged(donPager, "#don-rows", "#don-pager", 11);
+    renderPaged(donPager, "#don-rows", "#don-pager", 12);
   } catch (err) {
-    $("#don-rows").innerHTML = `<tr><td colspan="11" class="muted">${T('error').replace("{msg}", err.message)}</td></tr>`;
+    $("#don-rows").innerHTML = `<tr><td colspan="12" class="muted">${T('error').replace("{msg}", err.message)}</td></tr>`;
     $("#don-pager").innerHTML = "";
   }
 }
