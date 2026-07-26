@@ -924,6 +924,7 @@ async function showConfigEditDialog(c) {
       }
       msg.innerHTML = `<div class="note ${cls}">${html}</div>`;
       await loadConfigs();
+      close();
     } catch (err) {
       msg.innerHTML = `<div class="note err">${T('error').replace("{msg}", esc(err.message))}</div>`;
     }
