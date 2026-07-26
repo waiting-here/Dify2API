@@ -757,8 +757,8 @@ async function renderMyDonations() {
       html += `<tr>
         <td>${esc(a.service)}</td><td class="mono">${esc(a.model)}</td>
         <td>${statusBadge}</td><td class="muted">${fmtT(a.created_at)}</td>
-        <td class="muted wrap" style="max-width:100rem">${esc(a.note || "—")}</td>
-        <td class="muted wrap" style="max-width:100rem">${adminNote}</td>
+        <td class="muted"><div class="wrap" style="max-width:50rem">${esc(a.note || "—")}</div></td>
+        <td class="muted"><div class="wrap" style="max-width:50rem">${adminNote}</div></td>
         <td>${donationCell}</td>
       </tr>`;
     }

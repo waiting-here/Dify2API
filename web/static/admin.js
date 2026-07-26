@@ -973,7 +973,7 @@ function donationRow(d) {
   if (d.status !== "expired") {
     actions += `<button class="contrast outline don-delete" data-id="${d.id}" style="width:auto;margin:0">${T('charityBtnDelete')}</button>`;
   }
-  return `<tr><td><input type="checkbox" class="don-chk" data-id="${d.id}"></td><td>${esc(d.service)}</td><td class="mono">${esc(d.model)}</td><td>${source}</td><td>${keyCell}</td><td>${statusBadge}</td><td>${remaining}</td><td class="mono">${rpmDisplay}</td><td class="muted">${deadline}</td><td class="muted wrap" style="max-width:100rem">${esc(d.note || "—")}</td><td class="muted wrap" style="max-width:100rem">${esc(d.review_note || "—")}</td><td><div class="row-actions">${actions}</div></td></tr>`;
+  return `<tr><td><input type="checkbox" class="don-chk" data-id="${d.id}"></td><td>${esc(d.service)}</td><td class="mono">${esc(d.model)}</td><td>${source}</td><td>${keyCell}</td><td>${statusBadge}</td><td>${remaining}</td><td class="mono">${rpmDisplay}</td><td class="muted">${deadline}</td><td class="muted"><div class="wrap" style="max-width:50rem">${esc(d.note || "—")}</div></td><td class="muted"><div class="wrap" style="max-width:50rem">${esc(d.review_note || "—")}</div></td><td><div class="row-actions">${actions}</div></td></tr>`;
 }
 
 async function loadAdminDonations() {
@@ -1241,8 +1241,8 @@ async function renderAdminDonationReview() {
         <td>${esc(a.service)}</td><td class="mono">${esc(a.model)}</td>
         <td class="muted">${fmtT(a.deadline)}</td>
         <td class="mono">${esc(String(a.total_count))}</td>
-        <td class="muted wrap" style="max-width:100rem">${esc(a.note || "—")}</td>
-        <td class="muted wrap" style="max-width:100rem">${esc(a.review_note || "—")}</td>
+        <td class="muted"><div class="wrap" style="max-width:50rem">${esc(a.note || "—")}</div></td>
+        <td class="muted"><div class="wrap" style="max-width:50rem">${esc(a.review_note || "—")}</div></td>
         <td class="muted">${fmtT(a.created_at)}</td>
         <td><div class="row-actions">
           <button class="secondary don-review-btn" data-id="${a.id}">${T('donationReviewBtn')}</button>
