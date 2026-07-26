@@ -1098,7 +1098,7 @@ async function showPricingEditDialog(svc, mdl, curPrice, curReward) {
         <div id="pricing-edit-msg" style="margin-bottom:.5rem"></div>
         <footer style="display:flex;gap:.5rem;justify-content:flex-end">
           <button type="button" id="pricing-edit-save">${T('save')}</button>
-          <button type="button" id="pricing-edit-cancel">${T('bulletinClose')}</button>
+          <button type="button" id="pricing-edit-cancel">${T('cancelEdit')}</button>
         </footer>
       </form>
     </article>`;
@@ -1384,7 +1384,7 @@ async function showDonationEditDialog(d) {
         <div id="don-edit-msg" style="margin-bottom:.5rem"></div>
         <footer style="display:flex;gap:.5rem;justify-content:flex-end">
           <button type="button" id="don-edit-save-btn">${T('save')}</button>
-          <button type="button" id="don-edit-cancel-btn">${T('bulletinClose')}</button>
+          <button type="button" id="don-edit-cancel-btn">${T('cancelEdit')}</button>
         </footer>
       </form>
     </article>`;
