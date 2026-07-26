@@ -739,7 +739,8 @@ async function renderMyDonations() {
     html += `<div class="table-wrap"><table><thead><tr>
       <th>${T('donationAppThService')}</th><th>${T('donationAppThModel')}</th>
       <th>${T('donationAppThStatus')}</th><th>${T('donationAppThCreated')}</th>
-      <th>${T('donationAppThNote')}</th><th>${T('donationAppThDonation')}</th>
+      <th>${T('donationAppThNote')}</th><th>${T('adminReviewNote')}</th>
+      <th>${T('donationAppThDonation')}</th>
     </tr></thead><tbody>`;
     for (const a of apps) {
       const statusBadge = a.status === "pending" ? `<span class="badge warn">${T('donationAppStatusPending')}</span>`
@@ -752,13 +753,12 @@ async function renderMyDonations() {
         else if (a.donation_status === "expired") donationCell = `<span class="badge off">${T('donationAppDonationExpired')}</span>`;
         if (a.donation_deadline) donationCell += ` <small class="muted">(${fmtT(a.donation_deadline)})</small>`;
       }
-      if (a.status === "rejected" && a.review_note) {
-        donationCell = `<span class="muted">${esc(a.review_note)}</span>`;
-      }
+      const adminNote = a.review_note ? esc(a.review_note) : "—";
       html += `<tr>
         <td>${esc(a.service)}</td><td class="mono">${esc(a.model)}</td>
         <td>${statusBadge}</td><td class="muted">${fmtT(a.created_at)}</td>
         <td class="muted wrap" style="max-width:28rem">${esc(a.note || "—")}</td>
+        <td class="muted wrap">${adminNote}</td>
         <td>${donationCell}</td>
       </tr>`;
     }
