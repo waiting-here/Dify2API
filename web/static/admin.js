@@ -460,6 +460,51 @@ function resolveLogUserFilter(text) {
   return { error: T('adminLogsUserNotFound').replace("{name}", q) };
 }
 
+function closeDropdownMenus() {
+  document.querySelectorAll(".dropdown-menu").forEach((menu) => {
+    menu.style.display = "none";
+    menu.style.visibility = "";
+    menu.style.left = "";
+    menu.style.top = "";
+  });
+}
+
+function positionDropdownMenu(trigger, menu) {
+  const viewportGap = 8;
+  const triggerGap = 4;
+
+  // Render invisibly first so the menu can be measured without flashing at
+  // its previous position. position:fixed keeps it outside table-wrap's clip.
+  menu.style.visibility = "hidden";
+  menu.style.display = "block";
+
+  const triggerRect = trigger.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const maxLeft = Math.max(viewportGap, window.innerWidth - menuRect.width - viewportGap);
+  const left = Math.min(Math.max(triggerRect.right - menuRect.width, viewportGap), maxLeft);
+
+  const below = triggerRect.bottom + triggerGap;
+  const above = triggerRect.top - menuRect.height - triggerGap;
+  let top = below;
+  if (below + menuRect.height > window.innerHeight - viewportGap && above >= viewportGap) {
+    top = above;
+  }
+  const maxTop = Math.max(viewportGap, window.innerHeight - menuRect.height - viewportGap);
+  top = Math.min(Math.max(top, viewportGap), maxTop);
+
+  menu.style.left = `${Math.round(left)}px`;
+  menu.style.top = `${Math.round(top)}px`;
+  menu.style.visibility = "";
+}
+
+function repositionOpenDropdownMenus() {
+  document.querySelectorAll(".dropdown-menu").forEach((menu) => {
+    if (menu.style.display !== "block") return;
+    const trigger = menu.closest(".dropdown-wrapper")?.querySelector(".dropdown-trigger");
+    if (trigger) positionDropdownMenu(trigger, menu);
+  });
+}
+
 function userRow(u) {
   const fmtLim = (v) => (v == null ? "" : String(v));
   const rpm = `
@@ -482,9 +527,9 @@ function userRow(u) {
       <td><div class="row-actions">
         <button class="secondary u-ban">${T('ban')}</button>
         <button class="secondary u-unban">${T('unban')}</button>
-        <div class="dropdown-wrapper" style="position:relative;display:inline-block">
+        <div class="dropdown-wrapper">
           <button class="secondary dropdown-trigger" style="width:auto;margin:0;padding:.4rem .5rem">…</button>
-          <div class="dropdown-menu" style="display:none;position:absolute;right:0;top:100%;z-index:100;background:var(--pico-card-background-color);border:1px solid var(--pico-muted-border-color);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.2);min-width:130px;padding:.25rem 0">
+          <div class="dropdown-menu">
             <button class="dropdown-item u-key" data-id="${u.id}" style="display:block;width:100%;text-align:left;background:none;border:none;border-radius:0;padding:.4rem .75rem;cursor:pointer;color:var(--pico-color);margin:0;font-size:.85rem">${T('resetUserKey')}</button>
             <button class="dropdown-item u-export" data-id="${u.id}" style="display:block;width:100%;text-align:left;background:none;border:none;border-radius:0;padding:.4rem .75rem;cursor:pointer;color:var(--pico-color);margin:0;font-size:.85rem">${T('adminExport')}</button>
             <button class="dropdown-item u-del" data-id="${u.id}" style="display:block;width:100%;text-align:left;background:none;border:none;border-radius:0;padding:.4rem .75rem;cursor:pointer;color:var(--pico-color);margin:0;font-size:.85rem">${T('deleteUser')}</button>
@@ -562,16 +607,14 @@ function bindUserRowActions() {
       ev.stopPropagation();
       const menu = btn.closest(".dropdown-wrapper").querySelector(".dropdown-menu");
       const isOpen = menu.style.display === "block";
-      document.querySelectorAll(".dropdown-menu").forEach((m) => (m.style.display = "none"));
-      menu.style.display = isOpen ? "none" : "block";
+      closeDropdownMenus();
+      if (!isOpen) positionDropdownMenu(btn, menu);
     };
   });
   // Close menu after dropdown item click
   document.querySelectorAll(".dropdown-item").forEach((item) => {
     item.addEventListener("click", () => {
-      setTimeout(() => {
-        document.querySelectorAll(".dropdown-menu").forEach((m) => (m.style.display = "none"));
-      }, 50);
+      setTimeout(closeDropdownMenus, 50);
     });
   });
 
@@ -1536,12 +1579,13 @@ function renderAdminBulletins() {
   loadAdminBulletins();
 }
 
+window.addEventListener("resize", repositionOpenDropdownMenus);
+document.addEventListener("scroll", repositionOpenDropdownMenus, true);
+
 // Delegate click events for donation actions (toggle/delete) and RPM save.
 document.addEventListener("click", async (ev) => {
   // Close all dropdown menus when clicking outside a dropdown wrapper.
-  if (!ev.target.closest(".dropdown-wrapper")) {
-    document.querySelectorAll(".dropdown-menu").forEach((m) => (m.style.display = "none"));
-  }
+  if (!ev.target.closest(".dropdown-wrapper")) closeDropdownMenus();
 
   const rpmBtn = ev.target.closest(".u-rpm-save");
   if (rpmBtn) {
