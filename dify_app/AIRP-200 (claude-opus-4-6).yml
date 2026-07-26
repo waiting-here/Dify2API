@@ -1,16 +1,16 @@
 app:
   description: Sample Dify App (AIRP-200) for Dify2API
-  icon: alien
-  icon_background: '#D1E9FF'
+  icon: 🏵️
+  icon_background: '#FFEAD5'
   icon_type: emoji
   mode: workflow
-  name: AIRP-200 (TBD)
+  name: AIRP-200 (claude-opus-4-6)
   use_icon_as_answer_icon: false
 dependencies:
 - current_identifier: null
   type: marketplace
   value:
-    marketplace_plugin_unique_identifier: langgenius/anthropic:0.3.24@c5e50da8c13c7ac75348df5ac75b9418c79736eb506064669dd7ca06cbd83537
+    marketplace_plugin_unique_identifier: langgenius/anthropic:0.3.25@d16aaa50a9fc344466d386c58b71168515e68f428fbd541677ea1e357b6a3e38
     version: null
 kind: app
 version: 0.6.0
@@ -3322,7 +3322,7 @@ workflow:
           required: false
           type: paragraph
           variable: assistant_prefill
-      height: 1200
+      height: 10588
       id: '2000000000001'
       position:
         x: 80
@@ -3344,7 +3344,7 @@ workflow:
           completion_params:
             context_1m: true
             max_tokens: 128000
-            temperature: 0.8
+            temperature: 0.9
           mode: chat
           name: claude-opus-4-6
           provider: langgenius/anthropic/anthropic
@@ -4601,8 +4601,55 @@ workflow:
       targetPosition: left
       type: custom
       width: 241
+    - data:
+        author: 
+        desc: ''
+        height: 354
+        selected: false
+        showAuthor: false
+        text: '{"root":{"children":[{"children":[{"detail":0,"format":0,"mode":"normal","style":"font-size:
+          16px;","text":"部分模型（例如claude-opus-4-6）","type":"text","version":1},{"detail":0,"format":1,"mode":"normal","style":"font-size:
+          16px;","text":"不支持预填充","type":"text","version":1},{"detail":0,"format":0,"mode":"normal","style":"font-size:
+          16px;","text":"！","type":"text","version":1}],"direction":null,"format":"","indent":0,"type":"paragraph","version":1,"textFormat":0,"textStyle":"font-size:
+          16px;"},{"children":[],"direction":null,"format":"","indent":0,"type":"paragraph","version":1,"textStyle":"font-size:
+          16px;","textFormat":0},{"children":[{"detail":0,"format":0,"mode":"normal","style":"font-size:
+          16px;","text":"请在","type":"text","version":1}],"direction":null,"format":"","indent":0,"type":"paragraph","version":1,"textFormat":0,"textStyle":"font-size:
+          16px;"},{"children":[{"detail":0,"format":0,"mode":"normal","style":"font-size:
+          16px;","text":"    酒馆->左下角魔法棒->提示词查看器","type":"text","version":1}],"direction":null,"format":"","indent":0,"type":"paragraph","version":1,"textFormat":0,"textStyle":"font-size:
+          16px;"},{"children":[{"detail":0,"format":0,"mode":"normal","style":"font-size:
+          16px;","text":"或","type":"text","version":1}],"direction":null,"format":"","indent":0,"type":"paragraph","version":1,"textFormat":0,"textStyle":"font-size:
+          16px;"},{"children":[{"detail":0,"format":0,"mode":"normal","style":"font-size:
+          16px;","text":"    普通用户前端->调试","type":"text","version":1}],"direction":null,"format":"","indent":0,"type":"paragraph","version":1,"textFormat":0,"textStyle":"font-size:
+          16px;"},{"children":[{"detail":0,"format":0,"mode":"normal","style":"font-size:
+          16px;","text":"自行 debug 检查：","type":"text","version":1}],"direction":null,"format":"","indent":0,"type":"paragraph","version":1,"textFormat":0,"textStyle":"font-size:
+          16px;"},{"children":[],"direction":null,"format":"","indent":0,"type":"paragraph","version":1,"textStyle":"font-size:
+          16px;","textFormat":0},{"children":[{"detail":0,"format":0,"mode":"normal","style":"font-size:
+          16px;","text":"你的卡+预设+正则+提示词预处理配置，输出的最后一条消息，身份是 system/user/assistant 的哪一个","type":"text","version":1}],"direction":null,"format":"","indent":0,"type":"paragraph","version":1,"textFormat":0,"textStyle":"font-size:
+          16px;"},{"children":[],"direction":null,"format":"","indent":0,"type":"paragraph","version":1,"textStyle":"font-size:
+          16px;","textFormat":0},{"children":[{"detail":0,"format":0,"mode":"normal","style":"font-size:
+          16px;","text":"Dify 不支持不在第一条的 system","type":"text","version":1}],"direction":null,"format":"","indent":0,"type":"paragraph","version":1,"textFormat":0,"textStyle":"font-size:
+          16px;"},{"children":[{"detail":0,"format":0,"mode":"normal","style":"font-size:
+          16px;","text":"而claude-opus-4-6等模型不支持 assistant 在最后一条","type":"text","version":1}],"direction":null,"format":"","indent":0,"type":"paragraph","version":1,"textFormat":0,"textStyle":"font-size:
+          16px;"}],"direction":null,"format":"","indent":0,"type":"root","version":1}}'
+        theme: blue
+        title: ''
+        type: ''
+        width: 450
+      height: 354
+      id: '1785039286753'
+      position:
+        x: 352.5
+        y: 460
+      positionAbsolute:
+        x: 352.5
+        y: 460
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom-note
+      width: 450
     viewport:
-      x: 552.5
-      y: 221
+      x: 523.5
+      y: 60
       zoom: 1
   rag_pipeline_variables: []

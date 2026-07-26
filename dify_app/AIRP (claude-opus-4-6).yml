@@ -10,7 +10,7 @@ dependencies:
 - current_identifier: null
   type: marketplace
   value:
-    marketplace_plugin_unique_identifier: langgenius/anthropic:0.3.24@c5e50da8c13c7ac75348df5ac75b9418c79736eb506064669dd7ca06cbd83537
+    marketplace_plugin_unique_identifier: langgenius/anthropic:0.3.25@d16aaa50a9fc344466d386c58b71168515e68f428fbd541677ea1e357b6a3e38
     version: null
 kind: app
 version: 0.6.0
@@ -274,7 +274,7 @@ workflow:
           required: false
           type: paragraph
           variable: user_10
-      height: 742
+      height: 682
       id: '1784230714832'
       position:
         x: 80
@@ -296,7 +296,7 @@ workflow:
           completion_params:
             context_1m: true
             max_tokens: 128000
-            temperature: 0.8
+            temperature: 0.9
           mode: chat
           name: claude-opus-4-6
           provider: langgenius/anthropic/anthropic
