@@ -1429,7 +1429,74 @@ async function showDonationEditDialog(d) {
 /* ---------------- admin bulletin management ---------------- */
 
 const adminBulletinPager = newPager(adminBulletinRow);
-let _bulletinEditingId = null;
+
+async function showBulletinEditDialog(b) {
+  const old = $("#bulletin-edit-dialog");
+  if (old) old.remove();
+
+  const dialog = document.createElement("dialog");
+  dialog.id = "bulletin-edit-dialog";
+  document.body.appendChild(dialog);
+
+  dialog.innerHTML = `
+    <article>
+      <header><h3>${T('bulletinEditTitle').replace("{id}", String(b.id))}</h3></header>
+      <form id="bulletin-edit-form">
+        <label>${T('bulletinFieldTitle')}<input name="title" value="${esc(b.title)}" required></label>
+        <label>${T('bulletinFieldContent')}<textarea name="content" rows="6" style="font-family:monospace" required>${esc(b.content)}</textarea></label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+          <label>${T('bulletinFieldType')}
+            <select name="type">
+              <option value="info" ${b.type==='info'?'selected':''}>${T('bulletinTypeInfo')}</option>
+              <option value="warning" ${b.type==='warning'?'selected':''}>${T('bulletinTypeWarning')}</option>
+              <option value="important" ${b.type==='important'?'selected':''}>${T('bulletinTypeImportant')}</option>
+            </select>
+          </label>
+          <label>${T('bulletinFieldSortOrder')}<input name="sort_order" type="number" value="${esc(String(b.sort_order))}"></label>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:.75rem;align-items:center">
+          <label style="display:flex;align-items:center;gap:.5rem;margin-bottom:0">
+            <input name="closable" type="checkbox" role="switch" ${b.closable?'checked':''}>
+            <span>${T('bulletinFieldClosable')}</span>
+          </label>
+          <label style="flex:1">${T('bulletinFieldExpiresAt')}<input name="expires_at" type="datetime-local" value="${b.expires_at ? fmtLocalDT(b.expires_at) : ''}"></label>
+        </div>
+        <div id="bulletin-edit-msg" style="margin-bottom:.5rem"></div>
+        <footer style="display:flex;gap:.5rem;justify-content:flex-end">
+          <button type="button" id="bulletin-edit-save">${T('save')}</button>
+          <button type="button" id="bulletin-edit-cancel">${T('cancelEdit')}</button>
+        </footer>
+      </form>
+    </article>`;
+  dialog.showModal();
+
+  const close = () => { dialog.close(); dialog.remove(); };
+  $("#bulletin-edit-cancel").onclick = close;
+  dialog.addEventListener("click", (e) => { if (e.target === dialog) close(); });
+
+  $("#bulletin-edit-save").onclick = async () => {
+    const f = $("#bulletin-edit-form");
+    const expiresVal = f.querySelector('[name="expires_at"]').value;
+    const body = {
+      title: f.querySelector('[name="title"]').value.trim(),
+      content: f.querySelector('[name="content"]').value,
+      type: f.querySelector('[name="type"]').value,
+      sort_order: parseInt(f.querySelector('[name="sort_order"]').value, 10) || 0,
+      closable: f.querySelector('[name="closable"]').checked,
+      expires_at: expiresVal ? Math.floor(new Date(expiresVal).getTime() / 1000) : null,
+    };
+    const msg = $("#bulletin-edit-msg");
+    msg.innerHTML = `<p class="muted">${T('loading')}</p>`;
+    try {
+      await api(`/api/admin/bulletins/${b.id}`, { method: "PUT", body });
+      toast(T('bulletinUpdated'));
+      close();
+      await loadAdminBulletins();
+    } catch (err) {
+      msg.innerHTML = `<div class="note err">${T('error').replace("{msg}", esc(err.message))}</div>`;
+    }
+  };
+}
 
 function adminBulletinRow(b) {
   const typeCell = bulletinTypeBadge(b.type);
@@ -1469,16 +1536,7 @@ async function loadAdminBulletins() {
         const id = parseInt(btn.dataset.id, 10);
         const b = adminBulletinPager.data.find((x) => x.id === id);
         if (!b) return;
-        _bulletinEditingId = id;
-        const f = $("#admin-bulletin-form");
-        f.querySelector('[name="title"]').value = b.title || "";
-        f.querySelector('[name="content"]').value = b.content || "";
-        f.querySelector('[name="type"]').value = b.type || "info";
-        f.querySelector('[name="sort_order"]').value = b.sort_order || 0;
-        f.querySelector('[name="closable"]').checked = !!b.closable;
-        f.querySelector('[name="expires_at"]').value = b.expires_at ? fmtLocalDT(b.expires_at) : "";
-        f.querySelector("button[type=submit]").textContent = T('bulletinSave');
-        f.scrollIntoView({ behavior: "smooth" });
+        showBulletinEditDialog(b);
       };
     });
     // Bind delete buttons.
@@ -1516,16 +1574,9 @@ async function onBulletinSubmit(e) {
   const note = $("#admin-bulletin-note");
   note.innerHTML = `<p class="muted">${T('loading')}</p>`;
   try {
-    if (_bulletinEditingId) {
-      await api(`/api/admin/bulletins/${_bulletinEditingId}`, { method: "PUT", body });
-      toast(T('bulletinUpdated'));
-    } else {
-      await api("/api/admin/bulletins", { method: "POST", body });
-      toast(T('bulletinCreated'));
-    }
-    _bulletinEditingId = null;
+    await api("/api/admin/bulletins", { method: "POST", body });
+    toast(T('bulletinCreated'));
     f.reset();
-    f.querySelector("button[type=submit]").textContent = T('bulletinAdd');
     note.innerHTML = "";
     await loadAdminBulletins();
   } catch (err) {
@@ -1572,10 +1623,7 @@ function renderAdminBulletins() {
       <div id="admin-bulletin-note"></div>
       <button type="submit">${T('bulletinAdd')}</button>
     </form>`;
-  // Cancel editing state when re-rendering.
-  _bulletinEditingId = null;
   const f = $("#admin-bulletin-form");
-  f.querySelector("button[type=submit]").textContent = T('bulletinAdd');
   f.onsubmit = onBulletinSubmit;
   loadAdminBulletins();
 }
