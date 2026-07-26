@@ -25,6 +25,7 @@ var serviceRegistry = []ServiceInfo{
 	{Name: "website-summary", Label: "网页总结（request_url + 可选 request_instruction）"},
 	{Name: "image-processing", Label: "图片理解（system_prompt 可选 + user_request + 图片）"},
 	{Name: "sillytavern-main-trimmed", Label: "SillyTavern 主对话（1–22 条宽松布局）"},
+	{Name: "sillytavern-main-200", Label: "SillyTavern 主对话（1–403 条宽松布局，200对）"},
 	{Name: "sillytavern-SP·数据库-填表", Label: "SillyTavern 数据库·填表（system + 可选 user_0 + assistant 打头交替 + 预填充）"},
 }
 
@@ -80,6 +81,9 @@ func TranslateForService(service string, messages []openai.Message) (map[string]
 		return translateImageProcessing(messages)
 	case "sillytavern-main-trimmed":
 		in, err := TranslateToSlots(messages)
+		return in, nil, err
+	case "sillytavern-main-200":
+		in, err := TranslateToSlots200(messages)
 		return in, nil, err
 	case "sillytavern-SP·数据库-填表":
 		in, err := translateShujukuFilling(messages)
@@ -211,6 +215,10 @@ func ContractVarsFor(service string) ContractVars {
 				"assistant_9", "user_9", "assistant_10", "user_10",
 			},
 		}
+	case "sillytavern-main-200":
+		opts := make([]string, len(slotNames200))
+		copy(opts, slotNames200)
+		return ContractVars{Required: nil, Optional: opts}
 	case "sillytavern-SP·数据库-填表":
 		return ContractVars{
 			Required: []string{"system_prompt", "assistant_0", "user_1", "assistant_1", "user_2", "assistant_2", "user_3", "assistant_prefill"},

@@ -40,9 +40,23 @@ func slotRole(name string) string {
 		return "system"
 	case strings.HasPrefix(name, "user_"):
 		return "user"
-	default: // assistant_N
+	default: // assistant_N or assistant_prefill
 		return "assistant"
 	}
+}
+
+// slotNames200 lists the Dify App input variables for the 200-pair service.
+// Layout: system_prompt, user_0, (assistant_i, user_i) × 200, assistant_prefill = 403 slots.
+var slotNames200 = generateSlotNames200()
+
+func generateSlotNames200() []string {
+	slots := []string{"system_prompt", "user_0"}
+	for i := 1; i <= 200; i++ {
+		slots = append(slots, fmt.Sprintf("assistant_%d", i))
+		slots = append(slots, fmt.Sprintf("user_%d", i))
+	}
+	slots = append(slots, "assistant_prefill")
+	return slots
 }
 
 // TranslateToSlots maps an OpenAI messages array onto the Dify App's input
@@ -97,6 +111,46 @@ func TranslateToSlots(messages []openai.Message) (map[string]string, error) {
 		}
 		inputs[slotNames[slotIdx]] = strings.TrimSpace(string(m.Content))
 		slotIdx++ // consume this slot
+	}
+
+	return inputs, nil
+}
+
+// TranslateToSlots200 is the same algorithm as TranslateToSlots but uses
+// slotNames200 (403 slots supporting up to 200 user/assistant pairs).
+// Valid range: 1–403 messages. S is optional.
+func TranslateToSlots200(messages []openai.Message) (map[string]string, error) {
+	if len(messages) < 1 {
+		return nil, fmt.Errorf("expected at least 1 message, got %d", len(messages))
+	}
+	if len(messages) > len(slotNames200) {
+		return nil, fmt.Errorf("expected at most %d messages, got %d", len(slotNames200), len(messages))
+	}
+
+	inputs := make(map[string]string, len(slotNames200))
+	for _, name := range slotNames200 {
+		inputs[name] = ""
+	}
+
+	slotIdx := 0
+	if messages[0].Role == "system" {
+		inputs["system_prompt"] = strings.TrimSpace(string(messages[0].Content))
+		slotIdx = 1
+	}
+
+	for mi := 0; mi < len(messages); mi++ {
+		if mi == 0 && messages[0].Role == "system" {
+			continue
+		}
+		m := messages[mi]
+		for slotIdx < len(slotNames200) && slotRole(slotNames200[slotIdx]) != m.Role {
+			slotIdx++
+		}
+		if slotIdx >= len(slotNames200) {
+			return nil, fmt.Errorf("messages[%d]: no remaining %q slot (all consumed)", mi, m.Role)
+		}
+		inputs[slotNames200[slotIdx]] = strings.TrimSpace(string(m.Content))
+		slotIdx++
 	}
 
 	return inputs, nil
