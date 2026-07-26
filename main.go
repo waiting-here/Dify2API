@@ -17,7 +17,7 @@ import (
 
 // Version is the Dify2API release version, printed by the -version flag.
 // 发版时与 git tag 同步（tag 格式 v<major.minor.patch>）。
-const Version = "1.0.0-rc.2"
+const Version = "1.0.0"
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
