@@ -1,6 +1,8 @@
 package dify
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -21,9 +23,9 @@ func TestNewClient_Timeout(t *testing.T) {
 
 func TestNewClient_StripsTrailingV1(t *testing.T) {
 	for in, want := range map[string]string{
-		"https://api.dify.ai":    "https://api.dify.ai",
-		"https://api.dify.ai/":   "https://api.dify.ai",
-		"https://api.dify.ai/v1": "https://api.dify.ai",
+		"https://api.dify.ai":     "https://api.dify.ai",
+		"https://api.dify.ai/":    "https://api.dify.ai",
+		"https://api.dify.ai/v1":  "https://api.dify.ai",
 		"https://api.dify.ai/v1/": "https://api.dify.ai",
 	} {
 		if got := NewClient(in, "k", time.Second).BaseURL; got != want {
@@ -349,5 +351,59 @@ func TestIsTimeoutError_GenericError(t *testing.T) {
 func TestIsTimeoutError_Nil(t *testing.T) {
 	if IsTimeoutError(nil) {
 		t.Error("IsTimeoutError(nil) = true, want false")
+	}
+}
+
+func stopServer(t *testing.T, handler func(w http.ResponseWriter, r *http.Request)) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(handler))
+}
+
+func TestStopWorkflow_Success(t *testing.T) {
+	srv := stopServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		wantPath := "/v1/workflows/tasks/task-123/stop"
+		if r.URL.Path != wantPath {
+			t.Errorf("path = %s, want %s", r.URL.Path, wantPath)
+		}
+		if r.Header.Get("Authorization") != "Bearer app-key" {
+			t.Errorf("auth = %s, want Bearer app-key", r.Header.Get("Authorization"))
+		}
+		var reqBody map[string]string
+		json.NewDecoder(r.Body).Decode(&reqBody)
+		if reqBody["user"] != "u42" {
+			t.Errorf("user = %s, want u42", reqBody["user"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"result":"success"}`)
+	})
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "app-key", 15*time.Second)
+	if err := c.StopWorkflow("task-123", "u42"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestStopWorkflow_Error(t *testing.T) {
+	srv := stopServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"code":"task_not_found","message":"task not found"}`)
+	})
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "app-key", 15*time.Second)
+	err := c.StopWorkflow("no-such-task", "u42")
+	if err == nil {
+		t.Fatal("expected error for 404")
+	}
+	var de *DifyError
+	if !errors.As(err, &de) {
+		t.Fatalf("expected DifyError, got %T: %v", err, err)
+	}
+	if de.Status != 404 {
+		t.Errorf("status = %d, want 404", de.Status)
 	}
 }

@@ -373,6 +373,44 @@ func parseSSE(r io.Reader, eventCh chan<- StreamEvent, errCh chan<- error, initi
 	}
 }
 
+// StopWorkflow sends a stop request for a streaming workflow task.
+// This is a best-effort call (failures are returned but should not block the
+// caller's exit path).
+func (c *Client) StopWorkflow(taskID, user string) error {
+	body, err := json.Marshal(map[string]string{"user": user})
+	if err != nil {
+		return fmt.Errorf("marshal stop request: %w", err)
+	}
+	httpReq, err := http.NewRequest("POST", c.BaseURL+"/v1/workflows/tasks/"+taskID+"/stop", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create stop request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return parseDifyErrorBody(resp.StatusCode, bodyBytes)
+	}
+
+	var result struct {
+		Result string `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("decode stop response: %w", err)
+	}
+	if result.Result != "success" {
+		return fmt.Errorf("unexpected stop result: %q", result.Result)
+	}
+	return nil
+}
+
 // IsTimeoutError reports whether err indicates that the upstream Dify server
 // likely received and processed the request, but the response was cut short
 // by a transport-level truncation (Cloudflare 100-second timeout on blocking

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -510,7 +511,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	// 7. Forward (streaming or blocking).
 	if req.Stream {
-		g.handleStreaming(writer, client, wfReq, modelName, user.ID, service, startedAt)
+		g.handleStreaming(writer, client, wfReq, modelName, user.ID, service, startedAt, r.Context())
 	} else {
 		g.handleBlocking(writer, client, wfReq, modelName, user.ID, service, startedAt)
 	}
@@ -663,13 +664,13 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 
 	// 7. Forward (streaming or blocking)
 	if req.Stream {
-		g.charityStreaming(charityWriter, client, wfReq, logModel, user.ID, service, startedAt, picked, pricing)
+		g.charityStreaming(charityWriter, client, wfReq, logModel, user.ID, service, startedAt, picked, pricing, r.Context())
 	} else {
 		g.charityBlocking(charityWriter, client, wfReq, logModel, user.ID, service, startedAt, picked, pricing)
 	}
 }
 
-func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time) {
+func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time, ctx context.Context) {
 	wfReq.ResponseMode = "streaming"
 	events, errCh := client.StreamWorkflow(wfReq)
 
@@ -725,16 +726,36 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 
 	conv := translator.NewStreamConverter(modelName)
 
+	difyUser := fmt.Sprintf("u%d", userID)
+	var taskID string
 	if firstEvt != nil {
+		if firstEvt.TaskID != "" {
+			taskID = firstEvt.TaskID
+		}
 		if msg := conv.Convert(*firstEvt); msg != nil {
 			fmt.Fprint(w, msg.Data)
 			flusher.Flush()
 		}
 	}
+loop:
 	for evt := range events {
+		if evt.TaskID != "" {
+			taskID = evt.TaskID
+		}
 		if msg := conv.Convert(evt); msg != nil {
 			fmt.Fprint(w, msg.Data)
 			flusher.Flush()
+		}
+		// Check if client disconnected
+		select {
+		case <-ctx.Done():
+			if taskID != "" {
+				if err := client.StopWorkflow(taskID, difyUser); err != nil {
+					log.Printf("[WARN] stop workflow %s: %v", taskID, err)
+				}
+			}
+			break loop
+		default:
 		}
 	}
 

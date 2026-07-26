@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -788,7 +789,7 @@ func (g *Gateway) handlePutCharity(w http.ResponseWriter, r *http.Request) {
 // --- Charity streaming/blocking handlers ---
 
 // charityStreaming handles streaming charity calls with donation accounting.
-func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time, donation *db.Donation, pricing *db.CharityPricing) {
+func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time, donation *db.Donation, pricing *db.CharityPricing, ctx context.Context) {
 	wfReq.ResponseMode = "streaming"
 	events, errCh := client.StreamWorkflow(wfReq)
 
@@ -836,16 +837,36 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 
 	conv := translator.NewStreamConverter(modelName)
 
+	difyUser := fmt.Sprintf("u%d", userID)
+	var taskID string
 	if firstEvt != nil {
+		if firstEvt.TaskID != "" {
+			taskID = firstEvt.TaskID
+		}
 		if msg := conv.Convert(*firstEvt); msg != nil {
 			fmt.Fprint(w, msg.Data)
 			flusher.Flush()
 		}
 	}
+loop:
 	for evt := range events {
+		if evt.TaskID != "" {
+			taskID = evt.TaskID
+		}
 		if msg := conv.Convert(evt); msg != nil {
 			fmt.Fprint(w, msg.Data)
 			flusher.Flush()
+		}
+		// Check if client disconnected
+		select {
+		case <-ctx.Done():
+			if taskID != "" {
+				if err := client.StopWorkflow(taskID, difyUser); err != nil {
+					log.Printf("[WARN] stop workflow %s: %v", taskID, err)
+				}
+			}
+			break loop
+		default:
 		}
 	}
 
@@ -1228,19 +1249,19 @@ func (g *Gateway) handleListMyApplications(w http.ResponseWriter, r *http.Reques
 // applicationJSON builds the API representation of a DonationApplication.
 func applicationJSON(a *db.DonationApplication) map[string]interface{} {
 	out := map[string]interface{}{
-		"id":          a.ID,
-		"user_id":     a.UserID,
-		"service":     a.Service,
-		"model":       a.Model,
+		"id":            a.ID,
+		"user_id":       a.UserID,
+		"service":       a.Service,
+		"model":         a.Model,
 		"dify_base_url": a.DifyBaseURL,
-		"has_key":     a.DifyAPIKeyEnc != "",
-		"total_count": a.TotalCount,
-		"deadline":    a.Deadline,
-		"rpm_limit":   a.RpmLimit,
-		"note":        a.Note,
-		"status":      a.Status,
-		"review_note": a.ReviewNote,
-		"created_at":  a.CreatedAt,
+		"has_key":       a.DifyAPIKeyEnc != "",
+		"total_count":   a.TotalCount,
+		"deadline":      a.Deadline,
+		"rpm_limit":     a.RpmLimit,
+		"note":          a.Note,
+		"status":        a.Status,
+		"review_note":   a.ReviewNote,
+		"created_at":    a.CreatedAt,
 	}
 	if a.ReviewerID.Valid {
 		out["reviewer_id"] = a.ReviewerID.Int64
