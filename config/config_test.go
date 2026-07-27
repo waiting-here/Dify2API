@@ -35,7 +35,7 @@ func TestLoadStartup_Defaults(t *testing.T) {
 		cfg.DBPath != "dify2api.db" || cfg.MasterKeyPath != "dify2api.key" {
 		t.Errorf("base defaults wrong: %+v", cfg)
 	}
-	if cfg.MaxChatInFlight != 64 || cfg.MaxRequestBodyMB != 10 || cfg.SSEBufferMB != 10 {
+	if cfg.MaxChatInFlight != 32 || cfg.MaxRequestBodyMB != 10 || cfg.SSEBufferMB != 10 {
 		t.Errorf("perf defaults wrong: %+v", cfg)
 	}
 	if cfg.LoginMaxFailures != 5 || cfg.LoginWindowMin != 10 || cfg.LoginLockMin != 60 || cfg.LoginMinLatencyMs != 300 {
@@ -99,7 +99,7 @@ func TestLoadStartup_InvalidIntsFallBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.MaxChatInFlight != 64 || cfg.SSEBufferMB != 10 {
+	if cfg.MaxChatInFlight != 32 || cfg.SSEBufferMB != 10 {
 		t.Errorf("invalid ints should fall back: %+v", cfg)
 	}
 }

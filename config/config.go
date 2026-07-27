@@ -34,7 +34,7 @@ type Config struct {
 	// ForceHTTPS redirects plain-HTTP requests to HTTPS (set via -force-https).
 	ForceHTTPS bool
 
-	// MaxChatInFlight is the global cap on concurrent chat requests (default 64).
+	// MaxChatInFlight is the global cap on concurrent chat requests (default 32).
 	MaxChatInFlight int
 	// MaxRequestBodyMB caps /v1/chat/completions request bodies (default 10).
 	MaxRequestBodyMB int
@@ -149,7 +149,7 @@ func LoadStartup(path string) (*Config, error) {
 		DBPath:            getOr(envMap, "DIFY2API_DB_PATH", "dify2api.db"),
 		MasterKeyPath:     getOr(envMap, "DIFY2API_MASTER_KEY_PATH", "dify2api.key"),
 		FaviconPath:       getOr(envMap, "FAVICON_PATH", ""),
-		MaxChatInFlight:   getIntOr(envMap, "MAX_CHAT_IN_FLIGHT", 64),
+		MaxChatInFlight:   getIntOr(envMap, "MAX_CHAT_IN_FLIGHT", 32),
 		MaxRequestBodyMB:  getIntOr(envMap, "MAX_REQUEST_BODY_MB", 10),
 		SSEBufferMB:       getIntOr(envMap, "SSE_BUFFER_MB", 10),
 		LoginMaxFailures:  getIntOr(envMap, "LOGIN_MAX_FAILURES", 5),
