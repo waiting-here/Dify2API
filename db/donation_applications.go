@@ -242,6 +242,13 @@ func (s *Store) ApproveApplication(id int64, reviewerID int64, m *ApproveApplica
 	}
 
 	// Create donation entry (inactive).
+	// Look up the applicant's Discord ID and username for the source fields.
+	var sourceDiscordID, sourceUsername string
+	if applicant, err := s.GetUserByID(app.UserID); err == nil && applicant != nil {
+		sourceDiscordID = applicant.DiscordID
+		sourceUsername = applicant.Username
+	}
+
 	res, err := s.db.Exec(
 		`INSERT INTO donations (service, model, dify_base_url, dify_api_key_enc, dify_api_key_sha256,
 		 source_user_id, source_discord_id, source_username, source_text,
@@ -249,7 +256,7 @@ func (s *Store) ApproveApplication(id int64, reviewerID int64, m *ApproveApplica
 		 created_at, updated_at)
 		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		service, model, baseURL, apiKeyEnc, keySHA256,
-		sql.NullInt64{Int64: app.UserID, Valid: true}, "", "", "",
+		sql.NullInt64{Int64: app.UserID, Valid: true}, sourceDiscordID, sourceUsername, "",
 		deadline, totalCount, totalCount, rpmLimit, DonationInactive, app.Note,
 		now, now,
 	)
