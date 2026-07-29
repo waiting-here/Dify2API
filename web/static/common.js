@@ -43,6 +43,59 @@ function toast(msg, ms = 2200) {
 /* ---------------- state & init ---------------- */
 const state = { site: null, me: null, mode: "user" };
 
+/* ---------------- theme ---------------- */
+(function initTheme() {
+  const theme = localStorage.getItem("d2a-theme");
+  applyTheme(theme);
+})();
+
+function getTheme() {
+  return localStorage.getItem("d2a-theme"); // null="auto", "light", "dark"
+}
+
+function applyTheme(theme) {
+  if (theme === "light" || theme === "dark") {
+    document.documentElement.setAttribute("data-theme", theme);
+  } else {
+    document.documentElement.removeAttribute("data-theme");
+  }
+}
+
+function cycleTheme() {
+  const cur = getTheme();
+  let next;
+  if (!cur) next = "light";
+  else if (cur === "light") next = "dark";
+  else next = null; // dark → auto
+  if (next) {
+    localStorage.setItem("d2a-theme", next);
+  } else {
+    localStorage.removeItem("d2a-theme");
+  }
+  applyTheme(next);
+  updateThemeButton();
+}
+
+function themeIcon(theme) {
+  if (theme === "light") return "☀";
+  if (theme === "dark") return "🌙";
+  return "🖥";
+}
+
+function themeTitle(theme) {
+  if (theme === "light") return T("themeLight");
+  if (theme === "dark") return T("themeDark");
+  return T("themeAuto");
+}
+
+function updateThemeButton() {
+  const btn = $("#theme-switch");
+  if (!btn) return;
+  const theme = getTheme();
+  btn.textContent = themeIcon(theme);
+  btn.title = themeTitle(theme);
+}
+
 (async function init() {
   try {
     state.site = await api("/api/site-info");
@@ -56,6 +109,7 @@ const state = { site: null, me: null, mode: "user" };
     const logo = $("#nav-logo");
     if (logo) logo.textContent = siteName;
   }
+  updateThemeButton();
   state.mode = location.hostname === state.site.admin_host ? "admin" : "user";
   try {
     state.me = await api("/api/me");
@@ -68,6 +122,10 @@ const state = { site: null, me: null, mode: "user" };
   if (langBtn) {
     langBtn.textContent = T('langSwitch');
     langBtn.onclick = switchLang;
+  }
+  const themeBtn = $("#theme-switch");
+  if (themeBtn) {
+    themeBtn.onclick = cycleTheme;
   }
   route();
 })();

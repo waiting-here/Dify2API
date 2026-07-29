@@ -21,6 +21,9 @@ const i18n = {
   copied: "已复制",
   copyFail: "复制失败，请刷新页面后重试",
   clickToCopy: "点击复制ID",
+  themeAuto: "主题：跟随系统",
+  themeLight: "主题：亮色",
+  themeDark: "主题：暗色",
   resetKey: "重置密钥",
   resetKeyConfirm: "重置后旧密钥立即失效，确定重置？",
   keyResetDone: "密钥已重置，请重新复制。",
@@ -648,6 +651,9 @@ database — debug data exists only within the current browser tab.
   copied: "Copied",
   copyFail: "Copy failed, please refresh the page and try again",
   clickToCopy: "Click to copy ID",
+  themeAuto: "Theme: Auto",
+  themeLight: "Theme: Light",
+  themeDark: "Theme: Dark",
   creditsBalance: "Current balance: {n}",
   creditsCheckin: "Check-in",
   creditsTitle: "Credits",
@@ -760,5 +766,7 @@ async function switchLang() {
   // Update the lang switch button text.
   const btn = $("#lang-switch");
   if (btn) btn.textContent = T('langSwitch');
+  // Update theme button title for the new language.
+  if (typeof updateThemeButton === 'function') updateThemeButton();
   route();
 }
