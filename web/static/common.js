@@ -297,3 +297,23 @@ function renderBulletinBoard() {
     <div class="row-actions" id="bulletin-pager" style="margin-top:.5rem"></div>`;
   loadBulletins();
 }
+
+// ---- click-to-copy ID badge (shared by admin.js) ----
+function idBadge(id) {
+  return `<span class="id-badge mono" data-copy-id="${id}" title="${T('clickToCopy')}: ${id}" style="font-size:.8em;cursor:pointer;background:var(--pico-muted-border-color);padding:0 .25rem;border-radius:3px">#${id}</span>`;
+}
+
+function bindIdBadgeClicks() {
+  document.querySelectorAll(".id-badge").forEach((el) => {
+    if (el._bound) return;
+    el._bound = true;
+    el.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(el.dataset.copyId);
+        toast(T('copied'));
+      } catch {
+        toast(T('copyFail'));
+      }
+    };
+  });
+}

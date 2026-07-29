@@ -518,7 +518,7 @@ function userRow(u) {
   return `
     <tr data-id="${u.id}">
       <td><input type="checkbox" class="user-chk" data-id="${u.id}"></td>
-      <td style="max-width:10rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${titleTxt}">${esc(u.username)} <span class="muted mono">(${esc(u.discord_id)})</span></td>
+      <td style="max-width:10rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${titleTxt}">${esc(u.username)} ${idBadge(u.id)} <span class="muted mono">(${esc(u.discord_id)})</span></td>
       <td class="mono">${u.credits != null ? String(u.credits) : "0"}</td>
       <td class="mono">${u.donation_credit != null ? String(u.donation_credit) : "0"}</td>
       <td>${rpm}</td>
@@ -675,7 +675,7 @@ function applyUserFilter() {
     (u.discord_id || "").toLowerCase().includes(q)
   ) : _allAdminUsers;
   userPager.page = 1;
-  userPager.afterRender = bindUserRowActions;
+  userPager.afterRender = () => { bindUserRowActions(); bindIdBadgeClicks(); };
   renderPaged(userPager, "#user-rows", "#user-pager", 8);
 }
 
@@ -973,7 +973,7 @@ function donationRow(d) {
   if (d.status !== "expired") {
     actions += `<button class="contrast outline don-delete" data-id="${d.id}" style="width:auto;margin:0">${T('charityBtnDelete')}</button>`;
   }
-  return `<tr><td><input type="checkbox" class="don-chk" data-id="${d.id}"></td><td>${esc(d.service)}</td><td class="mono">${esc(d.model)}</td><td>${source}</td><td>${keyCell}</td><td>${statusBadge}</td><td>${remaining}</td><td class="mono">${rpmDisplay}</td><td class="muted">${deadline}</td><td class="muted"><div class="wrap" style="max-width:50rem">${esc(d.note || "—")}</div></td><td class="muted"><div class="wrap" style="max-width:50rem">${esc(d.review_note || "—")}</div></td><td><div class="row-actions">${actions}</div></td></tr>`;
+  return `<tr><td><input type="checkbox" class="don-chk" data-id="${d.id}"></td><td>${esc(d.service)}</td><td class="mono">${esc(d.model)}</td><td>${sourceCell}</td><td>${keyCell}</td><td>${statusBadge}</td><td>${remaining}</td><td class="mono">${rpmDisplay}</td><td class="muted">${deadline}</td><td class="muted"><div class="wrap" style="max-width:50rem">${esc(d.note || "—")}</div></td><td class="muted"><div class="wrap" style="max-width:50rem">${esc(d.review_note || "—")}</div></td><td><div class="row-actions">${actions}</div></td></tr>`;
 }
 
 async function loadAdminDonations() {
@@ -984,6 +984,7 @@ async function loadAdminDonations() {
     donPager.afterRender = () => {
       clearBatchSelection("#don-select-all", ".don-chk", "don-batch-bar");
       bindBatchSelectAll("#don-select-all", ".don-chk", () => refBatchBar("don-batch-bar", ".don-chk"));
+      bindIdBadgeClicks();
     };
     renderPaged(donPager, "#don-rows", "#don-pager", 12);
   } catch (err) {
@@ -1234,7 +1235,7 @@ async function renderAdminDonationReview() {
       <th>${T('adminReviewNote')}</th><th>${T('donationAppThCreated')}</th><th>${T('thActions')}</th>
     </tr></thead><tbody>`;
     for (const a of apps) {
-      const applicant = a.username ? `${esc(a.username)} <span class="muted mono">(${esc(a.discord_id || "")})</span>` : esc(String(a.user_id));
+      const applicant = `${esc(a.username || String(a.user_id))} ${idBadge(a.user_id)} <span class="muted mono">(${esc(a.discord_id || "")})</span>`;
       html += `<tr>
         <td><input type="checkbox" class="review-chk" data-id="${a.id}"></td>
         <td>${applicant}</td>
@@ -1263,6 +1264,7 @@ async function renderAdminDonationReview() {
         if (a) showReviewDialog(a);
       };
     });
+    bindIdBadgeClicks();
   } catch (err) {
     container.innerHTML = `<p class="note err">${T('error').replace("{msg}", err.message)}</p>`;
   }
