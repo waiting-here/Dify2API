@@ -1637,3 +1637,121 @@ func TestListDonations_SourceDisplay(t *testing.T) {
 		t.Errorf("source_display = %q, want %q", sd, "source_user_display")
 	}
 }
+
+// --- review_note PATCH ---
+
+// TestDonationPatch_ReviewNote verifies that an admin can update review_note
+// on a donation that originated from an application.
+func TestDonationPatch_ReviewNote(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	store.SetSetting(db.SettingDonationEnabled, "true")
+	userC := appUserCookie(t, gw, store)
+	adminC := adminCookie(t, gw)
+
+	// User submits an application.
+	deadline := time.Now().Add(48 * time.Hour).Unix()
+	rec := donationRequest(gw, userC, "POST", "/api/me/donations", map[string]interface{}{
+		"service":       "general",
+		"model":         "review-note-test",
+		"dify_base_url": "https://dify.example.com/v1",
+		"dify_api_key":  "app-test-key",
+		"deadline":      deadline,
+		"total_count":   100,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("submit: status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var submitResp struct {
+		Application map[string]interface{} `json:"application"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &submitResp)
+	appID := int64(submitResp.Application["id"].(float64))
+
+	// Admin approves, creating a donation linked to the application.
+	rec2 := donationRequest(gw, adminC, "POST", fmt.Sprintf("/api/admin/donations/%d/approve", appID), map[string]interface{}{
+		"review_note": "初始审核备注",
+	})
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("approve: status = %d, body: %s", rec2.Code, rec2.Body.String())
+	}
+	var apprResp struct {
+		Donation map[string]interface{} `json:"donation"`
+	}
+	json.Unmarshal(rec2.Body.Bytes(), &apprResp)
+	donID := int64(apprResp.Donation["id"].(float64))
+
+	// Patch review_note on the donation.
+	rec3 := donationRequest(gw, adminC, "PATCH", fmt.Sprintf("/api/admin/donations/%d", donID), map[string]interface{}{
+		"review_note": "管理员更新后的备注",
+	})
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("patch review_note: status = %d, body: %s", rec3.Code, rec3.Body.String())
+	}
+	var patchResp struct {
+		OK       bool                   `json:"ok"`
+		Donation map[string]interface{} `json:"donation"`
+	}
+	json.Unmarshal(rec3.Body.Bytes(), &patchResp)
+	if !patchResp.OK {
+		t.Fatal("expected ok=true")
+	}
+
+	// Verify review_note is actually persisted in the application record.
+	app, _ := store.GetApplication(appID)
+	if app == nil {
+		t.Fatal("application not found")
+	}
+	if app.ReviewNote != "管理员更新后的备注" {
+		t.Errorf("review_note = %q, want %q", app.ReviewNote, "管理员更新后的备注")
+	}
+
+	// Verify the original user note on the donation is unchanged.
+	d, _ := store.GetDonation(donID)
+	if d != nil && d.Note != "" {
+		t.Errorf("donation note should be empty after approval (was %q)", d.Note)
+	}
+}
+
+// TestDonationPatch_ReviewNoteNoApplication verifies that patching review_note
+// on a donation without a corresponding application (admin-created) succeeds
+// silently without error.
+func TestDonationPatch_ReviewNoteNoApplication(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "x")
+	adminC := adminCookie(t, gw)
+
+	// Admin creates a donation directly (no application).
+	deadline := time.Now().Add(48 * time.Hour).Unix()
+	rec := donationRequest(gw, adminC, "POST", "/api/admin/donations", map[string]interface{}{
+		"service":       "general",
+		"model":         "direct-donation",
+		"dify_base_url": "https://dify.example.com/v1",
+		"dify_api_key":  "app-test-key-2",
+		"deadline":      deadline,
+		"total_count":   50,
+		"source_text":   "管理员直接创建",
+		"note":          "管理员直接创建",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create: status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var cr struct {
+		Donation map[string]interface{} `json:"donation"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &cr)
+	donID := int64(cr.Donation["id"].(float64))
+
+	// Patch review_note — should succeed even though no application record exists.
+	rec2 := donationRequest(gw, adminC, "PATCH", fmt.Sprintf("/api/admin/donations/%d", donID), map[string]interface{}{
+		"review_note": "此捐赠无对应申请",
+	})
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("patch review_note on direct donation: status = %d, body: %s", rec2.Code, rec2.Body.String())
+	}
+	var patchResp struct {
+		OK bool `json:"ok"`
+	}
+	json.Unmarshal(rec2.Body.Bytes(), &patchResp)
+	if !patchResp.OK {
+		t.Fatal("expected ok=true")
+	}
+}

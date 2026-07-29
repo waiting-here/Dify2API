@@ -1381,7 +1381,7 @@ async function showDonationEditDialog(d) {
           <label>${T('charityTotalCount')}<input name="total_count" type="number" min="1" value="${esc(String(d.total_count))}"></label>
           <label>${T('rpmLimitLabel')}<input name="rpm_limit" type="number" min="1" value="${esc(String(d.rpm_limit || 10))}" placeholder="${T('rpmLimitHint')}"></label>
         </div>
-        <label>${T('charityNote')}<input name="note" value="${esc(d.note || "")}" placeholder="${T('charityNote')}"></label>
+        <label>${T('adminReviewNote')}<textarea name="review_note" rows="2">${esc(d.review_note || "")}</textarea></label>
         <div id="don-edit-msg" style="margin-bottom:.5rem"></div>
         <footer style="display:flex;gap:.5rem;justify-content:flex-end">
           <button type="button" id="don-edit-save-btn">${T('save')}</button>
@@ -1405,7 +1405,7 @@ async function showDonationEditDialog(d) {
       model: f.querySelector("[name=model]").value.trim(),
       dify_base_url: f.querySelector("[name=dify_base_url]").value.trim(),
       dify_api_key: f.querySelector("[name=dify_api_key]").value.trim(),
-      note: f.querySelector("[name=note]").value.trim(),
+      review_note: f.querySelector("[name=review_note]").value.trim(),
     };
     if (deadline) body.deadline = deadline;
     if (totalCount > 0) body.total_count = totalCount;

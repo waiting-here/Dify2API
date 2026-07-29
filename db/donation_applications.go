@@ -311,6 +311,16 @@ func (s *Store) RejectApplication(id int64, reviewerID int64, reviewNote string)
 	return s.GetApplication(id)
 }
 
+// UpdateDonationReviewNote updates the review_note for a donation's originating application.
+// Does nothing (no error) when the donation has no corresponding application record.
+func (s *Store) UpdateDonationReviewNote(donationID int64, note string) error {
+	_, err := s.db.Exec(
+		`UPDATE donation_applications SET review_note=? WHERE donation_id=?`,
+		note, donationID,
+	)
+	return err
+}
+
 // GetReviewNotesByDonationIDs returns a map of donation_id → review_note
 // for the given donation IDs. Only donations that originated from an
 // application (with a review_note set) are included in the result.

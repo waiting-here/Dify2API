@@ -467,6 +467,7 @@ func (g *Gateway) handlePatchDonation(w http.ResponseWriter, r *http.Request) {
 		Deadline    int64  `json:"deadline"`
 		TotalCount  int    `json:"total_count"`
 		Note        string `json:"note"`
+		ReviewNote  string `json:"review_note"`
 		Status      string `json:"status"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -602,7 +603,18 @@ func (g *Gateway) handlePatchDonation(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if len(sets) == 0 {
+	// Handle review_note separately (stored in donation_applications, not donations table).
+	// Must be checked before the "no changes" guard to allow review_note-only updates.
+	reviewNoteUpdated := false
+	if req.ReviewNote != "" {
+		if err := g.Store.UpdateDonationReviewNote(id, strings.TrimSpace(req.ReviewNote)); err != nil {
+			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+		reviewNoteUpdated = true
+	}
+
+	if len(sets) == 0 && !reviewNoteUpdated {
 		// No changes requested.
 		validation := map[string]interface{}{"compatible": true, "message": "无字段变更"}
 		w.Header().Set("Content-Type", "application/json")
