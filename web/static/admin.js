@@ -518,7 +518,7 @@ function userRow(u) {
   return `
     <tr data-id="${u.id}">
       <td><input type="checkbox" class="user-chk" data-id="${u.id}"></td>
-      <td style="max-width:10rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${titleTxt}">${esc(u.username)} ${idBadge(u.id)} <span class="muted mono">(${esc(u.discord_id)})</span></td>
+      <td style="max-width:10rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${titleTxt}">${esc(u.username)} <span class="id-badge mono" data-copy-id="${esc(u.discord_id)}" title="${T('clickToCopy')}: ${esc(u.discord_id)}" style="cursor:pointer">(${esc(u.discord_id)})</span></td>
       <td class="mono">${u.credits != null ? String(u.credits) : "0"}</td>
       <td class="mono">${u.donation_credit != null ? String(u.donation_credit) : "0"}</td>
       <td>${rpm}</td>
@@ -955,7 +955,10 @@ function donationRow(d) {
   const statusBadge = `<span class="badge ${d.status === "active" ? "ok" : d.status === "expired" ? "off" : "warn"}">${esc(statusMap[d.status] || d.status)}</span>`;
   const remaining = `${d.remaining_count}/${d.total_count}`;
   const deadline = fmtT(d.deadline);
-  const source = esc(d.source_display || "—");
+  let sourceCell = esc(d.source_display || "—");
+  if (d.source_discord_id) {
+    sourceCell += ` <span class="id-badge mono" data-copy-id="${esc(d.source_discord_id)}" title="${T('clickToCopy')}: ${esc(d.source_discord_id)}" style="cursor:pointer">(${esc(d.source_discord_id)})</span>`;
+  }
   const rpmDisplay = esc(String(d.rpm_limit != null ? d.rpm_limit : 10));
   // Key column: show ⚠ when the same API key is shared across multiple donations.
   const keyCell = d.is_dup_key
@@ -1235,7 +1238,7 @@ async function renderAdminDonationReview() {
       <th>${T('adminReviewNote')}</th><th>${T('donationAppThCreated')}</th><th>${T('thActions')}</th>
     </tr></thead><tbody>`;
     for (const a of apps) {
-      const applicant = `${esc(a.username || String(a.user_id))} ${idBadge(a.user_id)} <span class="muted mono">(${esc(a.discord_id || "")})</span>`;
+      const applicant = `${esc(a.username || String(a.user_id))} <span class="id-badge mono" data-copy-id="${esc(a.discord_id || "")}" title="${T('clickToCopy')}: ${esc(a.discord_id || "")}" style="cursor:pointer">(${esc(a.discord_id || "")})</span>`;
       html += `<tr>
         <td><input type="checkbox" class="review-chk" data-id="${a.id}"></td>
         <td>${applicant}</td>
