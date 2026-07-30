@@ -159,7 +159,7 @@ func (g *Gateway) handleCreateConfig(w http.ResponseWriter, r *http.Request) {
 	cfg, err := g.Store.CreateAppConfig(u.ID, req.Model, req.BaseURL, req.APIKey, req.Note)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
-			g.writeError(w, http.StatusConflict, "conflict", "该模型名已在你的配置中存在")
+			g.writeError(w, http.StatusConflict, "conflict", t(g.resolveLang(r), "该模型名已在你的配置中存在", "This model name already exists in your configuration"))
 			return
 		}
 		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
@@ -198,7 +198,7 @@ func (g *Gateway) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 
 	if err := g.Store.UpdateAppConfig(id, u.ID, req.Model, req.BaseURL, req.APIKey, req.Note); err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
-			g.writeError(w, http.StatusConflict, "conflict", "该模型名已在你的配置中存在")
+			g.writeError(w, http.StatusConflict, "conflict", t(g.resolveLang(r), "该模型名已在你的配置中存在", "This model name already exists in your configuration"))
 			return
 		}
 		if strings.Contains(err.Error(), "not found") {

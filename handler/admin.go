@@ -647,14 +647,14 @@ func (g *Gateway) handlePatchPricing(w http.ResponseWriter, r *http.Request) {
 		var rewardPtr *int
 		if req.Price != nil {
 			if *req.Price < 0 {
-				g.writeError(w, http.StatusBadRequest, "invalid_request", "price 必须 >= 0")
+				g.writeError(w, http.StatusBadRequest, "invalid_request", t(g.resolveLang(r), "price 必须 >= 0", "price must be >= 0"))
 				return
 			}
 			price = *req.Price
 		}
 		if req.Reward != nil {
 			if *req.Reward < 0 {
-				g.writeError(w, http.StatusBadRequest, "invalid_request", "reward 必须 >= 0")
+				g.writeError(w, http.StatusBadRequest, "invalid_request", t(g.resolveLang(r), "reward 必须 >= 0", "reward must be >= 0"))
 				return
 			}
 			r := *req.Reward

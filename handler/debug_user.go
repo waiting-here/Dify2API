@@ -336,7 +336,7 @@ func (g *Gateway) handleDebugStream(w http.ResponseWriter, r *http.Request) {
 	s, ok := g.userDebug.sessions[u.ID]
 	g.userDebug.mu.RUnlock()
 	if !ok || !s.active {
-		g.writeError(w, http.StatusBadRequest, "debug_not_active", "调试模式未开启，请先开启调试")
+		g.writeError(w, http.StatusBadRequest, "debug_not_active", t(g.resolveLang(r), "调试模式未开启，请先开启调试", "Debug mode is not active, please enable it first"))
 		return
 	}
 
@@ -402,7 +402,7 @@ func (g *Gateway) handleDebugDryRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !g.userDebug.setDryRun(u.ID, req.DryRun) {
-		g.writeError(w, http.StatusBadRequest, "debug_not_active", "调试模式未开启")
+		g.writeError(w, http.StatusBadRequest, "debug_not_active", t(g.resolveLang(r), "调试模式未开启", "Debug mode is not active"))
 		return
 	}
 	log.Printf("[DEBUG_USER] user %d set dry_run=%v", u.ID, req.DryRun)

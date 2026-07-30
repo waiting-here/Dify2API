@@ -60,7 +60,7 @@ func (g *Gateway) handleCheckin(w http.ResponseWriter, r *http.Request) {
 	}
 	// Administrators do not participate in the credits system.
 	if u.IsAdmin {
-		g.writeError(w, http.StatusBadRequest, "invalid_request", "管理员不参与积分签到")
+		g.writeError(w, http.StatusBadRequest, "invalid_request", t(g.resolveLang(r), "管理员不参与积分签到", "Admins cannot participate in check-in"))
 		return
 	}
 
@@ -75,7 +75,7 @@ func (g *Gateway) handleCheckin(w http.ResponseWriter, r *http.Request) {
 
 	// credits_cap == 0 means check-in is globally disabled.
 	if creditsCap == 0 {
-		g.writeError(w, http.StatusBadRequest, "checkin_disabled", "签到系统未开放")
+		g.writeError(w, http.StatusBadRequest, "checkin_disabled", t(g.resolveLang(r), "签到系统未开放", "Check-in system is not available"))
 		return
 	}
 
@@ -89,7 +89,9 @@ func (g *Gateway) handleCheckin(w http.ResponseWriter, r *http.Request) {
 	// Cap check: when credits >= cap, refuse check-in.
 	if latest.Credits >= creditsCap {
 		g.writeError(w, http.StatusBadRequest, "credits_capped",
-			g.Config.I18N("credits_name", "zh", config.DefaultCreditsName)+fmt.Sprintf("超过上限%d，无法签到", creditsCap))
+			t(g.resolveLang(r),
+				g.Config.I18N("credits_name", "zh", config.DefaultCreditsName)+fmt.Sprintf("超过上限%d，无法签到", creditsCap),
+				g.Config.I18N("credits_name", "en", config.DefaultCreditsName)+fmt.Sprintf(" has reached the cap of %d, cannot check in", creditsCap)))
 		return
 	}
 
@@ -106,7 +108,7 @@ func (g *Gateway) handleCheckin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
-		g.writeError(w, http.StatusBadRequest, "already_checked_in", "今日已签到")
+		g.writeError(w, http.StatusBadRequest, "already_checked_in", t(g.resolveLang(r), "今日已签到", "Already checked in today"))
 		return
 	}
 

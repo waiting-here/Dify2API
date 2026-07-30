@@ -105,16 +105,9 @@ func (g *Gateway) registerWebRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /404", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(404); servePage(w, r, "404.html", 0) })
 }
 
-// resolvePageLang determines the page language for a request.
-// Priority: ?lang query param → logged-in user's Lang field → default "zh".
+// resolvePageLang delegates to resolveLang (the canonical language detection).
 func (g *Gateway) resolvePageLang(r *http.Request) string {
-	if q := r.URL.Query().Get("lang"); q == "en" || q == "zh" {
-		return q
-	}
-	if u := g.currentUser(r); u != nil && u.Lang == "en" {
-		return "en"
-	}
-	return "zh"
+	return g.resolveLang(r)
 }
 
 // serveCreditsLogo reads the configured credits logo file and serves it,

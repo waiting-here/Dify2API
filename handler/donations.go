@@ -180,14 +180,14 @@ func (g *Gateway) handleCreateDonation(w http.ResponseWriter, r *http.Request) {
 	// Validate deadline
 	if req.Deadline <= time.Now().Unix() {
 		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			"截止时间必须是将来的 Unix 时间戳")
+			t(g.resolveLang(r), "截止时间必须是将来的 Unix 时间戳", "Deadline must be a future Unix timestamp"))
 		return
 	}
 
 	// Validate total_count
 	if req.TotalCount <= 0 {
 		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			"捐赠次数必须为正整数")
+			t(g.resolveLang(r), "捐赠次数必须为正整数", "Donation count must be a positive integer"))
 		return
 	}
 
@@ -195,7 +195,7 @@ func (g *Gateway) handleCreateDonation(w http.ResponseWriter, r *http.Request) {
 	req.DifyBaseURL = strings.TrimRight(strings.TrimSpace(req.DifyBaseURL), "/")
 	if req.DifyBaseURL == "" || !(strings.HasPrefix(req.DifyBaseURL, "http://") || strings.HasPrefix(req.DifyBaseURL, "https://")) {
 		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			"dify_base_url 必须为合法的 http(s) URL")
+			t(g.resolveLang(r), "dify_base_url 必须为合法的 http(s) URL", "dify_base_url must be a valid http(s) URL"))
 		return
 	}
 
@@ -402,7 +402,7 @@ func (g *Gateway) handleDonationStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	default:
 		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			"状态值必须是 'active' 或 'inactive'")
+			t(g.resolveLang(r), "状态值必须是 'active' 或 'inactive'", "Status must be 'active' or 'inactive'"))
 		return
 	}
 
@@ -526,7 +526,7 @@ func (g *Gateway) handlePatchDonation(w http.ResponseWriter, r *http.Request) {
 		url := strings.TrimRight(strings.TrimSpace(req.DifyBaseURL), "/")
 		if !(strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://")) {
 			g.writeError(w, http.StatusBadRequest, "invalid_request",
-				"dify_base_url 必须为合法的 http(s) URL")
+				t(g.resolveLang(r), "dify_base_url 必须为合法的 http(s) URL", "dify_base_url must be a valid http(s) URL"))
 			return
 		}
 		if url != d.DifyBaseURL {
@@ -561,7 +561,7 @@ func (g *Gateway) handlePatchDonation(w http.ResponseWriter, r *http.Request) {
 	if req.Deadline > 0 && req.Deadline != d.Deadline {
 		if req.Deadline <= time.Now().Unix() {
 			g.writeError(w, http.StatusBadRequest, "invalid_request",
-				"截止时间必须是将来的 Unix 时间戳")
+				t(g.resolveLang(r), "截止时间必须是将来的 Unix 时间戳", "Deadline must be a future Unix timestamp"))
 			return
 		}
 		sets = append(sets, "deadline=?")
@@ -592,7 +592,7 @@ func (g *Gateway) handlePatchDonation(w http.ResponseWriter, r *http.Request) {
 			return
 		default:
 			g.writeError(w, http.StatusBadRequest, "invalid_request",
-				"状态值必须是 'active' 或 'inactive'")
+				t(g.resolveLang(r), "状态值必须是 'active' 或 'inactive'", "Status must be 'active' or 'inactive'"))
 			return
 		}
 		sets = append(sets, "status=?")
@@ -1169,7 +1169,7 @@ func (g *Gateway) handleCreateDonationApp(w http.ResponseWriter, r *http.Request
 	req.DifyBaseURL = strings.TrimRight(strings.TrimSpace(req.DifyBaseURL), "/")
 	if req.DifyBaseURL == "" || !(strings.HasPrefix(req.DifyBaseURL, "http://") || strings.HasPrefix(req.DifyBaseURL, "https://")) {
 		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			"dify_base_url 必须为合法的 http(s) URL")
+			t(g.resolveLang(r), "dify_base_url 必须为合法的 http(s) URL", "dify_base_url must be a valid http(s) URL"))
 		return
 	}
 
@@ -1183,14 +1183,14 @@ func (g *Gateway) handleCreateDonationApp(w http.ResponseWriter, r *http.Request
 	// Validate deadline.
 	if req.Deadline <= time.Now().Unix() {
 		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			"截止时间必须是将来的 Unix 时间戳")
+			t(g.resolveLang(r), "截止时间必须是将来的 Unix 时间戳", "Deadline must be a future Unix timestamp"))
 		return
 	}
 
 	// Validate total_count.
 	if req.TotalCount <= 0 {
 		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			"捐赠次数必须为正整数")
+			t(g.resolveLang(r), "捐赠次数必须为正整数", "Donation count must be a positive integer"))
 		return
 	}
 
@@ -1655,7 +1655,7 @@ func (g *Gateway) handleBatchDonationStatus(w http.ResponseWriter, r *http.Reque
 		// OK
 	default:
 		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			"状态值必须是 'active' 或 'inactive'")
+			t(g.resolveLang(r), "状态值必须是 'active' 或 'inactive'", "Status must be 'active' or 'inactive'"))
 		return
 	}
 

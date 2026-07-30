@@ -80,7 +80,7 @@ func (g *Gateway) handleMeDelete(w http.ResponseWriter, r *http.Request) {
 	// second call with ?confirm=DELETE actually performs the deletion.
 	if r.URL.Query().Get("confirm") != "DELETE" {
 		g.writeError(w, http.StatusBadRequest, "confirmation_required",
-			"此操作不可撤销。请附加 ?confirm=DELETE 以确认删除您的账号及全部数据。")
+			t(g.resolveLang(r), "此操作不可撤销。请附加 ?confirm=DELETE 以确认删除您的账号及全部数据。", "This action is irreversible. Append ?confirm=DELETE to confirm deletion of your account and all data."))
 		return
 	}
 

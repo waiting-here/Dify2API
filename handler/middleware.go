@@ -34,7 +34,7 @@ func (g *Gateway) webRateLimit(next http.Handler) http.Handler {
 			ip := clientIP(r)
 			if !g.webThrottle.allow(ip, now) {
 				w.Header().Set("Retry-After", strconv.Itoa(g.webThrottle.retryAfterSec(ip, now)))
-				g.writeError(w, http.StatusTooManyRequests, "rate_limited", "请求过于频繁，请稍后再试")
+				g.writeError(w, http.StatusTooManyRequests, "rate_limited", t(g.resolveLang(r), "请求过于频繁，请稍后再试", "Too many requests, please try again later"))
 				return
 			}
 		}
@@ -132,7 +132,7 @@ func (g *Gateway) maintenanceCheck(next http.Handler) http.Handler {
 		// Maintenance mode ON.
 		if strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, "/v1/") {
 			// API endpoints → JSON error.
-			g.writeError(w, http.StatusServiceUnavailable, "maintenance", "站点维护中")
+			g.writeError(w, http.StatusServiceUnavailable, "maintenance", t(g.resolveLang(r), "站点维护中", "Site under maintenance"))
 			return
 		}
 

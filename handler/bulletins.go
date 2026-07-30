@@ -91,7 +91,7 @@ func (g *Gateway) handleAdminCreateBulletin(w http.ResponseWriter, r *http.Reque
 		req.Type = db.BulletinTypeInfo
 	default:
 		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			"公告类型必须是 info、warning 或 important")
+			t(g.resolveLang(r), "公告类型必须是 info、warning 或 important", "Bulletin type must be info, warning, or important"))
 		return
 	}
 
@@ -103,7 +103,7 @@ func (g *Gateway) handleAdminCreateBulletin(w http.ResponseWriter, r *http.Reque
 		req.ContentType = "html"
 	default:
 		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			"content_type 必须是 html 或 markdown")
+			t(g.resolveLang(r), "content_type 必须是 html 或 markdown", "content_type must be 'html' or 'markdown'"))
 		return
 	}
 
@@ -115,16 +115,16 @@ func (g *Gateway) handleAdminCreateBulletin(w http.ResponseWriter, r *http.Reque
 		req.Lang = "zh"
 	default:
 		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			"lang 必须是 zh 或 en")
+			t(g.resolveLang(r), "lang 必须是 zh 或 en", "lang must be 'zh' or 'en'"))
 		return
 	}
 
 	if strings.TrimSpace(req.Title) == "" {
-		g.writeError(w, http.StatusBadRequest, "invalid_request", "标题为必填")
+		g.writeError(w, http.StatusBadRequest, "invalid_request", t(g.resolveLang(r), "标题为必填", "Title is required"))
 		return
 	}
 	if strings.TrimSpace(req.Content) == "" {
-		g.writeError(w, http.StatusBadRequest, "invalid_request", "正文为必填")
+		g.writeError(w, http.StatusBadRequest, "invalid_request", t(g.resolveLang(r), "正文为必填", "Content is required"))
 		return
 	}
 
@@ -176,11 +176,11 @@ func (g *Gateway) handleAdminUpdateBulletin(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if existing == nil {
-		g.writeError(w, http.StatusNotFound, "not_found", "公告不存在")
+		g.writeError(w, http.StatusNotFound, "not_found", t(g.resolveLang(r), "公告不存在", "Bulletin not found"))
 		return
 	}
 	if existing.IsSystem {
-		g.writeError(w, http.StatusForbidden, "forbidden", "系统公告不可编辑")
+		g.writeError(w, http.StatusForbidden, "forbidden", t(g.resolveLang(r), "系统公告不可编辑", "System bulletins cannot be edited"))
 		return
 	}
 
@@ -206,7 +206,7 @@ func (g *Gateway) handleAdminUpdateBulletin(w http.ResponseWriter, r *http.Reque
 		req.Type = db.BulletinTypeInfo
 	default:
 		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			"公告类型必须是 info、warning 或 important")
+			t(g.resolveLang(r), "公告类型必须是 info、warning 或 important", "Bulletin type must be info, warning, or important"))
 		return
 	}
 
@@ -218,7 +218,7 @@ func (g *Gateway) handleAdminUpdateBulletin(w http.ResponseWriter, r *http.Reque
 		req.ContentType = "html"
 	default:
 		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			"content_type 必须是 html 或 markdown")
+			t(g.resolveLang(r), "content_type 必须是 html 或 markdown", "content_type must be 'html' or 'markdown'"))
 		return
 	}
 
@@ -230,16 +230,16 @@ func (g *Gateway) handleAdminUpdateBulletin(w http.ResponseWriter, r *http.Reque
 		req.Lang = "zh"
 	default:
 		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			"lang 必须是 zh 或 en")
+			t(g.resolveLang(r), "lang 必须是 zh 或 en", "lang must be 'zh' or 'en'"))
 		return
 	}
 
 	if strings.TrimSpace(req.Title) == "" {
-		g.writeError(w, http.StatusBadRequest, "invalid_request", "标题为必填")
+		g.writeError(w, http.StatusBadRequest, "invalid_request", t(g.resolveLang(r), "标题为必填", "Title is required"))
 		return
 	}
 	if strings.TrimSpace(req.Content) == "" {
-		g.writeError(w, http.StatusBadRequest, "invalid_request", "正文为必填")
+		g.writeError(w, http.StatusBadRequest, "invalid_request", t(g.resolveLang(r), "正文为必填", "Content is required"))
 		return
 	}
 
@@ -265,7 +265,7 @@ func (g *Gateway) handleAdminUpdateBulletin(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if updated == nil {
-		g.writeError(w, http.StatusNotFound, "not_found", "公告不存在")
+		g.writeError(w, http.StatusNotFound, "not_found", t(g.resolveLang(r), "公告不存在", "Bulletin not found"))
 		return
 	}
 
@@ -295,11 +295,11 @@ func (g *Gateway) handleAdminDeleteBulletin(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if existing == nil {
-		g.writeError(w, http.StatusNotFound, "not_found", "公告不存在")
+		g.writeError(w, http.StatusNotFound, "not_found", t(g.resolveLang(r), "公告不存在", "Bulletin not found"))
 		return
 	}
 	if existing.IsSystem {
-		g.writeError(w, http.StatusForbidden, "forbidden", "系统公告不可删除")
+		g.writeError(w, http.StatusForbidden, "forbidden", t(g.resolveLang(r), "系统公告不可删除", "System bulletins cannot be deleted"))
 		return
 	}
 

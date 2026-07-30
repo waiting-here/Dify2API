@@ -225,7 +225,7 @@ func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
 		now := time.Now()
 		if !g.authFailThrottle.allow(ip, now) {
 			w.Header().Set("Retry-After", strconv.Itoa(g.authFailThrottle.retryAfterSec(ip, now)))
-			g.writeError(w, http.StatusTooManyRequests, "rate_limited", "认证失败过于频繁，请稍后再试")
+			g.writeError(w, http.StatusTooManyRequests, "rate_limited", t(g.resolveLang(r), "认证失败过于频繁，请稍后再试", "Too many authentication failures, please try again later"))
 			return
 		}
 		g.writeError(w, http.StatusUnauthorized, "unauthorized", "invalid or missing API key")
@@ -298,7 +298,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		defer func() { <-g.chatSem }()
 	default:
 		w.Header().Set("Retry-After", "3")
-		g.writeError(w, http.StatusTooManyRequests, "server_busy", "当前服务繁忙（并发已达上限），请稍后重试")
+		g.writeError(w, http.StatusTooManyRequests, "server_busy", t(g.resolveLang(r), "当前服务繁忙（并发已达上限），请稍后重试", "Service is busy (concurrency limit reached), please try again later"))
 		return
 	}
 
@@ -351,7 +351,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		ip := clientIP(r)
 		if !g.authFailThrottle.allow(ip, startedAt) {
 			w.Header().Set("Retry-After", strconv.Itoa(g.authFailThrottle.retryAfterSec(ip, startedAt)))
-			g.writeError(w, http.StatusTooManyRequests, "rate_limited", "认证失败过于频繁，请稍后再试")
+			g.writeError(w, http.StatusTooManyRequests, "rate_limited", t(g.resolveLang(r), "认证失败过于频繁，请稍后再试", "Too many authentication failures, please try again later"))
 			return
 		}
 		g.writeError(w, http.StatusUnauthorized, "unauthorized", "invalid or missing API key")
@@ -390,12 +390,12 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 				g.mailer.UserAutoBanned(user.Username, user.ID, until, banHours, violations)
 			}
 			g.writeError(w, http.StatusForbidden, "rpm_exceeded",
-				fmt.Sprintf("已超出类别 %s 每分钟上限（%d 次/分），且因 24 小时内累计 %d 次超限，账号已被自动封禁 %d 小时",
+				fmt.Sprintf(t(g.resolveLang(r), "已超出类别 %s 每分钟上限（%d 次/分），且因 24 小时内累计 %d 次超限，账号已被自动封禁 %d 小时", "Exceeded class %s RPM limit (%d/min); account auto-banned for %d hours due to %d violations in 24 hours"),
 					classLabel(violated), limits[violated], violations, banHours))
 			return
 		}
 		g.writeError(w, http.StatusForbidden, "rpm_exceeded",
-			fmt.Sprintf("已超出类别 %s 每分钟上限（%d 次/分），请稍后再试（24 小时内第 %d 次超限，累计 %d 次将自动封禁 %d 小时）",
+			fmt.Sprintf(t(g.resolveLang(r), "已超出类别 %s 每分钟上限（%d 次/分），请稍后再试（24 小时内第 %d 次超限，累计 %d 次将自动封禁 %d 小时", "Exceeded class %s RPM limit (%d/min), please try again later (violation #%d in 24h; %d violations trigger a %dh auto-ban)"),
 				classLabel(violated), limits[violated], violations, violationLimit, banHours))
 		return
 	}
@@ -411,7 +411,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			g.logRequest(user.ID, req.Model, service, startedAt, "error", "charity_disabled",
 				http.StatusForbidden, "全局捐赠/公益开关未开启", "")
 			g.writeError(w, http.StatusForbidden, "charity_disabled",
-				"捐赠/公益系统尚未被管理员启用")
+				t(g.resolveLang(r), "捐赠/公益系统尚未被管理员启用", "Donation/charity system has not been enabled by the administrator"))
 			return
 		}
 	}
@@ -552,7 +552,7 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "service_unavailable",
 			http.StatusServiceUnavailable, "pricing not found or disabled", "")
 		g.writeError(w, http.StatusServiceUnavailable, "service_unavailable",
-			"当前该公益模型不可用")
+			t(g.resolveLang(r), "当前该公益模型不可用", "This charity model is currently unavailable"))
 		return
 	}
 
@@ -561,9 +561,13 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "insufficient_credits",
 			http.StatusForbidden, fmt.Sprintf("credits %d < price %d", user.Credits, pricing.Price), "")
 		g.writeError(w, http.StatusForbidden, "insufficient_credits",
-			fmt.Sprintf("您的%s不足（需要 %d，当前 %d），无法调用公益模型",
-				g.Config.I18N("credits_name", "zh", config.DefaultCreditsName),
-				pricing.Price, user.Credits))
+			t(g.resolveLang(r),
+				fmt.Sprintf("您的%s不足（需要 %d，当前 %d），无法调用公益模型",
+					g.Config.I18N("credits_name", "zh", config.DefaultCreditsName),
+					pricing.Price, user.Credits),
+				fmt.Sprintf("Insufficient %s (need %d, have %d), cannot use charity model",
+					g.Config.I18N("credits_name", "en", config.DefaultCreditsName),
+					pricing.Price, user.Credits)))
 		return
 	}
 
@@ -577,7 +581,7 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "service_unavailable",
 			http.StatusServiceUnavailable, "no routable donations", "")
 		g.writeError(w, http.StatusServiceUnavailable, "service_unavailable",
-			"当前该公益模型无可用捐赠条目")
+			t(g.resolveLang(r), "当前该公益模型无可用捐赠条目", "No active donation entry found for this charity model"))
 		return
 	}
 
@@ -587,7 +591,7 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "charity_overloaded",
 			http.StatusTooManyRequests, "all routable donations at RPM limit", "")
 		g.writeError(w, http.StatusTooManyRequests, "charity_overloaded",
-			"当前该公益模型所有捐赠条目均已达速率上限，请稍后重试")
+			t(g.resolveLang(r), "当前该公益模型所有捐赠条目均已达速率上限，请稍后重试", "All donation entries for this charity model have reached their RPM limit, please try again later"))
 		return
 	}
 
@@ -830,7 +834,7 @@ func (g *Gateway) handleBlocking(w http.ResponseWriter, client *dify.Client, wfR
 			log.Printf("[ERROR] dify blocking timeout (user %d): %v", userID, err)
 			g.logRequest(userID, modelName, service, startedAt, "error", "upstream_timeout", http.StatusGatewayTimeout, err.Error(), "")
 			g.writeError(w, http.StatusGatewayTimeout, "upstream_timeout",
-				"上游 Dify 服务响应超时：请求可能因 Cloudflare 100 秒限制被截断。建议使用流式传输（stream: true）或拆分任务后重试。")
+				t("zh", "上游 Dify 服务响应超时：请求可能因 Cloudflare 100 秒限制被截断。建议使用流式传输（stream: true）或拆分任务后重试。", "Upstream Dify service timeout: the request may have been truncated by Cloudflare's 100-second limit. Consider using streaming (stream: true) or splitting the task."))
 			return
 		}
 		log.Printf("[ERROR] dify blocking (user %d): %v", userID, err)

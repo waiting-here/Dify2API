@@ -94,7 +94,7 @@ func (g *Gateway) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 	key := clientIP(r) + "|" + req.Username
 	now := time.Now()
 	if g.loginThrottle.locked(key, now) {
-		g.writeError(w, http.StatusForbidden, "login_locked", "尝试次数过多，请 15 分钟后再试")
+		g.writeError(w, http.StatusForbidden, "login_locked", t(g.resolveLang(r), "尝试次数过多，请 15 分钟后再试", "Too many attempts, please try again in 15 minutes"))
 		return
 	}
 
@@ -105,10 +105,10 @@ func (g *Gateway) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 			if g.mailer != nil {
 				g.mailer.AdminLoginLocked(clientIP(r), lockUntil)
 			}
-			g.writeError(w, http.StatusForbidden, "login_locked", "尝试次数过多，请 15 分钟后再试")
+			g.writeError(w, http.StatusForbidden, "login_locked", t(g.resolveLang(r), "尝试次数过多，请 15 分钟后再试", "Too many attempts, please try again in 15 minutes"))
 			return
 		}
-		g.writeError(w, http.StatusUnauthorized, "invalid_credentials", "用户名或密码错误")
+		g.writeError(w, http.StatusUnauthorized, "invalid_credentials", t(g.resolveLang(r), "用户名或密码错误", "Invalid username or password"))
 		return
 	}
 	g.loginThrottle.succeed(key)
