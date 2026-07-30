@@ -221,6 +221,101 @@ func (s *Store) ListAllRequestLogs(f LogFilter, limit, offset int) ([]*AdminRequ
 	return out, total, rows.Err()
 }
 
+// LogDayStat is one day's aggregated log counts.
+type LogDayStat struct {
+	Date    string `json:"date"`    // YYYY-MM-DD
+	Total   int    `json:"total"`
+	Success int    `json:"success"`
+	Error   int    `json:"error"`
+}
+
+// LogServiceStat is per-service aggregated log counts.
+type LogServiceStat struct {
+	Service string `json:"service"`
+	Count   int    `json:"count"`
+}
+
+// LogStats returns daily and per-service aggregates for the last N days.
+// since/until narrow the window further (0 = no bound).
+func (s *Store) LogStats(days int, since, until int64) ([]LogDayStat, []LogServiceStat, error) {
+	cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour).Unix()
+
+	// By day.
+	var dayConds []string
+	var dayArgs []interface{}
+	dayConds = append(dayConds, "started_at >= ?")
+	dayArgs = append(dayArgs, cutoff)
+	if since > 0 {
+		dayConds = append(dayConds, "started_at >= ?")
+		dayArgs = append(dayArgs, since)
+	}
+	if until > 0 {
+		dayConds = append(dayConds, "started_at <= ?")
+		dayArgs = append(dayArgs, until)
+	}
+	dayWhere := "WHERE " + strings.Join(dayConds, " AND ")
+
+	dayQuery := `SELECT date(started_at, 'unixepoch') AS day,
+		COUNT(*) AS total,
+		SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success,
+		SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error
+		FROM request_logs ` + dayWhere + `
+		GROUP BY day ORDER BY day ASC`
+
+	rows, err := s.db.Query(dayQuery, dayArgs...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+
+	var days_ []LogDayStat
+	for rows.Next() {
+		var d LogDayStat
+		if err := rows.Scan(&d.Date, &d.Total, &d.Success, &d.Error); err != nil {
+			return nil, nil, err
+		}
+		days_ = append(days_, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	// By service.
+	var svcConds []string
+	var svcArgs []interface{}
+	svcConds = append(svcConds, "started_at >= ?")
+	svcArgs = append(svcArgs, cutoff)
+	if since > 0 {
+		svcConds = append(svcConds, "started_at >= ?")
+		svcArgs = append(svcArgs, since)
+	}
+	if until > 0 {
+		svcConds = append(svcConds, "started_at <= ?")
+		svcArgs = append(svcArgs, until)
+	}
+	svcWhere := "WHERE " + strings.Join(svcConds, " AND ")
+
+	svcQuery := `SELECT service, COUNT(*) AS cnt
+		FROM request_logs ` + svcWhere + `
+		GROUP BY service ORDER BY cnt DESC LIMIT 10`
+
+	rows2, err := s.db.Query(svcQuery, svcArgs...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows2.Close()
+
+	var svcs []LogServiceStat
+	for rows2.Next() {
+		var s LogServiceStat
+		if err := rows2.Scan(&s.Service, &s.Count); err != nil {
+			return nil, nil, err
+		}
+		svcs = append(svcs, s)
+	}
+	return days_, svcs, rows2.Err()
+}
+
 // PurgeOldRequestLogs deletes logs older than the retention window that are
 // NOT bound to a donation (donation_id IS NULL). Donation-bound logs are
 // cleaned by PurgeExpiredDonationLogs which uses a per-donation gate.

@@ -81,6 +81,8 @@ async function initAdminLogsTab() {
   data.services.forEach((s) => { svcOpts += `<option value="${esc(s.name)}">${esc(s.name)}</option>`; });
   $("#alf-service").innerHTML = svcOpts;
   $("#alf-query").onclick = () => { adminLogPager.page = 1; loadAdminLogs(); };
+  $("#alf-export").onclick = onExportLogs;
+  await loadAdminLogStats();
   await loadAdminLogs();
 }
 
@@ -273,7 +275,9 @@ async function renderAdminDashboard() {
           <label class="afl-since">${T('adminLogsSince')}<input id="alf-since" type="datetime-local"></label>
           <label class="afl-until">${T('adminLogsUntil')}<input id="alf-until" type="datetime-local"></label>
           <button id="alf-query" class="afl-btn">${T('adminLogsQuery')}</button>
+          <button id="alf-export" class="secondary outline afl-btn" style="width:auto;margin:0">${T('adminLogsExport')}</button>
         </div>
+        <canvas id="alf-chart" width="600" height="160" style="display:none;width:100%;max-width:100%;margin-bottom:.8rem;border:1px solid var(--pico-muted-border-color);border-radius:4px"></canvas>
         <div class="table-wrap"><table><thead><tr><th>${T('thTime')}</th><th>${T('thUser')}</th><th>${T('thModel')}</th><th>${T('thService')}</th><th>${T('thDuration')}</th><th>${T('thStatus')}</th><th>${T('thHTTPStatus')}</th><th>${T('thErrorCode')}</th><th>${T('thErrorDetail')}</th><th>${T('thCreditsConsumed')}</th><th>${T('thAntiAbuse')}</th><th>${T('thDonationSource')}</th></tr></thead><tbody id="alf-rows"></tbody></table></div>
         <div class="row-actions" id="alf-pager" style="margin-top:.5rem"></div>
       </section>
@@ -801,6 +805,134 @@ function renderAdminLogs(data) {
   };
   c.querySelector(".pg-prev").onclick = () => { adminLogPager.page--; loadAdminLogs(); };
   c.querySelector(".pg-next").onclick = () => { adminLogPager.page++; loadAdminLogs(); };
+}
+
+async function onExportLogs() {
+  const params = new URLSearchParams();
+  const resolved = resolveLogUserFilter($("#alf-user").value);
+  if (resolved.id !== null) params.set("user_id", String(resolved.id));
+  const svc = $("#alf-service").value; if (svc) params.set("service", svc);
+  const model = $("#alf-model").value.trim(); if (model) params.set("model", model);
+  const st = $("#alf-status").value; if (st) params.set("status", st);
+  const since = $("#alf-since").value; if (since) params.set("since", String(Math.floor(new Date(since).getTime() / 1000)));
+  const until = $("#alf-until").value; if (until) params.set("until", String(Math.floor(new Date(until).getTime() / 1000)));
+  // Prompt for format.
+  const fmt = confirm(T('adminLogsExportCSVPrompt')) ? "csv" : "json";
+  params.set("format", fmt);
+  try {
+    const resp = await fetch(`/api/admin/logs/export?${params.toString()}`, { credentials: "same-origin" });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ error: { message: resp.statusText } }));
+      throw new Error((err.error && err.error.message) || resp.statusText);
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const disp = resp.headers.get("Content-Disposition") || "";
+    const m = disp.match(/filename="?([^"]+)"?/);
+    a.download = m ? m[1] : `dify2api-logs.${fmt}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast(T('adminLogsExported'));
+  } catch (err) {
+    toast(T('error').replace("{msg}", err.message), 3000);
+  }
+}
+
+async function loadAdminLogStats() {
+  const canvas = $("#alf-chart");
+  if (!canvas) return;
+  try {
+    const data = await api("/api/admin/logs/stats?days=7");
+    if (!data.by_day || data.by_day.length === 0) {
+      canvas.style.display = "none";
+      return;
+    }
+    canvas.style.display = "";
+    drawLogChart(canvas, data.by_day, data.by_service || []);
+  } catch {
+    canvas.style.display = "none";
+  }
+}
+
+function drawLogChart(canvas, byDay, byService) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth;
+  const h = Math.max(160, byService.length > 0 ? 80 + byService.length * 18 : 160);
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  canvas.style.height = h + "px";
+  const ctx = canvas.getContext("2d");
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+
+  const maxVal = Math.max(1, ...byDay.map(d => d.total));
+  const barW = Math.max(8, Math.min(30, (w - 80) / byDay.length - 4));
+  const chartL = 60, chartR = w - 10, chartT = 15, chartB = h - (byService.length > 0 ? 90 : 25);
+  const chartH = chartB - chartT;
+
+  // Axes.
+  ctx.strokeStyle = "var(--pico-muted-border-color)";
+  ctx.fillStyle = "var(--pico-muted-color)";
+  ctx.font = "10px sans-serif";
+  ctx.textAlign = "right";
+  ctx.beginPath(); ctx.moveTo(chartL, chartT); ctx.lineTo(chartL, chartB); ctx.lineTo(chartR, chartB); ctx.stroke();
+
+  // Y-axis labels.
+  for (let i = 0; i <= 4; i++) {
+    const y = chartB - (chartH * i / 4);
+    const val = Math.round(maxVal * i / 4);
+    ctx.fillText(String(val), chartL - 6, y + 4);
+    ctx.beginPath(); ctx.moveTo(chartL, y); ctx.lineTo(chartR, y); ctx.strokeStyle = "#eee"; ctx.stroke();
+    ctx.strokeStyle = "var(--pico-muted-border-color)";
+  }
+
+  // Bars.
+  const green = "#1a7f1a", red = "#b02020";
+  ctx.textAlign = "center";
+  byDay.forEach((d, i) => {
+    const x = chartL + i * ((chartR - chartL) / byDay.length) + 2;
+    const totalH = (d.total / maxVal) * chartH;
+    const errH = (d.error / maxVal) * chartH;
+    if (totalH > 0) {
+      ctx.fillStyle = green;
+      ctx.fillRect(x, chartB - totalH, barW, totalH - errH);
+      if (errH > 0) { ctx.fillStyle = red; ctx.fillRect(x, chartB - errH, barW, errH); }
+    }
+    // Date label (MM-DD).
+    const label = d.date.length >= 10 ? d.date.substring(5) : d.date;
+    ctx.fillStyle = "var(--pico-muted-color)";
+    ctx.font = "9px sans-serif";
+    ctx.fillText(label, x + barW / 2, chartB + 12);
+  });
+
+  // Legend.
+  const lx = chartL, ly = chartB + 35;
+  ctx.fillStyle = green; ctx.fillRect(lx, ly, 10, 10);
+  ctx.fillStyle = "var(--pico-muted-color)"; ctx.textAlign = "left"; ctx.font = "10px sans-serif";
+  ctx.fillText(T('adminLogsSuccess'), lx + 14, ly + 9);
+  ctx.fillStyle = red; ctx.fillRect(lx + 80, ly, 10, 10);
+  ctx.fillText(T('adminLogsError'), lx + 94, ly + 9);
+
+  // Per-service horizontal bars if there are services.
+  if (byService.length > 0) {
+    const sy = ly + 18;
+    ctx.fillText(T('adminLogsByService') + ":", lx, sy + 9);
+    const sMax = Math.max(1, ...byService.map(s => s.count));
+    byService.forEach((s, i) => {
+      const y = sy + 16 + i * 16;
+      ctx.fillStyle = "var(--pico-muted-color)"; ctx.textAlign = "right"; ctx.font = "10px sans-serif";
+      ctx.fillText(s.service, chartL - 6, y + 9);
+      const bw = Math.max(4, (s.count / sMax) * (chartR - chartL - 20));
+      ctx.fillStyle = "#4a7ddb";
+      ctx.fillRect(chartL + 4, y, bw, 11);
+      ctx.fillStyle = "var(--pico-muted-color)"; ctx.textAlign = "left";
+      ctx.fillText(String(s.count), chartL + bw + 8, y + 10);
+    });
+  }
 }
 
 /* ---------------- admin site: alert centre ---------------- */
