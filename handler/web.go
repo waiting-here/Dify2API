@@ -45,7 +45,7 @@ func (g *Gateway) registerWebRoutes(mux *http.ServeMux) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Cache-Control", "no-cache")
 		w.Write(data)
 	})
 
