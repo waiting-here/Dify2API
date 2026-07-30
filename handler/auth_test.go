@@ -114,6 +114,9 @@ func TestMe_And_Logout(t *testing.T) {
 	if _, ok := me["credits"]; !ok {
 		t.Errorf("me missing 'credits' field: %v", me)
 	}
+	if _, ok := me["donation_credit"]; !ok {
+		t.Errorf("me missing 'donation_credit' field: %v", me)
+	}
 
 	// Logout invalidates the session.
 	req = httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)

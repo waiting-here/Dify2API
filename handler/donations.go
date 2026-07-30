@@ -1328,6 +1328,40 @@ func (g *Gateway) handleListPendingApplications(w http.ResponseWriter, r *http.R
 	json.NewEncoder(w).Encode(map[string]interface{}{"applications": out})
 }
 
+// GET /api/admin/donations/applications — list all applications with optional filters.
+func (g *Gateway) handleAdminListApplications(w http.ResponseWriter, r *http.Request) {
+	if g.requireAdmin(r) == nil {
+		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
+		return
+	}
+
+	q := r.URL.Query()
+	status := q.Get("status")
+	userID, _ := strconv.ParseInt(q.Get("user_id"), 10, 64)
+	service := q.Get("service")
+	since, _ := strconv.ParseInt(q.Get("since"), 10, 64)
+	until, _ := strconv.ParseInt(q.Get("until"), 10, 64)
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	offset, _ := strconv.Atoi(q.Get("offset"))
+
+	apps, total, err := g.Store.ListApplicationsFiltered(status, userID, service, since, until, limit, offset)
+	if err != nil {
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+
+	out := make([]map[string]interface{}, 0, len(apps))
+	for _, a := range apps {
+		out = append(out, applicationJSON(a))
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"applications": out,
+		"total":        total,
+	})
+}
+
 // POST /api/admin/donations/{id}/approve — approve an application.
 func (g *Gateway) handleApproveApplication(w http.ResponseWriter, r *http.Request) {
 	if g.requireAdmin(r) == nil {

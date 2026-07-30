@@ -147,12 +147,13 @@ func (g *Gateway) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"id":       u.ID,
-		"username": u.Username,
-		"avatar":   u.Avatar,
-		"is_admin": u.IsAdmin,
-		"credits":  u.Credits,
-		"lang":     u.Lang,
+		"id":              u.ID,
+		"username":        u.Username,
+		"avatar":          u.Avatar,
+		"is_admin":        u.IsAdmin,
+		"credits":         u.Credits,
+		"donation_credit": u.DonationCredit,
+		"lang":            u.Lang,
 	})
 }
 

@@ -1755,3 +1755,152 @@ func TestDonationPatch_ReviewNoteNoApplication(t *testing.T) {
 		t.Fatal("expected ok=true")
 	}
 }
+
+// TestAdminListApplications tests GET /api/admin/donations/applications with filters.
+func TestAdminListApplications(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	store.SetSetting(db.SettingDonationEnabled, "true")
+	userC := appUserCookie(t, gw, store)
+	adminC := adminCookie(t, gw)
+
+	deadline := time.Now().Add(48 * time.Hour).Unix()
+
+	// Submit several applications to create test data.
+	submit := func(model, note string) int64 {
+		rec := donationRequest(gw, userC, "POST", "/api/me/donations", map[string]interface{}{
+			"service":       "general",
+			"model":         model,
+			"dify_base_url": "https://dify.example.com/v1",
+			"dify_api_key":  "app-key-" + model,
+			"deadline":      deadline,
+			"total_count":   100,
+			"note":          note,
+		})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("submit %s: status = %d, body: %s", model, rec.Code, rec.Body.String())
+		}
+		var resp struct {
+			Application map[string]interface{} `json:"application"`
+		}
+		json.Unmarshal(rec.Body.Bytes(), &resp)
+		return int64(resp.Application["id"].(float64))
+	}
+
+	id1 := submit("model-a", "note-a")
+	_ = submit("model-b", "note-b")
+
+	// Reject the first application.
+	recRej := donationRequest(gw, adminC, "POST", fmt.Sprintf("/api/admin/donations/%d/reject", id1), map[string]interface{}{
+		"review_note": "not good",
+	})
+	if recRej.Code != http.StatusOK {
+		t.Fatalf("reject: status = %d, body: %s", recRej.Code, recRej.Body.String())
+	}
+
+	// Test: no params → all applications.
+	rec := donationRequest(gw, adminC, "GET", "/api/admin/donations/applications", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list all: status = %d", rec.Code)
+	}
+	var resp struct {
+		Applications []map[string]interface{} `json:"applications"`
+		Total        int                       `json:"total"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.Total < 2 {
+		t.Errorf("total = %d, want >= 2", resp.Total)
+	}
+
+	// Test: ?status=rejected → only rejected.
+	rec2 := donationRequest(gw, adminC, "GET", "/api/admin/donations/applications?status=rejected", nil)
+	json.Unmarshal(rec2.Body.Bytes(), &resp)
+	if resp.Total != 1 {
+		t.Errorf("status=rejected total = %d, want 1", resp.Total)
+	}
+	if len(resp.Applications) != 1 {
+		t.Errorf("status=rejected apps = %d, want 1", len(resp.Applications))
+	}
+	if resp.Applications[0]["status"] != "rejected" {
+		t.Errorf("status = %v, want rejected", resp.Applications[0]["status"])
+	}
+
+	// Test: ?status=pending → only pending.
+	rec3 := donationRequest(gw, adminC, "GET", "/api/admin/donations/applications?status=pending", nil)
+	json.Unmarshal(rec3.Body.Bytes(), &resp)
+	if resp.Total != 1 {
+		t.Errorf("status=pending total = %d, want 1", resp.Total)
+	}
+
+	// Test: ?service=general → both.
+	rec4 := donationRequest(gw, adminC, "GET", "/api/admin/donations/applications?service=general", nil)
+	json.Unmarshal(rec4.Body.Bytes(), &resp)
+	if resp.Total < 2 {
+		t.Errorf("service=general total = %d, want >= 2", resp.Total)
+	}
+
+	// Test: ?user_id=N → only that user's applications.
+	// Get the user's ID by fetching from DB.
+	u, _ := store.GetUserByDiscordID("200")
+	if u == nil {
+		t.Fatal("test user not found")
+	}
+	rec5 := donationRequest(gw, adminC, "GET", fmt.Sprintf("/api/admin/donations/applications?user_id=%d", u.ID), nil)
+	json.Unmarshal(rec5.Body.Bytes(), &resp)
+	if resp.Total < 2 {
+		t.Errorf("user_id filter total = %d, want >= 2", resp.Total)
+	}
+
+	// Test: time range filter.
+	now := time.Now().Unix()
+	rec6 := donationRequest(gw, adminC, "GET",
+		fmt.Sprintf("/api/admin/donations/applications?since=%d", now-3600), nil)
+	json.Unmarshal(rec6.Body.Bytes(), &resp)
+	if resp.Total < 2 {
+		t.Errorf("time range total = %d, want >= 2", resp.Total)
+	}
+	// Future time range should return none.
+	rec7 := donationRequest(gw, adminC, "GET",
+		fmt.Sprintf("/api/admin/donations/applications?since=%d", now+86400), nil)
+	json.Unmarshal(rec7.Body.Bytes(), &resp)
+	if resp.Total != 0 {
+		t.Errorf("future time total = %d, want 0", resp.Total)
+	}
+
+	// Test: non-admin cannot access.
+	rec8 := donationRequest(gw, userC, "GET", "/api/admin/donations/applications", nil)
+	if rec8.Code != http.StatusForbidden {
+		t.Errorf("user access: status = %d, want 403", rec8.Code)
+	}
+
+	// Test: limit/offset pagination.
+	rec9 := donationRequest(gw, adminC, "GET", "/api/admin/donations/applications?limit=1&offset=0", nil)
+	json.Unmarshal(rec9.Body.Bytes(), &resp)
+	if len(resp.Applications) != 1 {
+		t.Errorf("limit=1 got %d applications, want 1", len(resp.Applications))
+	}
+	if resp.Total < 2 {
+		t.Errorf("total = %d (should be >= 2 despite limit)", resp.Total)
+	}
+}
+
+// TestAdminHost_ApplicationsAllowed verifies /api/admin/donations/applications
+// is accessible on the admin host (hostSeparation allowlist).
+func TestAdminHost_ApplicationsAllowed(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+	_ = store
+
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	wrapped := gw.Wrap(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/donations/applications", nil)
+	req.AddCookie(adminCookie)
+	req.Host = gw.Config.Admin.AdminHost
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("admin-host /api/admin/donations/applications: status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+}

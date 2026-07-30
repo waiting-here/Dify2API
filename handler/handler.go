@@ -106,6 +106,7 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 
 	// Charity / donation admin endpoints
 	mux.HandleFunc("POST /api/admin/donations", g.handleCreateDonation)
+	mux.HandleFunc("GET /api/admin/donations/applications", g.handleAdminListApplications)
 	mux.HandleFunc("GET /api/admin/donations", g.handleListDonations)
 	mux.HandleFunc("PATCH /api/admin/donations/{id}", g.handlePatchDonation)
 	mux.HandleFunc("POST /api/admin/donations/{id}/status", g.handleDonationStatus)

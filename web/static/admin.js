@@ -92,9 +92,17 @@ async function initAdminDonationsTab() {
   $("#don-user-list").innerHTML = data.users
     .map((u) => `<option value="${esc(u.username)}（${esc(u.discord_id)}）"></option>`)
     .join("");
+  // Populate application history filters.
+  $("#dah-service").innerHTML = `<option value="">${T('donationAppStatusAll')}</option>` +
+    data.services.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("");
+  $("#dah-user-list").innerHTML = data.users
+    .map((u) => `<option value="${esc(u.username)}（${esc(u.discord_id)}）"></option>`)
+    .join("");
+  $("#dah-query").onclick = () => { donAppHistoryPager.page = 1; loadDonationAppHistory(); };
   $("#donation-form").onsubmit = onDonationSubmit;
   $("#pricing-form").onsubmit = onPricingSubmit;
   await renderAdminDonationReview();
+  await loadDonationAppHistory();
   await loadAdminDonations();
   await loadPricing();
 }
@@ -304,6 +312,20 @@ async function renderAdminDashboard() {
         <div id="donation-review-section" style="margin-bottom:1.5rem;padding:.75rem;border:1px solid var(--pico-muted-border-color);border-radius:4px">
           <h4>${T('donationReviewSection')}</h4>
           <div id="donation-review-content"></div>
+        </div>
+        <!-- Application history -->
+        <div id="donation-app-history-section" style="margin-bottom:1.5rem;padding:.75rem;border:1px solid var(--pico-muted-border-color);border-radius:4px">
+          <h4>${T('donationAppHistory')}</h4>
+          <div id="don-app-history-filter" style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:end;margin-bottom:.75rem">
+            <label style="min-width:8rem">${T('donationAppFilterUser')}<input id="dah-user" list="dah-user-list" placeholder="${T('adminLogsUserSearch')}" autocomplete="off"><datalist id="dah-user-list"></datalist></label>
+            <label style="min-width:8rem">${T('donationAppFilterService')}<select id="dah-service"><option value="">${T('donationAppStatusAll')}</option></select></label>
+            <label style="min-width:8rem">${T('donationAppFilterStatus')}<select id="dah-status"><option value="">${T('donationAppStatusAll')}</option><option value="pending">${T('donationAppStatusPending')}</option><option value="approved">${T('donationAppStatusApproved')}</option><option value="rejected">${T('donationAppStatusRejected')}</option></select></label>
+            <label style="min-width:8rem">${T('donationAppFilterTime')}<input id="dah-since" type="datetime-local" style="min-width:10rem"></label>
+            <label style="min-width:8rem"><span style="visibility:hidden">.</span><input id="dah-until" type="datetime-local" style="min-width:10rem"></label>
+            <button id="dah-query" class="secondary" style="width:auto;margin:0">${T('adminLogsQuery')}</button>
+          </div>
+          <div id="donation-app-history-content"></div>
+          <div class="row-actions" id="don-app-history-pager" style="margin-top:.5rem"></div>
         </div>
         <form id="donation-form">
           <div style="display:grid;grid-template-columns:auto 1fr;gap:.5rem;align-items:end">
@@ -1325,8 +1347,9 @@ function showReviewDialog(app) {
       await api(`/api/admin/donations/${app.id}/reject`, { method: "POST", body: { review_note: note } });
       toast(T('donationReviewRejected'));
       close();
-      // Refresh both the pending list and the donation table.
+      // Refresh both the pending list, history and the donation table.
       await renderAdminDonationReview();
+      await loadDonationAppHistory();
       await loadAdminDonations();
     } catch (err) {
       msg.innerHTML = `<span class="note err">${T('error').replace("{msg}", err.message)}</span>`;
@@ -1354,11 +1377,108 @@ function showReviewDialog(app) {
       toast(T('donationReviewApproved'));
       close();
       await renderAdminDonationReview();
+      await loadDonationAppHistory();
       await loadAdminDonations();
     } catch (err) {
       msg.innerHTML = `<span class="note err">${T('error').replace("{msg}", err.message)}</span>`;
     }
   };
+}
+
+// --- Application history ---
+const donAppHistoryPager = { page: 1, perPage: 15, total: 0 };
+
+async function loadDonationAppHistory() {
+  const container = $("#donation-app-history-content");
+  const pagerContainer = $("#don-app-history-pager");
+  if (!container) return;
+
+  const userText = $("#dah-user").value.trim();
+  let userId = null;
+  if (userText) {
+    const resolved = resolveLogUserFilter(userText);
+    if (resolved.error) {
+      container.innerHTML = `<p class="note err">${esc(resolved.error)}</p>`;
+      if (pagerContainer) pagerContainer.innerHTML = "";
+      return;
+    }
+    userId = resolved.id;
+  }
+
+  const params = new URLSearchParams();
+  const statusVal = $("#dah-status").value;
+  const serviceVal = $("#dah-service").value;
+  const sinceVal = $("#dah-since").value;
+  const untilVal = $("#dah-until").value;
+  if (statusVal) params.set("status", statusVal);
+  if (userId) params.set("user_id", String(userId));
+  if (serviceVal) params.set("service", serviceVal);
+  if (sinceVal) params.set("since", String(Math.floor(new Date(sinceVal).getTime() / 1000)));
+  if (untilVal) params.set("until", String(Math.floor(new Date(untilVal).getTime() / 1000)));
+  params.set("limit", String(donAppHistoryPager.perPage));
+  params.set("offset", String((donAppHistoryPager.page - 1) * donAppHistoryPager.perPage));
+
+  try {
+    const resp = await api(`/api/admin/donations/applications?${params.toString()}`);
+    const apps = resp.applications || [];
+    donAppHistoryPager.total = resp.total || 0;
+    const total = donAppHistoryPager.total;
+    const pages = Math.max(1, Math.ceil(total / donAppHistoryPager.perPage));
+    donAppHistoryPager.page = Math.min(Math.max(1, donAppHistoryPager.page), pages);
+
+    if (apps.length === 0) {
+      container.innerHTML = `<p class="muted">${T('empty')}</p>`;
+      if (pagerContainer) pagerContainer.innerHTML = "";
+      return;
+    }
+
+    const statusBadge = (s) => s === "pending" ? `<span class="badge warn">${T('donationAppStatusPending')}</span>`
+      : s === "approved" ? `<span class="badge ok">${T('donationAppStatusApproved')}</span>`
+      : `<span class="badge err">${T('donationAppStatusRejected')}</span>`;
+
+    const rows = apps.map((a) => {
+      const applicant = `${esc(a.username || String(a.user_id))} <span class="id-badge mono" data-copy-id="${esc(a.discord_id || "")}" title="${T('clickToCopy')}: ${esc(a.discord_id || "")}" style="cursor:pointer">(${esc(a.discord_id || "")})</span>`;
+      return `<tr>
+        <td>${applicant}</td>
+        <td>${esc(a.service)}</td><td class="mono">${esc(a.model)}</td>
+        <td>${statusBadge(a.status)}</td>
+        <td class="muted"><div class="wrap" style="max-width:50rem">${esc(a.note || "—")}</div></td>
+        <td class="muted"><div class="wrap" style="max-width:50rem">${esc(a.review_note || "—")}</div></td>
+        <td class="muted">${fmtT(a.created_at)}</td>
+      </tr>`;
+    }).join("");
+
+    container.innerHTML = `<div class="table-wrap"><table><thead><tr>
+      <th>${T('donationAppThUser')}</th><th>${T('donationAppThService')}</th><th>${T('donationAppThModel')}</th>
+      <th>${T('donationAppThStatus')}</th><th>${T('donationAppThNote')}</th><th>${T('adminReviewNote')}</th>
+      <th>${T('donationAppThCreated')}</th>
+    </tr></thead><tbody>${rows}</tbody></table></div>`;
+
+    if (pagerContainer) {
+      pagerContainer.innerHTML = `
+        <select class="pg-size">
+          ${[5, 10, 20, 50].map((n) => `<option value="${n}" ${donAppHistoryPager.perPage === n ? "selected" : ""}>${n} ${T('paginationPerPage')}</option>`).join("")}
+        </select>
+        <button class="pg-prev secondary" ${donAppHistoryPager.page <= 1 ? "disabled" : ""}>‹</button>
+        <span class="muted">${T('paginationInfo').replace('{page}', String(donAppHistoryPager.page)).replace('{pages}', String(pages)).replace('{total}', String(total))}</span>
+        <button class="pg-next secondary" ${donAppHistoryPager.page >= pages ? "disabled" : ""}>›</button>`;
+      pagerContainer.querySelector(".pg-size").onchange = (e) => {
+        donAppHistoryPager.perPage = parseInt(e.target.value, 10);
+        donAppHistoryPager.page = 1;
+        loadDonationAppHistory();
+      };
+      pagerContainer.querySelector(".pg-prev").onclick = () => {
+        if (donAppHistoryPager.page > 1) { donAppHistoryPager.page--; loadDonationAppHistory(); }
+      };
+      pagerContainer.querySelector(".pg-next").onclick = () => {
+        if (donAppHistoryPager.page < pages) { donAppHistoryPager.page++; loadDonationAppHistory(); }
+      };
+    }
+    bindIdBadgeClicks();
+  } catch (err) {
+    container.innerHTML = `<p class="note err">${T('error').replace("{msg}", err.message)}</p>`;
+    if (pagerContainer) pagerContainer.innerHTML = "";
+  }
 }
 
 async function showDonationEditDialog(d) {
@@ -1749,6 +1869,7 @@ document.addEventListener("click", async (ev) => {
       toast(T('donationReviewApproved'), 2200);
       clearBatchSelection("#review-select-all", ".review-chk", "don-review-batch-bar");
       await renderAdminDonationReview();
+      await loadDonationAppHistory();
       await loadAdminDonations();
     } catch (err) { toast(T('error').replace("{msg}", err.message), 3000); }
     return;
@@ -1764,6 +1885,7 @@ document.addEventListener("click", async (ev) => {
       toast(T('donationReviewRejected'), 2200);
       clearBatchSelection("#review-select-all", ".review-chk", "don-review-batch-bar");
       await renderAdminDonationReview();
+      await loadDonationAppHistory();
       await loadAdminDonations();
     } catch (err) { toast(T('error').replace("{msg}", err.message), 3000); }
     return;

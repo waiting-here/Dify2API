@@ -647,6 +647,7 @@ async function renderCharityCard() {
     ${globalOff ? `<article class="note warn" style="margin-bottom:.75rem">${T('userCharityBanner')}</article>` : ""}
     <h3>${T('userCharityToggle')}</h3>
     <p class="muted">${esc(statusText)}</p>
+    <p class="muted">${T('userCharityContribution').replace('{n}', String(state.me.donation_credit || 0))}</p>
     ${enabled ? `<article class="note warn">${T('userCharityConfirm').replace(/\n\n[^\n]+$/, '')}</article>` : ""}
     <label style="display:flex;align-items:center;gap:.75rem">
       <input type="checkbox" id="charity-toggle" role="switch" ${enabled ? "checked" : ""}>
@@ -752,6 +753,8 @@ async function renderMyDonations() {
         else if (a.donation_status === "active") donationCell = `<span class="badge ok">${T('donationAppDonationActive')}</span> ${a.donation_remaining}/${a.donation_total}`;
         else if (a.donation_status === "expired") donationCell = `<span class="badge off">${T('donationAppDonationExpired')}</span>`;
         if (a.donation_deadline) donationCell += ` <small class="muted">(${fmtT(a.donation_deadline)})</small>`;
+      } else if (a.status === "rejected") {
+        donationCell = `<button class="secondary donation-resubmit-btn" data-id="${a.id}" style="width:auto;margin:0">${T('donationResubmit')}</button>`;
       }
       const adminNote = a.review_note ? esc(a.review_note) : "—";
       html += `<tr>
@@ -813,6 +816,38 @@ async function renderMyDonations() {
       }
     };
   }
+
+  // Bind resubmit buttons for rejected applications.
+  document.querySelectorAll(".donation-resubmit-btn").forEach((btn) => {
+    btn.onclick = async () => {
+      const id = parseInt(btn.dataset.id, 10);
+      const a = apps.find((x) => x.id === id);
+      if (!a) return;
+      // Show the apply form.
+      const form2 = $("#donation-apply-form");
+      if (form2) {
+        form2.style.display = "";
+        // Populate service dropdown if not already populated.
+        if (!$("#don-apply-service").children.length) {
+          try {
+            const { services } = await api("/api/services");
+            $("#don-apply-service").innerHTML = (services || []).map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("");
+          } catch { /* silently ignore */ }
+        }
+        // Pre-fill fields from the rejected application.
+        $("#don-apply-service").value = a.service || "";
+        form2.querySelector("[name=model]").value = a.model || "";
+        form2.querySelector("[name=dify_base_url]").value = a.dify_base_url || "";
+        form2.querySelector("[name=deadline]").value = a.deadline ? fmtLocalDT(a.deadline) : "";
+        form2.querySelector("[name=total_count]").value = a.total_count || "";
+        form2.querySelector("[name=rpm_limit]").value = a.rpm_limit || "";
+        form2.querySelector("[name=note]").value = a.note || "";
+        // Do NOT pre-fill API key (security: only has_key is returned).
+        form2.querySelector("[name=dify_api_key]").value = "";
+        form2.querySelector("[name=dify_api_key]").placeholder = T('donationResubmitKeyHint');
+      }
+    };
+  });
 }
 
 const cfgPager = newPager(cfgRow);

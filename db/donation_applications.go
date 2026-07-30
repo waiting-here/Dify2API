@@ -328,6 +328,90 @@ func (s *Store) UpdateDonationReviewNote(donationID int64, note string) error {
 	return err
 }
 
+// ListApplicationsFiltered returns applications matching optional filters with pagination.
+// status empty = all (pending/approved/rejected); userID > 0 = exact match;
+// service non-empty = exact match; since/until > 0 = created_at range.
+// limit default 100, max 500. Returns the total matching count for pagination.
+func (s *Store) ListApplicationsFiltered(status string, userID int64, service string, since, until int64, limit, offset int) ([]*DonationApplication, int, error) {
+	var conds []string
+	var args []interface{}
+
+	if status != "" {
+		conds = append(conds, "da.status = ?")
+		args = append(args, status)
+	}
+	if userID > 0 {
+		conds = append(conds, "da.user_id = ?")
+		args = append(args, userID)
+	}
+	if service != "" {
+		conds = append(conds, "da.service = ?")
+		args = append(args, service)
+	}
+	if since > 0 {
+		conds = append(conds, "da.created_at >= ?")
+		args = append(args, since)
+	}
+	if until > 0 {
+		conds = append(conds, "da.created_at <= ?")
+		args = append(args, until)
+	}
+
+	where := ""
+	if len(conds) > 0 {
+		where = " WHERE " + strings.Join(conds, " AND ")
+	}
+
+	// Total count.
+	countArgs := make([]interface{}, len(args))
+	copy(countArgs, args)
+	var total int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM donation_applications da`+where, countArgs...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	// Clamp limit.
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	query := `SELECT da.id, da.user_id, da.service, da.model, da.dify_base_url, da.dify_api_key_enc,
+		da.total_count, da.deadline, da.rpm_limit, da.note, da.status,
+		da.reviewer_id, da.review_note, da.donation_id, da.created_at,
+		u.username, u.discord_id
+		FROM donation_applications da
+		LEFT JOIN users u ON u.id = da.user_id` +
+		where + ` ORDER BY da.created_at DESC LIMIT ? OFFSET ?`
+
+	allArgs := append(args, limit, offset)
+	rows, err := s.db.Query(query, allArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var out []*DonationApplication
+	for rows.Next() {
+		var a DonationApplication
+		if err := rows.Scan(
+			&a.ID, &a.UserID, &a.Service, &a.Model, &a.DifyBaseURL, &a.DifyAPIKeyEnc,
+			&a.TotalCount, &a.Deadline, &a.RpmLimit, &a.Note, &a.Status,
+			&a.ReviewerID, &a.ReviewNote, &a.DonationID, &a.CreatedAt,
+			&a.Username, &a.DiscordID,
+		); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, &a)
+	}
+	return out, total, rows.Err()
+}
+
 // GetReviewNotesByDonationIDs returns a map of donation_id → review_note
 // for the given donation IDs. Only donations that originated from an
 // application (with a review_note set) are included in the result.
