@@ -1526,7 +1526,7 @@ function showReviewDialog(app) {
 }
 
 // --- Application history ---
-const donAppHistoryPager = { page: 1, perPage: 15, total: 0 };
+const donAppHistoryPager = { page: 1, perPage: 10, total: 0 };
 
 async function loadDonationAppHistory() {
   const container = $("#donation-app-history-content");
