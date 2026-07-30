@@ -269,3 +269,151 @@ func TestBulletinPublicHostSeparation_AdminHost(t *testing.T) {
 		t.Errorf("admin-host public bulletins: status = %d, want 200; body: %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestBulletinCreate_ContentTypeAndLang(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	// 1. Create with content_type:"markdown" + lang:"en".
+	createBody := `{"title":"MD Bulletin","content":"# Hello\n\n**bold**","type":"info","sort_order":10,"content_type":"markdown","lang":"en"}`
+	createReq := httptest.NewRequest(http.MethodPost, "/api/admin/bulletins", strings.NewReader(createBody))
+	createReq.AddCookie(adminCookie)
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	mux.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("create markdown+en: status = %d, body: %s", createRec.Code, createRec.Body.String())
+	}
+	var cr struct {
+		Bulletin map[string]interface{} `json:"bulletin"`
+	}
+	json.NewDecoder(createRec.Body).Decode(&cr)
+	if ct, _ := cr.Bulletin["content_type"].(string); ct != "markdown" {
+		t.Errorf("content_type = %q, want markdown", ct)
+	}
+	if lg, _ := cr.Bulletin["lang"].(string); lg != "en" {
+		t.Errorf("lang = %q, want en", lg)
+	}
+	id := int64(cr.Bulletin["id"].(float64))
+
+	// Cleanup.
+	gw.Store.DeleteBulletin(id)
+
+	// 2. Create without content_type → default "html".
+	createBody2 := `{"title":"Default","content":"<p>Hi</p>","type":"info"}`
+	createReq2 := httptest.NewRequest(http.MethodPost, "/api/admin/bulletins", strings.NewReader(createBody2))
+	createReq2.AddCookie(adminCookie)
+	createReq2.Header.Set("Content-Type", "application/json")
+	createRec2 := httptest.NewRecorder()
+	mux.ServeHTTP(createRec2, createReq2)
+	if createRec2.Code != http.StatusOK {
+		t.Fatalf("create default: status = %d, body: %s", createRec2.Code, createRec2.Body.String())
+	}
+	json.NewDecoder(createRec2.Body).Decode(&cr)
+	if ct, _ := cr.Bulletin["content_type"].(string); ct != "html" {
+		t.Errorf("default content_type = %q, want html", ct)
+	}
+	if lg, _ := cr.Bulletin["lang"].(string); lg != "zh" {
+		t.Errorf("default lang = %q, want zh", lg)
+	}
+	id2 := int64(cr.Bulletin["id"].(float64))
+	gw.Store.DeleteBulletin(id2)
+
+	// 3. Create with illegal content_type → 400.
+	createBody3 := `{"title":"Bad","content":"x","type":"info","content_type":"textile"}`
+	createReq3 := httptest.NewRequest(http.MethodPost, "/api/admin/bulletins", strings.NewReader(createBody3))
+	createReq3.AddCookie(adminCookie)
+	createReq3.Header.Set("Content-Type", "application/json")
+	createRec3 := httptest.NewRecorder()
+	mux.ServeHTTP(createRec3, createReq3)
+	if createRec3.Code != http.StatusBadRequest {
+		t.Errorf("illegal content_type: status = %d, want 400; body: %s", createRec3.Code, createRec3.Body.String())
+	}
+
+	// 4. Create with illegal lang → 400.
+	createBody4 := `{"title":"Bad","content":"x","type":"info","lang":"jp"}`
+	createReq4 := httptest.NewRequest(http.MethodPost, "/api/admin/bulletins", strings.NewReader(createBody4))
+	createReq4.AddCookie(adminCookie)
+	createReq4.Header.Set("Content-Type", "application/json")
+	createRec4 := httptest.NewRecorder()
+	mux.ServeHTTP(createRec4, createReq4)
+	if createRec4.Code != http.StatusBadRequest {
+		t.Errorf("illegal lang: status = %d, want 400; body: %s", createRec4.Code, createRec4.Body.String())
+	}
+}
+
+func TestBulletinUpdate_ContentTypeAndLang(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	// Create a bulletin with defaults.
+	createBody := `{"title":"UpdateMe","content":"<p>Old</p>","type":"info"}`
+	createReq := httptest.NewRequest(http.MethodPost, "/api/admin/bulletins", strings.NewReader(createBody))
+	createReq.AddCookie(adminCookie)
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	mux.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("create: status = %d", createRec.Code)
+	}
+	var cr struct {
+		Bulletin map[string]interface{} `json:"bulletin"`
+	}
+	json.NewDecoder(createRec.Body).Decode(&cr)
+	id := int64(cr.Bulletin["id"].(float64))
+	defer gw.Store.DeleteBulletin(id)
+
+	// Update content_type and lang.
+	updateBody := fmt.Sprintf(`{"title":"Updated","content":"# MD","type":"info","content_type":"markdown","lang":"en"}`)
+	updateReq := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/admin/bulletins/%d", id), strings.NewReader(updateBody))
+	updateReq.AddCookie(adminCookie)
+	updateReq.Header.Set("Content-Type", "application/json")
+	updateRec := httptest.NewRecorder()
+	mux.ServeHTTP(updateRec, updateReq)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("update: status = %d, body: %s", updateRec.Code, updateRec.Body.String())
+	}
+	var ur struct {
+		Bulletin map[string]interface{} `json:"bulletin"`
+	}
+	json.NewDecoder(updateRec.Body).Decode(&ur)
+	if ct, _ := ur.Bulletin["content_type"].(string); ct != "markdown" {
+		t.Errorf("updated content_type = %q, want markdown", ct)
+	}
+	if lg, _ := ur.Bulletin["lang"].(string); lg != "en" {
+		t.Errorf("updated lang = %q, want en", lg)
+	}
+}
+
+func TestRenderBulletinContent(t *testing.T) {
+	// Markdown rendering.
+	html := RenderBulletinContent("markdown", "# Hello\n\n**bold**")
+	if !strings.Contains(html, "<h1>Hello</h1>") {
+		t.Errorf("markdown: expected <h1>Hello</h1> in output, got: %s", html)
+	}
+	if !strings.Contains(html, "<strong>bold</strong>") {
+		t.Errorf("markdown: expected <strong>bold</strong> in output, got: %s", html)
+	}
+
+	// Empty string: Goldmark may return empty string or an empty paragraph; both are fine.
+	_ = RenderBulletinContent("markdown", "")
+
+	// HTML content_type: pass through unchanged.
+	raw := "<p>Hello</p>"
+	pass := RenderBulletinContent("html", raw)
+	if pass != raw {
+		t.Errorf("html passthrough: got %q, want %q", pass, raw)
+	}
+
+	// Unknown content_type: pass through unchanged.
+	pass2 := RenderBulletinContent("unknown", raw)
+	if pass2 != raw {
+		t.Errorf("unknown passthrough: got %q, want %q", pass2, raw)
+	}
+}

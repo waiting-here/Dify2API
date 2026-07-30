@@ -14,23 +14,24 @@ const (
 
 // Bulletin represents a public announcement entry.
 type Bulletin struct {
-	ID        int64
-	Title     string
-	Content   string // HTML body, no escaping.
-	Type      string // info / warning / important
-	SortOrder int
-	Closable  bool
-	CreatedAt int64
-	ExpiresAt sql.NullInt64 // NULL = never expires
-	IsSystem  bool
-	SystemKey sql.NullString // non-nil for system-generated bulletins
-	Lang      string         // default "zh", reserved for beta i18n
+	ID          int64
+	Title       string
+	Content     string // Raw body (HTML or Markdown depending on ContentType).
+	ContentType string // "html" (default) or "markdown"
+	Type        string // info / warning / important
+	SortOrder   int
+	Closable    bool
+	CreatedAt   int64
+	ExpiresAt   sql.NullInt64 // NULL = never expires
+	IsSystem    bool
+	SystemKey   sql.NullString // non-nil for system-generated bulletins
+	Lang        string         // "zh" (default) or "en"
 }
 
 func scanBulletin(row interface{ Scan(...interface{}) error }) (*Bulletin, error) {
 	var b Bulletin
 	if err := row.Scan(
-		&b.ID, &b.Title, &b.Content, &b.Type, &b.SortOrder,
+		&b.ID, &b.Title, &b.Content, &b.ContentType, &b.Type, &b.SortOrder,
 		&b.Closable, &b.CreatedAt, &b.ExpiresAt,
 		&b.IsSystem, &b.SystemKey, &b.Lang,
 	); err != nil {
@@ -43,11 +44,11 @@ func scanBulletin(row interface{ Scan(...interface{}) error }) (*Bulletin, error
 func (s *Store) CreateBulletin(b *Bulletin) (*Bulletin, error) {
 	now := time.Now().Unix()
 	res, err := s.db.Exec(
-		`INSERT INTO bulletins (title, content, type, sort_order, closable,
+		`INSERT INTO bulletins (title, content, content_type, type, sort_order, closable,
 		 created_at, expires_at, is_system, system_key, lang)
-		 VALUES (?,?,?,?,?,?,?,0,NULL,'zh')`,
-		b.Title, b.Content, b.Type, b.SortOrder, boolToInt(b.Closable),
-		now, b.ExpiresAt,
+		 VALUES (?,?,?,?,?,?,?,?,0,NULL,?)`,
+		b.Title, b.Content, b.ContentType, b.Type, b.SortOrder, boolToInt(b.Closable),
+		now, b.ExpiresAt, b.Lang,
 	)
 	if err != nil {
 		return nil, err
@@ -71,11 +72,11 @@ func (s *Store) UpdateBulletin(id int64, b *Bulletin) (*Bulletin, error) {
 	}
 
 	_, err = s.db.Exec(
-		`UPDATE bulletins SET title=?, content=?, type=?, sort_order=?,
-		 closable=?, expires_at=?
+		`UPDATE bulletins SET title=?, content=?, content_type=?, type=?, sort_order=?,
+		 closable=?, expires_at=?, lang=?
 		 WHERE id=? AND is_system=0`,
-		b.Title, b.Content, b.Type, b.SortOrder, boolToInt(b.Closable),
-		b.ExpiresAt, id,
+		b.Title, b.Content, b.ContentType, b.Type, b.SortOrder, boolToInt(b.Closable),
+		b.ExpiresAt, b.Lang, id,
 	)
 	if err != nil {
 		return nil, err
@@ -92,7 +93,7 @@ func (s *Store) DeleteBulletin(id int64) error {
 // GetBulletin fetches a bulletin by primary key. Returns (nil, nil) when absent.
 func (s *Store) GetBulletin(id int64) (*Bulletin, error) {
 	b, err := scanBulletin(s.db.QueryRow(
-		`SELECT id, title, content, type, sort_order,
+		`SELECT id, title, content, content_type, type, sort_order,
 		 closable, created_at, expires_at,
 		 is_system, system_key, lang
 		 FROM bulletins WHERE id=?`, id,
@@ -106,7 +107,7 @@ func (s *Store) GetBulletin(id int64) (*Bulletin, error) {
 // ListBulletins returns all bulletins ordered by sort_order DESC, id DESC.
 func (s *Store) ListBulletins() ([]*Bulletin, error) {
 	rows, err := s.db.Query(
-		`SELECT id, title, content, type, sort_order,
+		`SELECT id, title, content, content_type, type, sort_order,
 		 closable, created_at, expires_at,
 		 is_system, system_key, lang
 		 FROM bulletins ORDER BY sort_order DESC, id DESC`,
@@ -130,7 +131,7 @@ func (s *Store) ListBulletins() ([]*Bulletin, error) {
 // ordered by sort_order DESC, id DESC.
 func (s *Store) ListActiveBulletins(now int64) ([]*Bulletin, error) {
 	rows, err := s.db.Query(
-		`SELECT id, title, content, type, sort_order,
+		`SELECT id, title, content, content_type, type, sort_order,
 		 closable, created_at, expires_at,
 		 is_system, system_key, lang
 		 FROM bulletins

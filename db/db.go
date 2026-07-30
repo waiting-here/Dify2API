@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -134,6 +135,7 @@ CREATE TABLE IF NOT EXISTS bulletins (
 	id          INTEGER PRIMARY KEY AUTOINCREMENT,
 	title       TEXT NOT NULL DEFAULT '',
 	content     TEXT NOT NULL DEFAULT '',
+	content_type TEXT NOT NULL DEFAULT 'html',
 	type        TEXT NOT NULL DEFAULT 'info',
 	sort_order  INTEGER NOT NULL DEFAULT 0,
 	closable    INTEGER NOT NULL DEFAULT 1,
@@ -218,6 +220,14 @@ func Open(path, keyPath string) (*Store, error) {
 	if _, err := sqldb.Exec(schema); err != nil {
 		sqldb.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
+	}
+
+	// Idempotent column additions (ignore "duplicate column" errors).
+	if _, err := sqldb.Exec(`ALTER TABLE bulletins ADD COLUMN content_type TEXT NOT NULL DEFAULT 'html'`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			sqldb.Close()
+			return nil, fmt.Errorf("migrate bulletins.content_type: %w", err)
+		}
 	}
 
 	return &Store{db: sqldb, key: key}, nil

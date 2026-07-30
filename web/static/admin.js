@@ -1458,7 +1458,21 @@ async function showBulletinEditDialog(b) {
               <option value="important" ${b.type==='important'?'selected':''}>${T('bulletinTypeImportant')}</option>
             </select>
           </label>
+          <label>${T('bulletinFieldContentType')}
+            <select name="content_type">
+              <option value="html" ${(b.content_type||'html')==='html'?'selected':''}>${T('bulletinContentTypeHTML')}</option>
+              <option value="markdown" ${b.content_type==='markdown'?'selected':''}>${T('bulletinContentTypeMarkdown')}</option>
+            </select>
+          </label>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
           <label>${T('bulletinFieldSortOrder')}<input name="sort_order" type="number" value="${esc(String(b.sort_order))}"></label>
+          <label>${T('bulletinFieldLang')}
+            <select name="lang">
+              <option value="zh" ${(b.lang||'zh')==='zh'?'selected':''}>中文</option>
+              <option value="en" ${b.lang==='en'?'selected':''}>English</option>
+            </select>
+          </label>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:.75rem;align-items:center">
           <label style="display:flex;align-items:center;gap:.5rem;margin-bottom:0">
@@ -1486,10 +1500,12 @@ async function showBulletinEditDialog(b) {
     const body = {
       title: f.querySelector('[name="title"]').value.trim(),
       content: f.querySelector('[name="content"]').value,
+      content_type: f.querySelector('[name="content_type"]').value,
       type: f.querySelector('[name="type"]').value,
       sort_order: parseInt(f.querySelector('[name="sort_order"]').value, 10) || 0,
       closable: f.querySelector('[name="closable"]').checked,
       expires_at: expiresVal ? Math.floor(new Date(expiresVal).getTime() / 1000) : null,
+      lang: f.querySelector('[name="lang"]').value,
     };
     const msg = $("#bulletin-edit-msg");
     msg.innerHTML = `<p class="muted">${T('loading')}</p>`;
@@ -1506,6 +1522,10 @@ async function showBulletinEditDialog(b) {
 
 function adminBulletinRow(b) {
   const typeCell = bulletinTypeBadge(b.type);
+  const fmtBadge = (b.content_type === 'markdown')
+    ? `<span class="badge" style="background:var(--pico-primary);color:var(--pico-primary-inverse)">${T('bulletinContentTypeMarkdown')}</span>`
+    : `<span class="badge">${T('bulletinContentTypeHTML')}</span>`;
+  const langBadge = `<span class="badge">${esc(b.lang || 'zh').toUpperCase()}</span>`;
   const created = fmtT(b.created_at);
   const expires = b.expires_at ? fmtT(b.expires_at) : T('bulletinNeverExpires');
   const closable = b.closable ? T('bulletinClosableYes') : T('bulletinClosableNo');
@@ -1519,6 +1539,8 @@ function adminBulletinRow(b) {
       <td><input type="checkbox" class="bulletin-chk" data-id="${b.id}" ${isSys ? 'disabled' : ''}></td>
       <td>${esc(b.title)}</td>
       <td>${typeCell}</td>
+      <td>${fmtBadge}</td>
+      <td>${langBadge}</td>
       <td class="muted">${created}</td>
       <td class="muted">${expires}</td>
       <td>${closable}</td>
@@ -1560,7 +1582,7 @@ async function loadAdminBulletins() {
       };
     });
   } catch (err) {
-    $("#admin-bulletin-rows").innerHTML = `<tr><td colspan="7" class="muted">${T('error').replace("{msg}", err.message)}</td></tr>`;
+    $("#admin-bulletin-rows").innerHTML = `<tr><td colspan="9" class="muted">${T('error').replace("{msg}", err.message)}</td></tr>`;
     $("#admin-bulletin-pager").innerHTML = "";
   }
 }
@@ -1572,10 +1594,12 @@ async function onBulletinSubmit(e) {
   const body = {
     title: f.querySelector('[name="title"]').value.trim(),
     content: f.querySelector('[name="content"]').value,
+    content_type: f.querySelector('[name="content_type"]').value,
     type: f.querySelector('[name="type"]').value,
     sort_order: parseInt(f.querySelector('[name="sort_order"]').value, 10) || 0,
     closable: f.querySelector('[name="closable"]').checked,
     expires_at: expiresVal ? Math.floor(new Date(expiresVal).getTime() / 1000) : null,
+    lang: f.querySelector('[name="lang"]').value,
   };
   const note = $("#admin-bulletin-note");
   note.innerHTML = `<p class="muted">${T('loading')}</p>`;
@@ -1602,7 +1626,7 @@ function renderAdminBulletins() {
     </div>
     <div class="table-wrap"><table><thead><tr>
       <th><input type="checkbox" id="bulletin-select-all" title="${T('batchSelectAll')}"></th>
-      <th>${T('bulletinThTitle')}</th><th>${T('bulletinThType')}</th><th>${T('bulletinThCreated')}</th>
+      <th>${T('bulletinThTitle')}</th><th>${T('bulletinThType')}</th><th>${T('bulletinThFormat')}</th><th>${T('bulletinThLang')}</th><th>${T('bulletinThCreated')}</th>
       <th>${T('bulletinThExpires')}</th><th>${T('bulletinThClosable')}</th><th>${T('bulletinThActions')}</th>
     </tr></thead><tbody id="admin-bulletin-rows"></tbody></table></div>
     <div class="row-actions" id="admin-bulletin-pager" style="margin:.5rem 0 1rem"></div>
@@ -1617,7 +1641,21 @@ function renderAdminBulletins() {
             <option value="important">${T('bulletinTypeImportant')}</option>
           </select>
         </label>
+        <label>${T('bulletinFieldContentType')}
+          <select name="content_type">
+            <option value="html">${T('bulletinContentTypeHTML')}</option>
+            <option value="markdown">${T('bulletinContentTypeMarkdown')}</option>
+          </select>
+        </label>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
         <label>${T('bulletinFieldSortOrder')}<input name="sort_order" type="number" value="0"></label>
+        <label>${T('bulletinFieldLang')}
+          <select name="lang">
+            <option value="zh">中文</option>
+            <option value="en">English</option>
+          </select>
+        </label>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:.75rem;align-items:center">
         <label style="display:flex;align-items:center;gap:.5rem;margin-bottom:0">

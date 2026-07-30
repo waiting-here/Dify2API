@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"time"
 
 	"dify2api/db"
+
+	"github.com/yuin/goldmark"
 )
 
 // --- System bulletin IDs ---
@@ -19,6 +22,21 @@ const (
 	sysBulletinDonationDisabled = -2
 	sysBulletinCharityDisabled  = -3
 )
+
+var md = goldmark.New()
+
+// RenderBulletinContent converts raw bulletin content to HTML for display.
+// content_type == "markdown" uses goldmark; other values pass through unchanged.
+func RenderBulletinContent(contentType, raw string) string {
+	if contentType == "markdown" {
+		var buf bytes.Buffer
+		if err := md.Convert([]byte(raw), &buf); err != nil {
+			return raw // fallback: return raw on error
+		}
+		return buf.String()
+	}
+	return raw
+}
 
 // --- Admin CRUD ---
 
@@ -51,12 +69,14 @@ func (g *Gateway) handleAdminCreateBulletin(w http.ResponseWriter, r *http.Reque
 	}
 
 	var req struct {
-		Title     string `json:"title"`
-		Content   string `json:"content"`
-		Type      string `json:"type"`
-		SortOrder int    `json:"sort_order"`
-		Closable  bool   `json:"closable"`
-		ExpiresAt *int64 `json:"expires_at"`
+		Title       string `json:"title"`
+		Content     string `json:"content"`
+		ContentType string `json:"content_type"`
+		Type        string `json:"type"`
+		SortOrder   int    `json:"sort_order"`
+		Closable    bool   `json:"closable"`
+		ExpiresAt   *int64 `json:"expires_at"`
+		Lang        string `json:"lang"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
@@ -75,6 +95,30 @@ func (g *Gateway) handleAdminCreateBulletin(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Validate content_type.
+	switch req.ContentType {
+	case "html", "markdown":
+		// OK
+	case "":
+		req.ContentType = "html"
+	default:
+		g.writeError(w, http.StatusBadRequest, "invalid_request",
+			"content_type 必须是 html 或 markdown")
+		return
+	}
+
+	// Validate lang.
+	switch req.Lang {
+	case "zh", "en":
+		// OK
+	case "":
+		req.Lang = "zh"
+	default:
+		g.writeError(w, http.StatusBadRequest, "invalid_request",
+			"lang 必须是 zh 或 en")
+		return
+	}
+
 	if strings.TrimSpace(req.Title) == "" {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "标题为必填")
 		return
@@ -90,13 +134,14 @@ func (g *Gateway) handleAdminCreateBulletin(w http.ResponseWriter, r *http.Reque
 	}
 
 	b := &db.Bulletin{
-		Title:     strings.TrimSpace(req.Title),
-		Content:   req.Content,
-		Type:      req.Type,
-		SortOrder: req.SortOrder,
-		Closable:  req.Closable,
-		ExpiresAt: expiresAt,
-		Lang:      "zh",
+		Title:       strings.TrimSpace(req.Title),
+		Content:     req.Content,
+		ContentType: req.ContentType,
+		Type:        req.Type,
+		SortOrder:   req.SortOrder,
+		Closable:    req.Closable,
+		ExpiresAt:   expiresAt,
+		Lang:        req.Lang,
 	}
 
 	created, err := g.Store.CreateBulletin(b)
@@ -140,12 +185,14 @@ func (g *Gateway) handleAdminUpdateBulletin(w http.ResponseWriter, r *http.Reque
 	}
 
 	var req struct {
-		Title     string `json:"title"`
-		Content   string `json:"content"`
-		Type      string `json:"type"`
-		SortOrder int    `json:"sort_order"`
-		Closable  bool   `json:"closable"`
-		ExpiresAt *int64 `json:"expires_at"`
+		Title       string `json:"title"`
+		Content     string `json:"content"`
+		ContentType string `json:"content_type"`
+		Type        string `json:"type"`
+		SortOrder   int    `json:"sort_order"`
+		Closable    bool   `json:"closable"`
+		ExpiresAt   *int64 `json:"expires_at"`
+		Lang        string `json:"lang"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
@@ -160,6 +207,30 @@ func (g *Gateway) handleAdminUpdateBulletin(w http.ResponseWriter, r *http.Reque
 	default:
 		g.writeError(w, http.StatusBadRequest, "invalid_request",
 			"公告类型必须是 info、warning 或 important")
+		return
+	}
+
+	// Validate content_type.
+	switch req.ContentType {
+	case "html", "markdown":
+		// OK
+	case "":
+		req.ContentType = "html"
+	default:
+		g.writeError(w, http.StatusBadRequest, "invalid_request",
+			"content_type 必须是 html 或 markdown")
+		return
+	}
+
+	// Validate lang.
+	switch req.Lang {
+	case "zh", "en":
+		// OK
+	case "":
+		req.Lang = "zh"
+	default:
+		g.writeError(w, http.StatusBadRequest, "invalid_request",
+			"lang 必须是 zh 或 en")
 		return
 	}
 
@@ -178,12 +249,14 @@ func (g *Gateway) handleAdminUpdateBulletin(w http.ResponseWriter, r *http.Reque
 	}
 
 	update := &db.Bulletin{
-		Title:     strings.TrimSpace(req.Title),
-		Content:   req.Content,
-		Type:      req.Type,
-		SortOrder: req.SortOrder,
-		Closable:  req.Closable,
-		ExpiresAt: expiresAt,
+		Title:       strings.TrimSpace(req.Title),
+		Content:     req.Content,
+		ContentType: req.ContentType,
+		Type:        req.Type,
+		SortOrder:   req.SortOrder,
+		Closable:    req.Closable,
+		ExpiresAt:   expiresAt,
+		Lang:        req.Lang,
 	}
 
 	updated, err := g.Store.UpdateBulletin(id, update)
@@ -318,8 +391,11 @@ func (g *Gateway) handleListBulletins(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. DB bulletins (admin-created, active).
+	// Render Markdown content to HTML before sending to user clients.
 	for _, b := range dbList {
-		out = append(out, bulletinJSON(b))
+		bj := bulletinJSON(b)
+		bj["content"] = RenderBulletinContent(b.ContentType, b.Content)
+		out = append(out, bj)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -403,15 +479,16 @@ func (g *Gateway) buildSystemBulletins(now int64, lang string) []map[string]inte
 // bulletinJSON builds the API representation of a Bulletin.
 func bulletinJSON(b *db.Bulletin) map[string]interface{} {
 	out := map[string]interface{}{
-		"id":         b.ID,
-		"title":      b.Title,
-		"content":    b.Content,
-		"type":       b.Type,
-		"sort_order": b.SortOrder,
-		"closable":   b.Closable,
-		"created_at": b.CreatedAt,
-		"is_system":  b.IsSystem,
-		"lang":       b.Lang,
+		"id":           b.ID,
+		"title":        b.Title,
+		"content":      b.Content,
+		"content_type": b.ContentType,
+		"type":         b.Type,
+		"sort_order":   b.SortOrder,
+		"closable":     b.Closable,
+		"created_at":   b.CreatedAt,
+		"is_system":    b.IsSystem,
+		"lang":         b.Lang,
 	}
 	if b.ExpiresAt.Valid {
 		out["expires_at"] = b.ExpiresAt.Int64
