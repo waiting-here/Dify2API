@@ -860,8 +860,15 @@ async function loadAdminLogStats() {
 
 function drawLogChart(canvas, byDay, byService) {
   const dpr = window.devicePixelRatio || 1;
+  const style = getComputedStyle(document.documentElement);
+  const mutedColor = style.getPropertyValue("--pico-muted-color").trim() || "#666";
+  const borderColor = style.getPropertyValue("--pico-muted-border-color").trim() || "#ccc";
+  const bgColor = style.getPropertyValue("--pico-card-background-color").trim() || "#fff";
+
   const w = canvas.clientWidth;
-  const h = Math.max(160, byService.length > 0 ? 80 + byService.length * 18 : 160);
+  // Height: bar chart (140px) + legend area (40px) + service bars if any
+  const svcH = byService.length > 0 ? 30 + byService.length * 16 : 0;
+  const h = 140 + svcH + 40;
   canvas.width = w * dpr;
   canvas.height = h * dpr;
   canvas.style.height = h + "px";
@@ -871,12 +878,12 @@ function drawLogChart(canvas, byDay, byService) {
 
   const maxVal = Math.max(1, ...byDay.map(d => d.total));
   const barW = Math.max(8, Math.min(30, (w - 80) / byDay.length - 4));
-  const chartL = 60, chartR = w - 10, chartT = 15, chartB = h - (byService.length > 0 ? 90 : 25);
+  const chartL = 60, chartR = w - 10, chartT = 15, chartB = 140;
   const chartH = chartB - chartT;
 
   // Axes.
-  ctx.strokeStyle = "var(--pico-muted-border-color)";
-  ctx.fillStyle = "var(--pico-muted-color)";
+  ctx.strokeStyle = borderColor;
+  ctx.fillStyle = mutedColor;
   ctx.font = "10px sans-serif";
   ctx.textAlign = "right";
   ctx.beginPath(); ctx.moveTo(chartL, chartT); ctx.lineTo(chartL, chartB); ctx.lineTo(chartR, chartB); ctx.stroke();
@@ -886,11 +893,12 @@ function drawLogChart(canvas, byDay, byService) {
     const y = chartB - (chartH * i / 4);
     const val = Math.round(maxVal * i / 4);
     ctx.fillText(String(val), chartL - 6, y + 4);
-    ctx.beginPath(); ctx.moveTo(chartL, y); ctx.lineTo(chartR, y); ctx.strokeStyle = "#eee"; ctx.stroke();
-    ctx.strokeStyle = "var(--pico-muted-border-color)";
+    ctx.beginPath(); ctx.moveTo(chartL, y); ctx.lineTo(chartR, y);
+    ctx.strokeStyle = "#eee"; ctx.stroke();
+    ctx.strokeStyle = borderColor;
   }
 
-  // Bars.
+  // Bars (green = success, red = error).
   const green = "#1a7f1a", red = "#b02020";
   ctx.textAlign = "center";
   byDay.forEach((d, i) => {
@@ -902,34 +910,34 @@ function drawLogChart(canvas, byDay, byService) {
       ctx.fillRect(x, chartB - totalH, barW, totalH - errH);
       if (errH > 0) { ctx.fillStyle = red; ctx.fillRect(x, chartB - errH, barW, errH); }
     }
-    // Date label (MM-DD).
     const label = d.date.length >= 10 ? d.date.substring(5) : d.date;
-    ctx.fillStyle = "var(--pico-muted-color)";
+    ctx.fillStyle = mutedColor;
     ctx.font = "9px sans-serif";
     ctx.fillText(label, x + barW / 2, chartB + 12);
   });
 
   // Legend.
-  const lx = chartL, ly = chartB + 35;
+  const lx = chartL, ly = chartB + 28;
   ctx.fillStyle = green; ctx.fillRect(lx, ly, 10, 10);
-  ctx.fillStyle = "var(--pico-muted-color)"; ctx.textAlign = "left"; ctx.font = "10px sans-serif";
+  ctx.fillStyle = mutedColor; ctx.textAlign = "left"; ctx.font = "10px sans-serif";
   ctx.fillText(T('adminLogsSuccess'), lx + 14, ly + 9);
   ctx.fillStyle = red; ctx.fillRect(lx + 80, ly, 10, 10);
   ctx.fillText(T('adminLogsError'), lx + 94, ly + 9);
 
-  // Per-service horizontal bars if there are services.
+  // Per-service horizontal bars.
   if (byService.length > 0) {
-    const sy = ly + 18;
+    const sy = ly + 22;
+    ctx.fillStyle = mutedColor; ctx.textAlign = "left";
     ctx.fillText(T('adminLogsByService') + ":", lx, sy + 9);
     const sMax = Math.max(1, ...byService.map(s => s.count));
     byService.forEach((s, i) => {
       const y = sy + 16 + i * 16;
-      ctx.fillStyle = "var(--pico-muted-color)"; ctx.textAlign = "right"; ctx.font = "10px sans-serif";
+      ctx.fillStyle = mutedColor; ctx.textAlign = "right"; ctx.font = "10px sans-serif";
       ctx.fillText(s.service, chartL - 6, y + 9);
       const bw = Math.max(4, (s.count / sMax) * (chartR - chartL - 20));
       ctx.fillStyle = "#4a7ddb";
       ctx.fillRect(chartL + 4, y, bw, 11);
-      ctx.fillStyle = "var(--pico-muted-color)"; ctx.textAlign = "left";
+      ctx.fillStyle = mutedColor; ctx.textAlign = "left";
       ctx.fillText(String(s.count), chartL + bw + 8, y + 10);
     });
   }
