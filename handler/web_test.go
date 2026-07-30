@@ -196,3 +196,96 @@ func TestSiteInfoAndStatic(t *testing.T) {
 		t.Errorf("GET /static/pico.min.css: status %d", rec.Code)
 	}
 }
+
+func TestLegalPages_LangRouting(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	getPage := func(path string) string {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200; body: %s", path, rec.Code, rec.Body.String())
+		}
+		return rec.Body.String()
+	}
+
+	// 1. No lang param → Chinese (default).
+	zh := getPage("/privacy")
+	if !strings.Contains(zh, "隐私政策") {
+		t.Error("/privacy (no lang): should contain 隐私政策")
+	}
+
+	// 2. ?lang=en → English.
+	en := getPage("/privacy?lang=en")
+	if !strings.Contains(en, "Privacy Policy") {
+		t.Error("/privacy?lang=en: should contain Privacy Policy")
+	}
+	if !strings.Contains(en, "shall prevail") || !strings.Contains(en, "以中文版本为准") {
+		t.Error("/privacy?lang=en: should contain bilingual governing-language clause")
+	}
+
+	// 3. ?lang=zh → Chinese (explicit).
+	zh2 := getPage("/privacy?lang=zh")
+	if !strings.Contains(zh2, "隐私政策") {
+		t.Error("/privacy?lang=zh: should contain 隐私政策")
+	}
+
+	// 4. Terms page English with governing-language clause.
+	enTerms := getPage("/terms?lang=en")
+	if !strings.Contains(enTerms, "Terms of Service") {
+		t.Error("/terms?lang=en: should contain Terms of Service")
+	}
+	if !strings.Contains(enTerms, "shall prevail") || !strings.Contains(enTerms, "以中文版本为准") {
+		t.Error("/terms?lang=en: should contain bilingual governing-language clause")
+	}
+
+	// 5. ?lang=en on 403 → no .en.html exists, falls back to Chinese 403 page.
+	req403 := httptest.NewRequest(http.MethodGet, "/403?lang=en", nil)
+	rec403 := httptest.NewRecorder()
+	mux.ServeHTTP(rec403, req403)
+	if rec403.Code != http.StatusForbidden {
+		t.Errorf("/403?lang=en: status = %d, want 403", rec403.Code)
+	}
+	if strings.Contains(rec403.Body.String(), "Privacy Policy") {
+		t.Error("/403?lang=en: should NOT serve English privacy page (path mismatch)")
+	}
+
+	// 6. User with lang=en preference → English without ?lang query param.
+	u, err := store.CreateUser("99", "enguser", "")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	store.SetUserLang(u.ID, "en")
+	token, _, err := store.CreateSession(u.ID)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/privacy", nil)
+	req.AddCookie(&http.Cookie{Name: "dify2api_session", Value: token})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/privacy (user lang=en): status = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Privacy Policy") {
+		t.Error("/privacy (user lang=en): should serve English version")
+	}
+
+	// 7. ?lang=en overrides user's zh preference.
+	u2, err := store.CreateUser("100", "zhusr", "")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	store.SetUserLang(u2.ID, "zh")
+	token2, _, _ := store.CreateSession(u2.ID)
+	req = httptest.NewRequest(http.MethodGet, "/privacy?lang=en", nil)
+	req.AddCookie(&http.Cookie{Name: "dify2api_session", Value: token2})
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), "Privacy Policy") {
+		t.Error("/privacy?lang=en (user lang=zh): query param should override user preference")
+	}
+}

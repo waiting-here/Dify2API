@@ -1,0 +1,153 @@
+<!--
+  DEPLOYER NOTICE: This is a generic privacy policy template. Before deploying
+  Dify2API, you MUST review and adapt this document to comply with the laws
+  of your jurisdiction (e.g. GDPR in the EU, PIPL in China, CCPA/CPRA in
+  California). At minimum: verify the "last updated" date, the contact email
+  (set via REPORT_EMAIL), data retention periods, and international transfer
+  statements. The placeholder __SITE_NAME__ and __REPORT_EMAIL__ are replaced
+  at runtime from your startup configuration.
+-->
+<!--
+  DEPLOYER: This is the English translation of the privacy policy.
+  You may modify or remove the governing-language clause at the bottom.
+  See privacy.html for the authoritative Chinese version.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico">
+<title>Privacy Policy — __SITE_NAME__</title>
+<link rel="stylesheet" href="/static/pico.min.css">
+<style>
+  body > nav { border-bottom: 1px solid var(--pico-muted-border-color); padding: .5rem 1rem; display: flex; justify-content: space-between; align-items: center; }
+  body > nav .logo { font-weight: 700; color: #4a7ddb; }
+  main.container { max-width: 800px; }
+  footer { text-align: center; padding: 1.5rem 0; color: var(--pico-muted-color); font-size: .85rem; border-top: 1px solid var(--pico-muted-border-color); margin-top: 2rem; }
+  footer a { color: var(--pico-muted-color); }
+</style>
+</head>
+<body>
+<nav>
+  <a href="/" class="logo">__SITE_NAME__</a>
+</nav>
+<main class="container">
+<h1>Privacy Policy</h1>
+<p><strong>Last Updated: July 27, 2026</strong></p>
+
+<h2>1. Overview</h2>
+<p>__SITE_NAME__ ("we," "the Service") is committed to protecting your privacy. This Privacy Policy explains how we collect, use, store, and share your personal information, as well as your rights regarding that information.</p>
+<p>This Service is a self-deployed open-source gateway tool. This Privacy Policy applies to all personal information collected and processed by the deployer-operator ("Operator") through this Service.</p>
+
+<h2>2. Information We Collect</h2>
+
+<h3>2.1 Information You Provide</h3>
+<ul>
+  <li><strong>Discord Account Information</strong>: When you log in via Discord OAuth, we obtain your user ID, username, avatar, and guild membership information from Discord. This information is used to create and identify your account.</li>
+  <li><strong>Dify App Configuration</strong>: The Dify App API address and API keys you configure on the platform. API keys are stored encrypted with AES-256-GCM.</li>
+</ul>
+
+<h3>2.2 Automatically Collected Information</h3>
+<ul>
+  <li><strong>Request Logs</strong>: For each API call, we record the time, model name used, service name, call status (success/failure), HTTP status code, and error code. Request/response content is handled according to the operating mode:
+    <ul>
+      <li><strong>Normal Mode</strong>: Specific request/response content is not persisted to logs.</li>
+      <li><strong>Administrator Debug Mode</strong> (<code>-debug</code> startup flag): Complete raw requests and mapped input fields are written to server disk (file permissions 0644), with no automatic cleanup; this mode is <strong>only available when explicitly enabled by the administrator</strong> for debugging purposes.</li>
+      <li><strong>User Self-Service Debugging</strong>: Request content is streamed in real time to your browser via SSE within server memory, not written to disk, and automatically cleaned up when the page is closed.</li>
+    </ul>
+  </li>
+  <li><strong>Technical Logs</strong>: Standard server logs (e.g., IP address, request time), used solely for operational troubleshooting and abuse prevention.</li>
+</ul>
+
+<h2>3. How We Use Information</h2>
+<ul>
+  <li><strong>Service Provision</strong>: Authenticate your identity and route your API requests to your configured Dify App.</li>
+  <li><strong>Abuse Prevention</strong>: Request-frequency-based rate limiting and anomaly detection to protect service stability.</li>
+  <li><strong>Operational Improvement</strong>: Analyze aggregated usage data to improve the Service.</li>
+</ul>
+
+<h2>4. Data Storage and Security</h2>
+<ul>
+  <li>All data is stored on a server controlled by the Operator (SQLite database).</li>
+  <li>Sensitive credentials (Dify API keys, caller keys) are stored encrypted with AES-256-GCM.</li>
+  <li>Request logs are retained for <strong>30 days</strong> and automatically purged upon expiry.</li>
+  <li>We take reasonable technical and administrative measures to protect your data security.</li>
+</ul>
+
+<h2>5. Data Sharing and Disclosure</h2>
+<p>We <strong>do not</strong> sell, rent, or share your personal information with third parties, except:</p>
+<ul>
+  <li>As required by law (e.g., in response to a valid court order or law enforcement request);</li>
+  <li>As necessary to protect the rights, property, or safety of the Service, its users, or the public;</li>
+  <li>With your explicit consent.</li>
+</ul>
+<h3>5.1 Data Transfers Necessary for Service Operation</h3>
+<p>To provide the API routing service, your message content (including text and images) may be transmitted to:</p>
+<ul>
+  <li>The Dify Workflow application you have bound (or the charity pool Dify App you choose to use);</li>
+  <li>The model providers configured for those Dify Apps (such as Anthropic, OpenAI, etc.), which may further process the transmitted content.</li>
+</ul>
+<p>This processing is necessary for the operation of this Service. We recommend that you review the privacy policies of the Dify Apps and model providers you select.</p>
+
+<h2>6. Data Breach Notification</h2>
+<p>While we take reasonable security measures (including AES-256-GCM credential encryption and separate key storage), no system is absolutely secure. If we discover a security incident involving your personal information (such as unauthorized access to the database file), we will:</p>
+<ul>
+  <li>Promptly investigate and contain the scope of the incident as reasonably practicable;</li>
+  <li>Notify affected users as required by applicable law (via a site announcement or available contact methods);</li>
+  <li>If encrypted credentials are compromised, recommend that you immediately rotate the relevant API keys on the Dify platform and reset your caller key on this Service;</li>
+  <li>Report to relevant regulatory authorities as required by applicable law (if applicable).</li>
+</ul>
+
+<h2>7. Your Rights</h2>
+<p>Depending on applicable data protection laws—including the EU General Data Protection Regulation (GDPR), the California Consumer Privacy Act (CCPA/CPRA), and the Personal Information Protection Law of the People's Republic of China (PIPL)—you may have the following rights:</p>
+<ul>
+  <li><strong>Right of Access</strong>: You can download the data we hold about you in one click via the "Export My Data" function in the web console (including user profile, App configurations with decrypted Dify API keys, caller keys, complete request log fields, and donation application records).</li>
+  <li><strong>Right to Erasure ("Right to be Forgotten")</strong>: You can choose "Delete My Account" in the web console to permanently delete your account and all associated data (including sessions, configurations, keys, logs, and donation applications; your identity in approved donations will be anonymized).</li>
+  <li><strong>Right to Rectification</strong>: You can update your App configurations in the console.</li>
+  <li><strong>Right to Restrict Processing</strong>: Contact us to restrict processing through your Discord account settings.</li>
+  <li><strong>Right to Data Portability</strong>: The export function provides a complete data bundle in JSON format.</li>
+</ul>
+<p>To exercise these rights or for any privacy-related questions, please contact us at: <strong>__REPORT_EMAIL__</strong></p>
+
+<h2>8. Protection of Minors</h2>
+<p>This Service is not intended for children under the age of 13. We do not knowingly collect personal information from children under 13. If we discover that we have inadvertently collected such information, we will delete it promptly. The Discord platform itself requires users to be at least 13 years old (with higher age requirements in some regions), which provides an additional layer of age verification for this Service.</p>
+
+<h2>9. International Data Transfers</h2>
+<p>The servers for this Service may be located in the United States or other countries/regions. Your information may be stored and processed in countries/regions outside your place of residence. We take reasonable measures to ensure your data is protected in accordance with this Privacy Policy.</p>
+
+<h2>10. Cookies and Tracking</h2>
+<p>This Service uses a necessary session cookie to maintain your login state. This cookie is not used for tracking or advertising purposes. We <strong>do not use</strong> third-party trackers, analytics cookies, or advertising networks.</p>
+
+<h2>11. Policy Updates</h2>
+
+<h3>11.1 Non-Material Updates</h3>
+<p>The following types of updates take effect immediately upon posting on this page:</p>
+<ul>
+  <li>Clarification of wording and correction of typographical errors;</li>
+  <li>Updates to contact information (such as the report email);</li>
+  <li>Format or structural adjustments that do not affect the scope of data collection, purposes of use, or methods of sharing.</li>
+</ul>
+
+<h3>11.2 Material Updates</h3>
+<p>Changes involving the types of data we collect, purposes of use, methods of sharing, or retention periods constitute material updates. Material updates will be posted on this page and will take effect at least <strong>7 days</strong> after posting. The effective date of material updates will be prominently noted on this page. Where feasible, we will also provide additional notice via a site announcement.</p>
+
+<h3>11.3 Consent Required by Law</h3>
+<p>Where required by law (e.g., changes in processing purpose under GDPR or changes in purpose for sensitive personal information processing under PIPL), we will obtain your explicit consent before the change takes effect.</p>
+
+<h2>12. Contact Information</h2>
+<p>For any questions or concerns about this Privacy Policy, please contact: <strong>__REPORT_EMAIL__</strong></p>
+
+<hr>
+<p class="muted" style="font-size:.85em"><em>
+This document is a translation for convenience only. In case of any discrepancy between
+the English and Chinese versions, the Chinese version shall prevail.<br>
+本文为便利参考的翻译件。如中英文版本存在歧义，以中文版本为准。
+</em></p>
+<!-- DEPLOYER: you may modify or remove the governing-language clause above. -->
+</main>
+<footer>
+  <a href="/">Home</a> · <a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms of Service</a>
+</footer>
+</body>
+</html>

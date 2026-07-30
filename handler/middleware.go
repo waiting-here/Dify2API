@@ -137,7 +137,7 @@ func (g *Gateway) maintenanceCheck(next http.Handler) http.Handler {
 		}
 
 		// All other paths (web pages) → maintenance HTML.
-		g.serveMaintenancePage(w)
+		g.serveMaintenancePage(w, r)
 	})
 }
 

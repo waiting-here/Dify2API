@@ -76,8 +76,18 @@ func (g *Gateway) registerWebRoutes(mux *http.ServeMux) {
 	})
 
 	// Legal pages, served as static HTML with server-side placeholder substitution.
-	servePage := func(w http.ResponseWriter, name string, maxAge int) {
-		data, err := fs.ReadFile(staticFS, name)
+	// Language routing: ?lang=en or user's Lang preference selects the .en.html
+	// variant; silently falls back to the default (Chinese) if the English file
+	// is absent.
+	servePage := func(w http.ResponseWriter, r *http.Request, name string, maxAge int) {
+		fileName := name
+		if g.resolvePageLang(r) == "en" {
+			enName := strings.Replace(name, ".html", ".en.html", 1)
+			if _, err := fs.ReadFile(staticFS, enName); err == nil {
+				fileName = enName
+			}
+		}
+		data, err := fs.ReadFile(staticFS, fileName)
 		if err != nil {
 			http.Error(w, "page not found", http.StatusNotFound)
 			return
@@ -89,10 +99,22 @@ func (g *Gateway) registerWebRoutes(mux *http.ServeMux) {
 		w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", maxAge))
 		w.Write([]byte(body))
 	}
-	mux.HandleFunc("GET /privacy", func(w http.ResponseWriter, r *http.Request) { servePage(w, "privacy.html", 0) })
-	mux.HandleFunc("GET /terms", func(w http.ResponseWriter, r *http.Request) { servePage(w, "terms.html", 0) })
-	mux.HandleFunc("GET /403", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(403); servePage(w, "403.html", 0) })
-	mux.HandleFunc("GET /404", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(404); servePage(w, "404.html", 0) })
+	mux.HandleFunc("GET /privacy", func(w http.ResponseWriter, r *http.Request) { servePage(w, r, "privacy.html", 0) })
+	mux.HandleFunc("GET /terms", func(w http.ResponseWriter, r *http.Request) { servePage(w, r, "terms.html", 0) })
+	mux.HandleFunc("GET /403", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(403); servePage(w, r, "403.html", 0) })
+	mux.HandleFunc("GET /404", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(404); servePage(w, r, "404.html", 0) })
+}
+
+// resolvePageLang determines the page language for a request.
+// Priority: ?lang query param → logged-in user's Lang field → default "zh".
+func (g *Gateway) resolvePageLang(r *http.Request) string {
+	if q := r.URL.Query().Get("lang"); q == "en" || q == "zh" {
+		return q
+	}
+	if u := g.currentUser(r); u != nil && u.Lang == "en" {
+		return "en"
+	}
+	return "zh"
 }
 
 // serveCreditsLogo reads the configured credits logo file and serves it,

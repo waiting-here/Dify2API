@@ -975,13 +975,21 @@ func (g *Gateway) writeError(w http.ResponseWriter, status int, code, message st
 // serveMaintenancePage serves the maintenance.html page with placeholder
 // substitution and a 503 status code.  Used by the maintenanceCheck
 // middleware when the site-wide maintenance mode is on.
-func (g *Gateway) serveMaintenancePage(w http.ResponseWriter) {
+// Language selection follows the same priority as servePage:
+// ?lang query param → user's Lang field → default "zh".
+func (g *Gateway) serveMaintenancePage(w http.ResponseWriter, r *http.Request) {
 	staticFS, err := fs.Sub(web.Static, "static")
 	if err != nil {
 		http.Error(w, "maintenance page not found", http.StatusServiceUnavailable)
 		return
 	}
-	data, err := fs.ReadFile(staticFS, "maintenance.html")
+	fileName := "maintenance.html"
+	if g.resolvePageLang(r) == "en" {
+		if _, err := fs.ReadFile(staticFS, "maintenance.en.html"); err == nil {
+			fileName = "maintenance.en.html"
+		}
+	}
+	data, err := fs.ReadFile(staticFS, fileName)
 	if err != nil {
 		http.Error(w, "maintenance page not found", http.StatusServiceUnavailable)
 		return

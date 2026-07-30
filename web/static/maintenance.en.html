@@ -1,0 +1,42 @@
+<!--
+  Maintenance page.  Served with HTTP 503 when the site-wide
+  maintenance_mode setting is on.  The placeholder __SITE_NAME__ is
+  replaced server-side at request time (see handler/serveMaintenancePage).
+  Pico.css is loaded from /static/ so the page references the same
+  stylesheet as the normal site, but its own markup is self-contained
+  (no JS dependency).
+-->
+<!--
+  DEPLOYER: This is the English translation of the maintenance page.
+  See maintenance.html for the authoritative Chinese version.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico">
+<title>Under Maintenance — __SITE_NAME__</title>
+<link rel="stylesheet" href="/static/pico.min.css">
+<style>
+  body { display: flex; flex-direction: column; min-height: 100vh; }
+  nav { border-bottom: 1px solid var(--pico-muted-border-color); padding: .5rem 1rem; display: flex; justify-content: space-between; align-items: center; }
+  nav .logo { font-weight: 700; color: #4a7ddb; text-decoration: none; }
+  main.container { max-width: 600px; flex: 1; display: flex; flex-direction: column; justify-content: center; text-align: center; }
+  footer { text-align: center; padding: 1.5rem 0; color: var(--pico-muted-color); font-size: .85rem; border-top: 1px solid var(--pico-muted-border-color); }
+  footer a { color: var(--pico-muted-color); }
+</style>
+</head>
+<body>
+<nav>
+  <span class="logo">__SITE_NAME__</span>
+</nav>
+<main class="container">
+  <h1>Site Under Maintenance</h1>
+  <p>The site is currently under maintenance. Please check back later.</p>
+</main>
+<footer>
+  <a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms of Service</a>
+</footer>
+</body>
+</html>

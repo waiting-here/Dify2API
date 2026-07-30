@@ -496,3 +496,55 @@ func TestMaintenanceMode(t *testing.T) {
 		t.Error("off after on: /api/me should not be blocked by maintenance")
 	}
 }
+
+func TestMaintenancePage_LangRouting(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	h := gw.Wrap(mux)
+
+	store.SetSetting(db.SettingMaintenanceMode, "true")
+	defer store.SetSetting(db.SettingMaintenanceMode, "false")
+
+	// 1. No lang → Chinese maintenance page.
+	req := httptest.NewRequest(http.MethodGet, "http://localhost/", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("maintenance / : status = %d, want 503", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "站点维护中") {
+		t.Error("maintenance / (no lang): should contain 站点维护中")
+	}
+	if strings.Contains(rec.Body.String(), "__SITE_NAME__") {
+		t.Error("maintenance /: placeholder __SITE_NAME__ should be replaced")
+	}
+
+	// 2. ?lang=en → English maintenance page.
+	req = httptest.NewRequest(http.MethodGet, "http://localhost/?lang=en", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("maintenance /?lang=en: status = %d, want 503", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Site Under Maintenance") {
+		t.Error("maintenance /?lang=en: should contain Site Under Maintenance")
+	}
+	if strings.Contains(rec.Body.String(), "__SITE_NAME__") {
+		t.Error("maintenance /?lang=en: placeholder __SITE_NAME__ should be replaced")
+	}
+
+	// 3. ?lang=en on a sub-path → still English.
+	req = httptest.NewRequest(http.MethodGet, "http://localhost/dashboard?lang=en", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), "Site Under Maintenance") {
+		t.Error("maintenance /dashboard?lang=en: should contain Site Under Maintenance")
+	}
+
+	// 4. Placeholder substitution works for English page too (SiteName is empty in test,
+	// so __SITE_NAME__ becomes "").
+	if strings.Contains(rec.Body.String(), "__SITE_NAME__") {
+		t.Error("maintenance /dashboard?lang=en: placeholder __SITE_NAME__ should be replaced")
+	}
+}
