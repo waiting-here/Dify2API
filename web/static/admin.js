@@ -285,7 +285,7 @@ async function renderAdminDashboard() {
       <section class="card" id="pricing-panel">
         <h3>${T('pricingTitle')}</h3>
         <form id="pricing-form">
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:.5rem;align-items:end">
+          <div style="display:grid;grid-template-columns:${isNarrowScreen()?'1fr':'1fr 1fr 1fr 1fr'};gap:.5rem;align-items:end">
             <label>${T('pricingThService')}<select name="service" id="pricing-service"></select></label>
             <label>${T('pricingThModel')}<input name="model" placeholder="${T('fieldBackend')}" required></label>
             <label>${T('pricingThPrice')}<input name="price" type="number" min="0" value="0" required></label>
@@ -328,7 +328,7 @@ async function renderAdminDashboard() {
           <div class="row-actions" id="don-app-history-pager" style="margin-top:.5rem"></div>
         </div>
         <form id="donation-form">
-          <div style="display:grid;grid-template-columns:auto 1fr;gap:.5rem;align-items:end">
+          <div style="display:grid;grid-template-columns:${isNarrowScreen()?'1fr':'auto 1fr'};gap:.5rem;align-items:end">
             <label>${T('thService')}<select name="service" id="don-service"></select></label>
             <label>${T('thModel')}<input name="model" placeholder="${T('fieldBackend')}" required></label>
           </div>
@@ -339,7 +339,7 @@ async function renderAdminDashboard() {
             <datalist id="don-user-list"></datalist>
           </label>
           <label>${T('charitySourceText')}<input name="source_text" placeholder="${T('charitySourceTextPlaceholder')}"></label>
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.5rem">
+          <div style="display:grid;grid-template-columns:${isNarrowScreen()?'1fr':'1fr 1fr 1fr'};gap:.5rem">
             <label>${T('charityDeadline')}<input name="deadline" type="datetime-local" required></label>
             <label>${T('charityTotalCount')}<input name="total_count" type="number" min="1" required></label>
             <label>${T('rpmLimitLabel')}<input name="rpm_limit" type="number" min="1" value="10" placeholder="${T('rpmLimitHint')}"></label>
@@ -1116,7 +1116,7 @@ async function showPricingEditDialog(svc, mdl, curPrice, curReward) {
     <article>
       <header><h3>${T('pricingEdit')}: ${esc(svc)} / ${esc(mdl)}</h3></header>
       <form id="pricing-edit-form">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem">
+        <div style="display:grid;grid-template-columns:${isNarrowScreen()?'1fr':'1fr 1fr'};gap:.5rem">
           <label>${T('pricingThPrice')}<input name="price" type="number" min="0" value="${curPrice}" required></label>
           <label>${T('pricingThReward')}<input name="reward" type="number" min="0" value="${curReward || ""}" placeholder="自动"></label>
         </div>
@@ -1313,13 +1313,13 @@ function showReviewDialog(app) {
       </div>
       <p class="muted" style="font-size:.85em">${T('donationReviewModifyHint')}</p>
       <form id="review-form">
-        <div style="display:grid;grid-template-columns:auto 1fr;gap:.5rem;align-items:end">
+        <div style="display:grid;grid-template-columns:${isNarrowScreen()?'1fr':'auto 1fr'};gap:.5rem;align-items:end">
           <label>${T('donationAppThService')}<input name="service" value="${esc(app.service)}"></label>
           <label>${T('donationAppThModel')}<input name="model" value="${esc(app.model)}"></label>
         </div>
         <label>${T('fieldBaseURL')}<input name="dify_base_url" value="${esc(app.dify_base_url)}"></label>
         <label>${T('fieldAPIKey')}<input name="dify_api_key" placeholder="${T('reviewKeepOriginalKey')}"></label>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.5rem">
+        <div style="display:grid;grid-template-columns:${isNarrowScreen()?'1fr':'1fr 1fr 1fr'};gap:.5rem">
           <label>${T('donationAppThDeadline')}<input name="deadline" type="datetime-local" value="${fmtLocalDT(app.deadline)}"></label>
           <label>${T('donationAppThCount')}<input name="total_count" type="number" min="1" value="${esc(String(app.total_count))}"></label>
           <label>${T('rpmLimitLabel')}<input name="rpm_limit" type="number" min="1" value="${esc(String(app.rpm_limit || 10))}" placeholder="${T('rpmLimitHint')}"></label>
@@ -1495,13 +1495,13 @@ async function showDonationEditDialog(d) {
       <header><h3>${T('donationEditTitle').replace("{id}", String(d.id))}</h3></header>
       <p class="muted" style="font-size:.85em">${T('donationReviewModifyHint')}</p>
       <form id="don-edit-form">
-        <div style="display:grid;grid-template-columns:auto 1fr;gap:.5rem;align-items:end">
+        <div style="display:grid;grid-template-columns:${isNarrowScreen()?'1fr':'auto 1fr'};gap:.5rem;align-items:end">
           <label>${T('thService')}<input name="service" value="${esc(d.service)}"></label>
           <label>${T('thModel')}<input name="model" value="${esc(d.model)}"></label>
         </div>
         <label>${T('fieldBaseURL')}<input name="dify_base_url" value="${esc(d.dify_base_url)}"></label>
         <label>${T('fieldAPIKey')}<input name="dify_api_key" placeholder="${T('reviewKeepOriginalKey')}"></label>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.5rem">
+        <div style="display:grid;grid-template-columns:${isNarrowScreen()?'1fr':'1fr 1fr 1fr'};gap:.5rem">
           <label>${T('charityDeadline')}<input name="deadline" type="datetime-local" value="${fmtLocalDT(d.deadline)}"></label>
           <label>${T('charityTotalCount')}<input name="total_count" type="number" min="1" value="${esc(String(d.total_count))}"></label>
           <label>${T('rpmLimitLabel')}<input name="rpm_limit" type="number" min="1" value="${esc(String(d.rpm_limit || 10))}" placeholder="${T('rpmLimitHint')}"></label>
@@ -1570,7 +1570,7 @@ async function showBulletinEditDialog(b) {
       <form id="bulletin-edit-form">
         <label>${T('bulletinFieldTitle')}<input name="title" value="${esc(b.title)}" required></label>
         <label>${T('bulletinFieldContent')}<textarea name="content" rows="6" style="font-family:monospace" required>${esc(b.content)}</textarea></label>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+        <div style="display:grid;grid-template-columns:${isNarrowScreen()?'1fr':'1fr 1fr'};gap:.75rem">
           <label>${T('bulletinFieldType')}
             <select name="type">
               <option value="info" ${b.type==='info'?'selected':''}>${T('bulletinTypeInfo')}</option>
@@ -1585,7 +1585,7 @@ async function showBulletinEditDialog(b) {
             </select>
           </label>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+        <div style="display:grid;grid-template-columns:${isNarrowScreen()?'1fr':'1fr 1fr'};gap:.75rem">
           <label>${T('bulletinFieldSortOrder')}<input name="sort_order" type="number" value="${esc(String(b.sort_order))}"></label>
           <label>${T('bulletinFieldLang')}
             <select name="lang">
@@ -1753,7 +1753,7 @@ function renderAdminBulletins() {
     <form id="admin-bulletin-form">
       <label>${T('bulletinFieldTitle')}<input name="title" required></label>
       <label>${T('bulletinFieldContent')}<textarea name="content" rows="6" style="font-family:monospace" required></textarea></label>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+      <div style="display:grid;grid-template-columns:${isNarrowScreen()?'1fr':'1fr 1fr'};gap:.75rem">
         <label>${T('bulletinFieldType')}
           <select name="type">
             <option value="info">${T('bulletinTypeInfo')}</option>
@@ -1768,7 +1768,7 @@ function renderAdminBulletins() {
           </select>
         </label>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+      <div style="display:grid;grid-template-columns:${isNarrowScreen()?'1fr':'1fr 1fr'};gap:.75rem">
         <label>${T('bulletinFieldSortOrder')}<input name="sort_order" type="number" value="0"></label>
         <label>${T('bulletinFieldLang')}
           <select name="lang">

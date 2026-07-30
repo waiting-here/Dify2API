@@ -108,7 +108,7 @@ async function renderUserDashboard() {
         <div class="table-wrap"><table><thead><tr><th>${T('thModel')}</th><th>${T('thNote')}</th><th>${T('thEnabled')}</th><th>${T('thActions')}</th></tr></thead><tbody id="cfg-rows"></tbody></table></div>
         <div class="row-actions" id="cfg-pager" style="margin:.5rem 0 1rem"></div>
         <form id="cfg-form">
-          <div style="display:grid;grid-template-columns:auto 1fr;gap:.5rem;align-items:end">
+          <div style="display:grid;grid-template-columns:${isNarrowScreen()?'1fr':'auto 1fr'};gap:.5rem;align-items:end">
             <label>${T('thService')}<select name="service" id="cfg-service"></select></label>
             <label>${T('thModel')}<input name="backend" placeholder="${T('fieldBackend')}${T('fieldBackendHint')}" required></label>
           </div>
@@ -716,13 +716,13 @@ async function renderMyDonations() {
     // Donation description + hidden form.
     html += `<article class="note info" style="margin-bottom:1rem">${T('userDonationDescription')}</article>`;
     html += `<form id="donation-apply-form" style="display:none">
-      <div style="display:grid;grid-template-columns:auto 1fr;gap:.5rem;align-items:end">
+      <div style="display:grid;grid-template-columns:${isNarrowScreen()?'1fr':'auto 1fr'};gap:.5rem;align-items:end">
         <label>${T('thService')}<select name="service" id="don-apply-service"></select></label>
         <label>${T('thModel')}<input name="model" placeholder="${T('fieldBackend')}" required></label>
       </div>
       <label>${T('fieldBaseURL')}<input name="dify_base_url" placeholder="https://api.dify.ai/v1" required></label>
       <label>${T('fieldAPIKey')}<input name="dify_api_key" placeholder="app-…" required></label>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.5rem">
+      <div style="display:grid;grid-template-columns:${isNarrowScreen()?'1fr':'1fr 1fr 1fr'};gap:.5rem">
         <label>${T('donationApplyDeadline')}<input name="deadline" type="datetime-local" required></label>
         <label>${T('donationApplyTotalCount')}<input name="total_count" type="number" min="1" value="100" required></label>
         <label>${T('rpmLimitLabel')}<input name="rpm_limit" type="number" min="1" value="10" placeholder="${T('rpmLimitUserHint')}"></label>

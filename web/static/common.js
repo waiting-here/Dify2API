@@ -14,6 +14,10 @@ const fmtLocalDT = (ts) => {
   const pad = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
+/* True on phone/tablet widths. Used by inline-style grids in admin.js/user.js
+ * (CSS @media cannot override inline grid-template-columns). Forms re-render
+ * on tab switch / dialog open, so the value is fresh at render time. */
+const isNarrowScreen = () => window.innerWidth <= 768;
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
