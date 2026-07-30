@@ -518,3 +518,60 @@ func TestDebugStart_ReplacesOldSession(t *testing.T) {
 		t.Fatal("first channel should be closed after replaced event")
 	}
 }
+
+// drainDebugChan drains a debug event channel in a goroutine to prevent
+// blocking when start() replaces the previous session.
+func drainDebugChan(ch chan debugEvent) {
+	for range ch {
+	}
+}
+
+// ---- Debug Abuse Detection ----
+
+func TestDebugAbuse_TriggersAlert(t *testing.T) {
+	gw, _, u, _ := newUserSession(t)
+	hub := gw.userDebug
+
+	// Call start() 6 times rapidly; first 5 should not trigger, 6th should.
+	for i := 0; i < 5; i++ {
+		ch, isAbuse := hub.start(u.ID, true)
+		if isAbuse {
+			t.Fatalf("start #%d: expected isAbuse=false, got true", i+1)
+		}
+		// Drain the old channel so it doesn't block (each start() replaces
+		// the previous session and closes the old channel after "replaced").
+		go drainDebugChan(ch)
+	}
+	// 6th call should exceed the threshold of 5.
+	ch, isAbuse := hub.start(u.ID, true)
+	if !isAbuse {
+		t.Fatal("6th start should trigger abuse alert")
+	}
+	go drainDebugChan(ch)
+
+	// After abuse trigger, startTimes should be cleared.
+	// A 7th call should NOT trigger abuse (counter reset).
+	ch2, isAbuse2 := hub.start(u.ID, true)
+	if isAbuse2 {
+		t.Fatal("after abuse counter reset, next start should not trigger abuse")
+	}
+	go drainDebugChan(ch2)
+}
+
+func TestDebugAbuse_WindowExpiry(t *testing.T) {
+	gw, _, u, _ := newUserSession(t)
+	hub := gw.userDebug
+
+	// Directly insert an old timestamp outside the detection window.
+	hub.mu.Lock()
+	hub.startTimes[u.ID] = []time.Time{time.Now().Add(-20 * time.Minute)}
+	hub.mu.Unlock()
+
+	// Call start() once — the old timestamp (20 min ago) should be cleaned
+	// because it's outside the 10-min window, leaving only 1 recent timestamp.
+	ch, isAbuse := hub.start(u.ID, true)
+	if isAbuse {
+		t.Fatal("old timestamp outside window should be cleaned, not trigger abuse")
+	}
+	go drainDebugChan(ch)
+}

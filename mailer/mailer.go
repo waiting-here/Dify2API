@@ -92,6 +92,16 @@ func (m *Mailer) PricingMissing(service, model string) {
 	m.queue(EventPricingMissing, summary)
 }
 
+// DebugAbuse queues a notification for user debug abuse detection.
+func (m *Mailer) DebugAbuse(username string, userID int64, sessionCount int, windowMinutes int) {
+	if m == nil {
+		return
+	}
+	summary := fmt.Sprintf("%s（ID：%d）在 %d 分钟内开启了 %d 次 Debug session",
+		username, userID, windowMinutes, sessionCount)
+	m.queue(EventDebugAbuse, summary)
+}
+
 // AdminLoginLocked queues a notification for admin login lockout.
 func (m *Mailer) AdminLoginLocked(ip string, lockUntil time.Time) {
 	if m == nil {

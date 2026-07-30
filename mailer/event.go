@@ -10,6 +10,7 @@ const (
 	EventDonationInactive EventType = "donation_inactive"
 	EventAdminLoginLocked EventType = "admin_login_locked"
 	EventPricingMissing   EventType = "pricing_missing"
+	EventDebugAbuse       EventType = "debug_abuse"
 )
 
 // eventSubject returns the Chinese subject line for the aggregated email.
@@ -24,6 +25,8 @@ func eventSubject(et EventType, count int) string {
 		label = "管理员登录锁定"
 	case EventPricingMissing:
 		label = "公益定价缺失"
+	case EventDebugAbuse:
+		label = "用户 Debug 滥用告警"
 	default:
 		label = "系统通知"
 	}

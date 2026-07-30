@@ -13,6 +13,11 @@ import (
 	"dify2api/openai"
 )
 
+const (
+	debugAbuseWindow    = 10 * time.Minute // detection window
+	debugAbuseThreshold = 5                 // trigger alert when session count exceeds this
+)
+
 // ---- types ----
 
 // debugEvent is pushed to the user's SSE stream for each intercepted request.
@@ -56,19 +61,43 @@ type userDebugSession struct {
 
 // userDebugHub manages all per-user debug sessions.
 type userDebugHub struct {
-	mu       sync.RWMutex
-	sessions map[int64]*userDebugSession
+	mu         sync.RWMutex
+	sessions   map[int64]*userDebugSession
+	startTimes map[int64][]time.Time // userID → recent session start timestamps
 }
 
 func newUserDebugHub() *userDebugHub {
-	return &userDebugHub{sessions: make(map[int64]*userDebugSession)}
+	return &userDebugHub{
+		sessions:   make(map[int64]*userDebugSession),
+		startTimes: make(map[int64][]time.Time),
+	}
 }
 
 // start creates (or replaces) a debug session.  Returns the channel the SSE
-// handler should read from.
-func (h *userDebugHub) start(userID int64, dryRun bool) chan debugEvent {
+// handler should read from and a boolean indicating whether the abuse threshold
+// was exceeded.
+func (h *userDebugHub) start(userID int64, dryRun bool) (chan debugEvent, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
+	// Abuse tracking: record timestamp and check threshold.
+	now := time.Now()
+	times := h.startTimes[userID]
+	cutoff := now.Add(-debugAbuseWindow)
+	// Filter out old timestamps outside the detection window.
+	kept := make([]time.Time, 0, len(times)+1)
+	for _, t := range times {
+		if t.After(cutoff) {
+			kept = append(kept, t)
+		}
+	}
+	kept = append(kept, now)
+	isAbuse := len(kept) > debugAbuseThreshold
+	if isAbuse {
+		h.startTimes[userID] = nil // reset counter to prevent repeated alerts
+	} else {
+		h.startTimes[userID] = kept
+	}
 
 	if old, ok := h.sessions[userID]; ok {
 		// Push a "replaced" event so the old SSE consumer can close gracefully.
@@ -89,7 +118,7 @@ func (h *userDebugHub) start(userID int64, dryRun bool) chan debugEvent {
 		active:    true,
 		createdAt: time.Now(),
 	}
-	return ch
+	return ch, isAbuse
 }
 
 // stop closes and removes a session immediately.
@@ -252,7 +281,10 @@ func (g *Gateway) handleDebugStart(w http.ResponseWriter, r *http.Request) {
 		dryRun = *req.DryRun
 	}
 
-	g.userDebug.start(u.ID, dryRun)
+	_, isAbuse := g.userDebug.start(u.ID, dryRun)
+	if isAbuse && g.mailer != nil {
+		g.mailer.DebugAbuse(u.Username, u.ID, debugAbuseThreshold, int(debugAbuseWindow.Minutes()))
+	}
 	log.Printf("[DEBUG_USER] user %d started debug (dry_run=%v)", u.ID, dryRun)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})

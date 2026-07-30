@@ -82,5 +82,7 @@ func (c *cooler) flush() {
 
 	if err := c.sendFunc(c.cfg, subject, body); err != nil {
 		log.Printf("[MAILER] send %s failed: %v", c.eventType, err)
+	} else {
+		log.Printf("[MAILER] sent %s (%d events): %s", c.eventType, len(items), subject)
 	}
 }

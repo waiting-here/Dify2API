@@ -246,6 +246,50 @@ func TestAdminLoginLocked_CorrectContent(t *testing.T) {
 	}
 }
 
+func TestDebugAbuse_CorrectContent(t *testing.T) {
+	ms := &mockSender{}
+	cfg := testSMTPConfig()
+	m := &Mailer{cfg: cfg, enabled: true, coolers: make(map[EventType]*cooler), sendFunc: ms.send}
+
+	origCoolWindow := coolWindow
+	coolWindow = 50 * time.Millisecond
+	defer func() { coolWindow = origCoolWindow }()
+
+	m.DebugAbuse("testuser", 42, 6, 10)
+
+	time.Sleep(150 * time.Millisecond)
+
+	ms.mu.Lock()
+	count := len(ms.mails)
+	first := sentMail{}
+	if count > 0 {
+		first = ms.mails[0]
+	}
+	ms.mu.Unlock()
+
+	if count != 1 {
+		t.Fatalf("expected 1 mail, got %d", count)
+	}
+	if !strings.Contains(first.subject, "用户 Debug 滥用告警") {
+		t.Errorf("subject should contain 用户 Debug 滥用告警, got %q", first.subject)
+	}
+	if !strings.Contains(first.subject, "1 起") {
+		t.Errorf("subject should say 1 起, got %q", first.subject)
+	}
+	if !strings.Contains(first.body, "testuser") {
+		t.Errorf("body should contain username, got %q", first.body)
+	}
+	if !strings.Contains(first.body, "42") {
+		t.Errorf("body should contain userID 42, got %q", first.body)
+	}
+	if !strings.Contains(first.body, "6") {
+		t.Errorf("body should contain session count 6, got %q", first.body)
+	}
+	if !strings.Contains(first.body, "10") {
+		t.Errorf("body should contain window minutes 10, got %q", first.body)
+	}
+}
+
 func TestNilReceiver_NoPanic(t *testing.T) {
 	var m *Mailer // nil
 
@@ -254,6 +298,8 @@ func TestNilReceiver_NoPanic(t *testing.T) {
 	m.UserAutoBanned("u", 1, time.Now(), 24, 1)
 	m.DonationInactive("s", "m", 1, 10)
 	m.AdminLoginLocked("1.2.3.4", time.Now())
+	m.DebugAbuse("u", 1, 5, 10)
+	m.PricingMissing("s", "m")
 
 	if m.Enabled() {
 		t.Error("nil should not be enabled")
