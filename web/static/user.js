@@ -967,14 +967,19 @@ async function showConfigEditDialog(c) {
       let cls = "ok", html = "";
       if (check.error) {
         cls = "warn"; html = `${T('checkError')}: ${esc(check.error)}`;
-      } else if (check.compatible) {
-        html = `${T('checkCompatible')}`;
-        if (check.extra_app_optional?.length) html += `<br><span class="muted">${T('checkExtra').replace("{list}", esc(check.extra_app_optional.join(", ")))}</span>`;
+      } else if ("compatible" in check) {
+        if (check.compatible) {
+          html = `${T('checkCompatible')}`;
+          if (check.extra_app_optional?.length) html += `<br><span class="muted">${T('checkExtra').replace("{list}", esc(check.extra_app_optional.join(", ")))}</span>`;
+        } else {
+          cls = "err";
+          html = `${T('checkIncompatible')}`;
+          if (check.missing_contract_vars?.length) html += `<br>${T('checkMissing').replace("{list}", esc(check.missing_contract_vars.join(", ")))}`;
+          if (check.uncovered_app_required?.length) html += `<br>${T('checkUncovered').replace("{list}", esc(check.uncovered_app_required.join(", ")))}`;
+        }
       } else {
-        cls = "err";
-        html = `${T('checkIncompatible')}`;
-        if (check.missing_contract_vars?.length) html += `<br>${T('checkMissing').replace("{list}", esc(check.missing_contract_vars.join(", ")))}`;
-        if (check.uncovered_app_required?.length) html += `<br>${T('checkUncovered').replace("{list}", esc(check.uncovered_app_required.join(", ")))}`;
+        // Probe skipped: the binding (model / base URL / key) did not change.
+        html = `${T('checkSkipped')}`;
       }
       msg.innerHTML = `<div class="note ${cls}">${html}</div>`;
       await loadConfigs();
@@ -1003,14 +1008,19 @@ async function onConfigSubmit(e) {
     let cls = "ok", html = "";
     if (c.error) {
       cls = "warn"; html = `${T('checkError')}: ${esc(c.error)}`;
-    } else if (c.compatible) {
-      html = `${T('checkCompatible')}`;
-      if (c.extra_app_optional?.length) html += `<br><span class="muted">${T('checkExtra').replace("{list}", esc(c.extra_app_optional.join(", ")))}</span>`;
+    } else if ("compatible" in c) {
+      if (c.compatible) {
+        html = `${T('checkCompatible')}`;
+        if (c.extra_app_optional?.length) html += `<br><span class="muted">${T('checkExtra').replace("{list}", esc(c.extra_app_optional.join(", ")))}</span>`;
+      } else {
+        cls = "err";
+        html = `${T('checkIncompatible')}`;
+        if (c.missing_contract_vars?.length) html += `<br>${T('checkMissing').replace("{list}", esc(c.missing_contract_vars.join(", ")))}`;
+        if (c.uncovered_app_required?.length) html += `<br>${T('checkUncovered').replace("{list}", esc(c.uncovered_app_required.join(", ")))}`;
+      }
     } else {
-      cls = "err";
-      html = `${T('checkIncompatible')}`;
-      if (c.missing_contract_vars?.length) html += `<br>${T('checkMissing').replace("{list}", esc(c.missing_contract_vars.join(", ")))}`;
-      if (c.uncovered_app_required?.length) html += `<br>${T('checkUncovered').replace("{list}", esc(c.uncovered_app_required.join(", ")))}`;
+      // Probe skipped: the binding (model / base URL / key) did not change.
+      html = `${T('checkSkipped')}`;
     }
     note.innerHTML = `<div class="note ${cls}">${html}</div>`;
     await loadConfigs();

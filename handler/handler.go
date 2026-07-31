@@ -53,6 +53,9 @@ type Gateway struct {
 	difyPolicy *dify.EgressPolicy
 	// difyProbeSem bounds concurrent user-triggered /parameters probes.
 	difyProbeSem chan struct{}
+	// probeLimiter caps per-user App compatibility probes (5/min) so the
+	// informational check cannot be used as an unlimited Dify cannon.
+	probeLimiter *probeLimiter
 	// remoteContentOrigins gates URLs fetched inside remote Dify workflows.
 	remoteContentOrigins map[string]struct{}
 	// antiAbuseCache maps service -> per-service anti-abuse config (hot path).
@@ -95,6 +98,7 @@ func NewGateway(cfg *config.Config, store *db.Store) *Gateway {
 		donationLimiter:      newDonationRateLimiter(),
 		difyPolicy:           difyPolicy,
 		difyProbeSem:         make(chan struct{}, probeLimit),
+		probeLimiter:         newProbeLimiter(defaultProbeLimitPerUser),
 		remoteContentOrigins: remoteOrigins,
 	}
 	if err := gw.loadAntiAbuseCache(); err != nil {

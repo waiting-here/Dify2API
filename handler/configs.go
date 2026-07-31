@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -27,22 +28,39 @@ func appConfigJSON(c *db.AppConfig) map[string]interface{} {
 	}
 }
 
+// appProbeTimeout is the single total deadline for one App compatibility
+// probe: it covers semaphore queueing, DNS, TCP connect, TLS, response
+// headers and the full body.
+const appProbeTimeout = 15 * time.Second
+
 // checkAppBinding fetches the App's parameter list and validates it against
 // the service contract of the model's prefix. Informational only (never blocks).
+// The per-user probe cap and the total deadline keep the check cheap for the
+// operator to expose: rate-limited or timed-out probes report app_check.error
+// and never carry a "compatible" verdict.
 func (g *Gateway) checkAppBinding(ctx context.Context, userID int64, model, baseURL, apiKey string) map[string]interface{} {
 	service := translator.ServiceOfModel(model)
-	release, err := g.acquireDifyProbe(ctx)
+	// Per-user cap first: a rate-limited attempt must not consume a global
+	// semaphore slot (nor wait for one).
+	if !g.probeLimiter.allow(userID, time.Now()) {
+		return map[string]interface{}{"service": service, "error": "rate limited, try again later"}
+	}
+	// Single total deadline for the whole probe (queueing included). The
+	// request context's own cancellation (client disconnect) still applies.
+	probeCtx, cancel := context.WithTimeout(ctx, appProbeTimeout)
+	defer cancel()
+	release, err := g.acquireDifyProbe(probeCtx)
 	if err != nil {
-		return map[string]interface{}{"service": service, "error": err.Error()}
+		return map[string]interface{}{"service": service, "error": probeError(err)}
 	}
 	defer release()
-	client, err := g.newDifyClient(userID, baseURL, apiKey, 15*time.Second)
+	client, err := g.newDifyClient(userID, baseURL, apiKey, appProbeTimeout)
 	if err != nil {
 		return map[string]interface{}{"service": service, "error": err.Error()}
 	}
-	params, err := client.FetchParametersContext(ctx)
+	params, err := client.FetchParametersContext(probeCtx)
 	if err != nil {
-		return map[string]interface{}{"service": service, "error": err.Error()}
+		return map[string]interface{}{"service": service, "error": probeError(err)}
 	}
 	res := translator.CheckAppParams(service, params)
 	out := map[string]interface{}{
@@ -59,6 +77,28 @@ func (g *Gateway) checkAppBinding(ctx context.Context, userID int64, model, base
 		out["extra_app_optional"] = res.ExtraAppOptional
 	}
 	return out
+}
+
+// probeError maps a probe failure to its app_check.error text: deadline
+// exhaustion (semaphore queueing or upstream) is always reported as a
+// timeout; other failures (network, DNS, …) keep their own description.
+func probeError(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "probe timeout"
+	}
+	return err.Error()
+}
+
+// bindingUnchanged reports whether an update changes nothing the App probe
+// depends on: model, normalized base URL and API key. Keys are compared on
+// decrypted plaintext (the stored ciphertext is re-randomized on every
+// encrypt); a decryption failure conservatively counts as changed.
+func (g *Gateway) bindingUnchanged(existing *db.AppConfig, req *configRequest) bool {
+	if existing == nil || existing.Model != req.Model || existing.DifyBaseURL != req.BaseURL {
+		return false
+	}
+	key, err := g.Store.Decrypt(existing.DifyAPIKeyEnc)
+	return err == nil && key == req.APIKey
 }
 
 // --- GET /api/configs ---
@@ -206,6 +246,10 @@ func (g *Gateway) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fetch the current row before the update: an update that changes nothing
+	// the probe depends on (model, base URL, API key) skips the compatibility
+	// check entirely — note-only edits must not probe.
+	existing, _ := g.Store.GetAppConfig(id)
 	if err := g.Store.UpdateAppConfig(id, u.ID, req.Model, req.BaseURL, req.APIKey, req.Note); err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			g.writeError(w, http.StatusConflict, "conflict", t(g.resolveLang(r), "该模型名已在你的配置中存在", "This model name already exists in your configuration"))
@@ -220,12 +264,15 @@ func (g *Gateway) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg, _ := g.Store.GetAppConfig(id)
+	resp := map[string]interface{}{
+		"ok":     true,
+		"config": appConfigJSON(cfg),
+	}
+	if !g.bindingUnchanged(existing, &req) {
+		resp["app_check"] = g.checkAppBinding(r.Context(), u.ID, req.Model, req.BaseURL, req.APIKey)
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ok":        true,
-		"config":    appConfigJSON(cfg),
-		"app_check": g.checkAppBinding(r.Context(), u.ID, req.Model, req.BaseURL, req.APIKey),
-	})
+	json.NewEncoder(w).Encode(resp)
 }
 
 // --- POST /api/configs/{id}/toggle ---
