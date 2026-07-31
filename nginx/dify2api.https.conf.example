@@ -14,6 +14,12 @@ server {
     return 444;
 }
 
+# Cloudflare 代理（橙色云）部署：另建 conf.d/cloudflare-real-ip.conf：
+#   用 https://www.cloudflare.com/ips-v4 与 /ips-v6 的当前网段逐条写
+#   set_real_ip_from <网段>;，然后 real_ip_header CF-Connecting-IP;
+#   此后下方 proxy_set_header X-Forwarded-For $remote_addr 即为真实客户端。
+#   网段会变动，建议定期更新（可脚本化拉取官方两页）。
+
 # HTTP → 固定域名 HTTPS（不要改回 https://$host）。
 server {
     listen 80;

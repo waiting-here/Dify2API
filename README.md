@@ -55,13 +55,13 @@ SITE_BASE_URL=https://dify2api.example.com
 |---|---|---|
 | `ADMIN_HOST` | `admin.<主域名>` | 管理站 Host |
 | `TRUSTED_PROXY_CIDRS` | loopback | 哪些 TCP peer 可提供转发头；无代理填 `none` |
-| `DIFY_EGRESS_ALLOWLIST` | 空 | 显式允许私有 Dify 的精确 origin（拒绝 CIDR/裸 IP） |
-| `REMOTE_CONTENT_ORIGIN_ALLOWLIST` | 空 | 允许 Dify 抓取的 website/image 精确 origin |
+| `DIFY_EGRESS_ALLOWLIST` | 空 | 显式允许私有 Dify 的精确 origin（拒绝 CIDR/裸 IP）；留空仅阻断非公网目标，公网域名（含 CDN 代理）无需条目 |
+| `REMOTE_CONTENT_ORIGIN_ALLOWLIST` | 空 | 允许 Dify 抓取的 website/image 精确 origin；留空则两个功能禁用（data URI 图片不受影响） |
 | `DIFY_MAX_RESPONSE_MB` | `32` | 解压后 JSON / 累计 SSE 上限 |
 | `MAX_CHAT_IN_FLIGHT` | `32` | 全局聊天并发上限 |
 | `MAX_REQUEST_BODY_MB` | `10` | chat 请求体上限 |
 | `MAX_WEB_REQUEST_BODY_KB` | `256` | 状态变更 Web API 请求体上限 |
-| `SSE_BUFFER_MB` | `1` | 每条 SSE 的初始缓冲 |
+| `SSE_BUFFER_MB` | `1` | 每条 SSE 的初始缓冲，按需增长（单行上限 10 MiB） |
 
 ### 2. 反向代理
 
@@ -73,6 +73,14 @@ SITE_BASE_URL=https://dify2api.example.com
   XFF 为 `$remote_addr`，不要保留客户端伪造的 XFF。
 - SSE 路径关闭代理缓冲，读取超时应不低于 `DIFY_HTTP_TIMEOUT_MS`。
 - 静态资源必须遵守 origin revalidation：不要在 CDN 强制长期 immutable 缓存。
+
+**Cloudflare 代理（橙色云）部署**：源站收到的连接来自 Cloudflare 边缘 IP。
+推荐保持 `TRUSTED_PROXY_CIDRS` 为 loopback 默认值，在 nginx 中启用 `real_ip` 模块：
+用 Cloudflare 官方网段（https://www.cloudflare.com/ips-v4 与 ips-v6，建议定期更新）
+配置 `set_real_ip_from`，`real_ip_header CF-Connecting-IP;`，此后 `$remote_addr`
+即真实客户端，继续用 `X-Forwarded-For $remote_addr` 覆盖转发。不要把客户端可伪造的
+XFF/CF-Connecting-IP 直接透传给网关。另注意 Cloudflare 对非流式响应存在约 100 秒
+超时（免费套餐），长任务建议客户端使用流式传输（`stream: true`）。
 
 ### 3. 首次使用
 
@@ -134,7 +142,8 @@ v1.2.0 的公益记账在**预留时**即扣减捐赠 `remaining_count` 与消�
 - **备份与权限**：数据库和 master key 缺一不可。建议独立低权限账号、`umask 077`、
   目录 `0700`、配置/数据库/key `0600`，并定期做恢复演练。
 - **出站防护**：Dify 默认只能解析到公网地址；阻断 loopback、私网、link-local、metadata、
-  DNS rebinding、跨 origin 重定向和环境代理。私网访问只能由部署者以精确 origin 显式允许；
+  DNS rebinding、跨 origin 重定向和环境代理。解析到公网地址的 Dify（含 Cloudflare 等
+  CDN 代理的域名）无需 allowlist 条目；私网目标只能由部署者以精确 origin 显式允许；
   网关自身的 `SITE_BASE_URL`/`ADMIN_HOST` 与 loopback 监听端口即使在 allowlist 中也永久拒绝，
   且阻断无文本/时序侧信道。
 - **请求生命周期**：下游断开会取消上游请求，并用独立短 context 尝试 Dify Stop；
