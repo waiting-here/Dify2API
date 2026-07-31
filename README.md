@@ -103,6 +103,14 @@ curl https://dify2api.example.com/v1/models \
 
 完整版本变更与兼容性说明见 [CHANGELOG.md](CHANGELOG.md)。
 
+#### 降级说明（不建议）
+
+v1.2.0 的公益记账在**预留时**即扣减捐赠 `remaining_count` 与消费者积分（v1.1.0 是成功
+时扣减）。若存在未结算的 reservation（`reserved`/`dispatched` 状态）时降级回 v1.1.0，
+旧二进制无法识别这些记录（启动恢复只在 v1.2.0 中执行），可能造成账务不一致。
+确需降级时，请先用 v1.2.0 启动一次完成恢复（所有 reservation 变为 `committed`/`released`）
+再切换；新表/新索引对 v1.1.0 无影响。
+
 ## 服务与消息契约
 
 | 服务 | 消息布局 | Dify App 变量 |
