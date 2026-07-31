@@ -3,6 +3,7 @@ package handler
 import (
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -115,27 +116,86 @@ func (t *loginThrottle) purge() {
 	}
 }
 
-// clientIP extracts the real client IP, trusting the proxy headers set by our
-// own nginx (the origin is firewalled to Cloudflare/nginx only).
-//
-// SECURITY: this function trusts X-Forwarded-For / X-Real-IP unconditionally.
-// The Go server MUST listen on a loopback or firewalled address (default
-// localhost:10086) so that only the trusted reverse proxy (nginx) can reach
-// it.  Do NOT expose the Go listener directly to the public internet — an
-// attacker who bypasses the proxy can spoof these headers and evade login
-// throttling.
-func clientIP(r *http.Request) string {
+const (
+	maxForwardedForBytes = 4096
+	maxForwardedHops     = 32
+)
+
+// clientIP returns the effective client address. Forwarding headers are
+// considered only when the TCP peer belongs to TRUSTED_PROXY_CIDRS. For a
+// trusted multi-hop chain, addresses are examined right-to-left and trusted
+// proxies are stripped until the first untrusted client is found.
+func (g *Gateway) clientIP(r *http.Request) string {
+	peer, ok := parseIP(r.RemoteAddr)
+	if !ok {
+		return "unknown"
+	}
+	if !g.isTrustedProxy(peer) {
+		return peer.String()
+	}
+
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.Index(xff, ","); i > 0 {
-			return strings.TrimSpace(xff[:i])
+		if len(xff) > maxForwardedForBytes {
+			return peer.String()
 		}
-		return strings.TrimSpace(xff)
+		parts := strings.Split(xff, ",")
+		if len(parts) > maxForwardedHops {
+			return peer.String()
+		}
+		var leftmost netip.Addr
+		for i := len(parts) - 1; i >= 0; i-- {
+			addr, valid := parseIP(parts[i])
+			if !valid {
+				return peer.String()
+			}
+			leftmost = addr
+			if !g.isTrustedProxy(addr) {
+				return addr.String()
+			}
+		}
+		if leftmost.IsValid() {
+			return leftmost.String()
+		}
 	}
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return strings.TrimSpace(xri)
+
+	if xri := r.Header.Get("X-Real-IP"); len(xri) <= 128 {
+		if addr, valid := parseIP(xri); valid {
+			return addr.String()
+		}
 	}
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
+	return peer.String()
+}
+
+func (g *Gateway) isTrustedProxy(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	for _, prefix := range g.Config.TrustedProxyCIDRs {
+		if prefix.Contains(addr) {
+			return true
+		}
 	}
-	return r.RemoteAddr
+	return false
+}
+
+func (g *Gateway) trustedProxyRequest(r *http.Request) bool {
+	peer, ok := parseIP(r.RemoteAddr)
+	return ok && g.isTrustedProxy(peer)
+}
+
+func parseIP(raw string) (netip.Addr, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return netip.Addr{}, false
+	}
+	if addr, err := netip.ParseAddr(raw); err == nil {
+		return addr.WithZone("").Unmap(), true
+	}
+	if addrPort, err := netip.ParseAddrPort(raw); err == nil {
+		return addrPort.Addr().WithZone("").Unmap(), true
+	}
+	if host, _, err := net.SplitHostPort(raw); err == nil {
+		if addr, err := netip.ParseAddr(host); err == nil {
+			return addr.WithZone("").Unmap(), true
+		}
+	}
+	return netip.Addr{}, false
 }

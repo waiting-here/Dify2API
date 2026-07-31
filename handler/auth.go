@@ -1,54 +1,63 @@
 package handler
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"dify2api/auth"
 	"dify2api/db"
 )
 
-// oauthStates tracks in-flight OAuth state parameters (CSRF protection).
-var oauthStates = struct {
-	sync.Mutex
-	m map[string]time.Time
-}{m: make(map[string]time.Time)}
+const oauthStateTTL = 10 * time.Minute
 
-func newOAuthState() (string, error) {
-	raw := make([]byte, 16)
-	if _, err := rand.Read(raw); err != nil {
+// newOAuthState returns a self-contained, authenticated state token. Keeping
+// the state in the short-lived browser cookie avoids an attacker-controlled
+// server-side map while the HMAC and timestamp prevent tampering and stale
+// manual replays. Rotating the Discord client secret invalidates in-flight
+// login attempts, which is an acceptable fail-closed behaviour.
+func (g *Gateway) newOAuthState(now time.Time) (string, error) {
+	payload := make([]byte, 8+16)
+	binary.BigEndian.PutUint64(payload[:8], uint64(now.Unix()))
+	if _, err := rand.Read(payload[8:]); err != nil {
 		return "", err
 	}
-	state := fmt.Sprintf("%x", raw)
-	oauthStates.Lock()
-	defer oauthStates.Unlock()
-	// Purge expired entries (>10 min) opportunistically.
-	for s, exp := range oauthStates.m {
-		if time.Now().After(exp) {
-			delete(oauthStates.m, s)
-		}
-	}
-	oauthStates.m[state] = time.Now().Add(10 * time.Minute)
-	return state, nil
+	mac := hmac.New(sha256.New, g.oauthStateKey())
+	_, _ = mac.Write(payload)
+	return base64.RawURLEncoding.EncodeToString(append(payload, mac.Sum(nil)...)), nil
 }
 
-func consumeOAuthState(state string) bool {
-	oauthStates.Lock()
-	defer oauthStates.Unlock()
-	exp, ok := oauthStates.m[state]
-	if !ok || time.Now().After(exp) {
+func (g *Gateway) validOAuthState(state string, now time.Time) bool {
+	if len(state) > 128 {
 		return false
 	}
-	delete(oauthStates.m, state)
-	return true
+	raw, err := base64.RawURLEncoding.DecodeString(state)
+	if err != nil || len(raw) != 8+16+sha256.Size {
+		return false
+	}
+	payload, suppliedMAC := raw[:24], raw[24:]
+	mac := hmac.New(sha256.New, g.oauthStateKey())
+	_, _ = mac.Write(payload)
+	if !hmac.Equal(suppliedMAC, mac.Sum(nil)) {
+		return false
+	}
+	issued := time.Unix(int64(binary.BigEndian.Uint64(payload[:8])), 0)
+	return !issued.After(now.Add(time.Minute)) && now.Sub(issued) <= oauthStateTTL
+}
+
+func (g *Gateway) oauthStateKey() []byte {
+	sum := sha256.Sum256([]byte("dify2api/oauth-state/v1\x00" + g.Config.Admin.DiscordClientSecret))
+	return sum[:]
 }
 
 // currentUser resolves the session cookie to a live, non-disabled user.
@@ -91,7 +100,7 @@ func (g *Gateway) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// L2: temporary lock after repeated failures (per ip+username).
-	key := clientIP(r) + "|" + req.Username
+	key := g.clientIP(r) + "|" + req.Username
 	now := time.Now()
 	if g.loginThrottle.locked(key, now) {
 		g.writeError(w, http.StatusForbidden, "login_locked", t(g.resolveLang(r), "尝试次数过多，请 15 分钟后再试", "Too many attempts, please try again in 15 minutes"))
@@ -103,7 +112,7 @@ func (g *Gateway) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 			lockUntil := now.Add(g.loginThrottle.lockDur)
 			log.Printf("[AUTH] admin login locked for %s until %v (too many failures)", key, lockUntil)
 			if g.mailer != nil {
-				g.mailer.AdminLoginLocked(clientIP(r), lockUntil)
+				g.mailer.AdminLoginLocked(g.clientIP(r), lockUntil)
 			}
 			g.writeError(w, http.StatusForbidden, "login_locked", t(g.resolveLang(r), "尝试次数过多，请 15 分钟后再试", "Too many attempts, please try again in 15 minutes"))
 			return
@@ -185,7 +194,7 @@ func (g *Gateway) handleSetLang(w http.ResponseWriter, r *http.Request) {
 
 // --- GET /auth/discord/login ---
 func (g *Gateway) handleDiscordLogin(w http.ResponseWriter, r *http.Request) {
-	state, err := newOAuthState()
+	state, err := g.newOAuthState(time.Now())
 	if err != nil {
 		g.writeError(w, http.StatusInternalServerError, "internal", "internal error")
 		return
@@ -204,20 +213,16 @@ func (g *Gateway) handleDiscordCallback(w http.ResponseWriter, r *http.Request) 
 	}
 
 	queryState := r.URL.Query().Get("state")
-	if !consumeOAuthState(queryState) {
-		fail("登录会话已过期，请返回重试。")
-		return
-	}
-	// Login-CSRF hardening: the OAuth state must also match the cookie set
-	// when the login flow started.  This prevents an attacker from
-	// tricking a victim into logging into the attacker's account.
 	cookieState := auth.OAuthStateFromRequest(r)
-	if cookieState == "" || cookieState != queryState {
-		auth.ClearOAuthStateCookie(w, g.Config.Admin.SiteBaseURL)
+	auth.ClearOAuthStateCookie(w, g.Config.Admin.SiteBaseURL)
+	// Login-CSRF hardening: bind the callback to the initiating browser and
+	// authenticate the timestamped state without retaining global state.
+	if cookieState == "" || len(cookieState) > 128 || len(queryState) > 128 || len(cookieState) != len(queryState) ||
+		subtle.ConstantTimeCompare([]byte(cookieState), []byte(queryState)) != 1 ||
+		!g.validOAuthState(queryState, time.Now()) {
 		fail("登录会话已过期，请返回重试。")
 		return
 	}
-	auth.ClearOAuthStateCookie(w, g.Config.Admin.SiteBaseURL)
 
 	code := r.URL.Query().Get("code")
 	if code == "" {

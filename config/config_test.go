@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -35,8 +36,11 @@ func TestLoadStartup_Defaults(t *testing.T) {
 		cfg.DBPath != "dify2api.db" || cfg.MasterKeyPath != "dify2api.key" {
 		t.Errorf("base defaults wrong: %+v", cfg)
 	}
-	if cfg.MaxChatInFlight != 32 || cfg.MaxRequestBodyMB != 10 || cfg.SSEBufferMB != 10 {
+	if cfg.MaxChatInFlight != 32 || cfg.MaxRequestBodyMB != 10 || cfg.MaxWebRequestBodyKB != 256 || cfg.SSEBufferMB != 10 {
 		t.Errorf("perf defaults wrong: %+v", cfg)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 2 || cfg.TrustedProxyCIDRs[0].String() != "127.0.0.0/8" || cfg.TrustedProxyCIDRs[1].String() != "::1/128" {
+		t.Errorf("trusted proxy defaults wrong: %v", cfg.TrustedProxyCIDRs)
 	}
 	if cfg.LoginMaxFailures != 5 || cfg.LoginWindowMin != 10 || cfg.LoginLockMin != 60 || cfg.LoginMinLatencyMs != 300 {
 		t.Errorf("login throttle defaults wrong: %+v", cfg)
@@ -45,8 +49,8 @@ func TestLoadStartup_Defaults(t *testing.T) {
 	if a.Username != "root" || a.Password != "s3cret" || a.DiscordClientID != "123" || a.DiscordClientSecret != "abc" {
 		t.Errorf("admin = %+v", a)
 	}
-	if a.SiteBaseURL != "https://dify2api.example.com" || a.SiteHost != "dify2api.example.com" || a.AdminHost != "admin.dify2api.example.com" {
-		t.Errorf("site hosts = %q / %q / %q", a.SiteBaseURL, a.SiteHost, a.AdminHost)
+	if a.SiteBaseURL != "https://dify2api.example.com" || a.SiteHost != "dify2api.example.com" || a.SiteURLHost != "dify2api.example.com" || a.AdminHost != "admin.dify2api.example.com" {
+		t.Errorf("site hosts = %q / %q / %q / %q", a.SiteBaseURL, a.SiteHost, a.SiteURLHost, a.AdminHost)
 	}
 }
 
@@ -55,6 +59,8 @@ func TestLoadStartup_CustomValues(t *testing.T) {
 LISTEN_ADDR=0.0.0.0:9090
 MAX_CHAT_IN_FLIGHT=128
 MAX_REQUEST_BODY_MB=4
+MAX_WEB_REQUEST_BODY_KB=64
+TRUSTED_PROXY_CIDRS=10.0.0.0/8,192.0.2.10
 SSE_BUFFER_MB=1
 LOGIN_LOCK_MIN=120
 ADMIN_HOST=manage.example.com
@@ -63,8 +69,11 @@ ADMIN_HOST=manage.example.com
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.ListenAddr != "0.0.0.0:9090" || cfg.MaxChatInFlight != 128 || cfg.MaxRequestBodyMB != 4 || cfg.SSEBufferMB != 1 {
+	if cfg.ListenAddr != "0.0.0.0:9090" || cfg.MaxChatInFlight != 128 || cfg.MaxRequestBodyMB != 4 || cfg.MaxWebRequestBodyKB != 64 || cfg.SSEBufferMB != 1 {
 		t.Errorf("custom perf values wrong: %+v", cfg)
+	}
+	if got := cfg.TrustedProxyCIDRs; len(got) != 2 || got[0].String() != "10.0.0.0/8" || got[1].String() != "192.0.2.10/32" {
+		t.Errorf("custom trusted proxies = %v", got)
 	}
 	if cfg.LoginLockMin != 120 {
 		t.Errorf("LOGIN_LOCK_MIN = %d, want 120", cfg.LoginLockMin)
@@ -114,6 +123,29 @@ func TestLoadStartup_MissingRequired(t *testing.T) {
 		if !strings.Contains(err.Error(), key) {
 			t.Errorf("error should mention %s: %v", key, err)
 		}
+	}
+}
+
+func TestLoadStartup_RejectsInvalidOriginsAndProxyCIDRs(t *testing.T) {
+	cases := []string{
+		strings.Replace(minimalAdmin, "https://dify2api.example.com/", "javascript://example.com/", 1),
+		strings.Replace(minimalAdmin, "https://dify2api.example.com/", "https://user:pass@example.com/", 1),
+		strings.Replace(minimalAdmin, "https://dify2api.example.com/", "https://example.com/path", 1),
+		minimalAdmin + "ADMIN_HOST=https://admin.example.com\n",
+		minimalAdmin + "TRUSTED_PROXY_CIDRS=127.0.0.1,not-a-cidr\n",
+	}
+	for i, content := range cases {
+		if _, err := LoadStartup(writeTemp(t, fmt.Sprintf("bad-%d.env", i), content)); err == nil {
+			t.Errorf("case %d: expected validation error", i)
+		}
+	}
+
+	cfg, err := LoadStartup(writeTemp(t, "none.env", minimalAdmin+"TRUSTED_PROXY_CIDRS=none\n"))
+	if err != nil {
+		t.Fatalf("TRUSTED_PROXY_CIDRS=none: %v", err)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 0 {
+		t.Fatalf("none should trust no proxy, got %v", cfg.TrustedProxyCIDRs)
 	}
 }
 

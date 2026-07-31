@@ -39,6 +39,7 @@ func ipRequest(h http.Handler, method, path, ip, body string) *httptest.Response
 		rd = strings.NewReader("")
 	}
 	req := httptest.NewRequest(method, path, rd)
+	req.RemoteAddr = "127.0.0.1:12345"
 	req.Header.Set("X-Forwarded-For", ip)
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
@@ -88,6 +89,16 @@ func TestWebThrottle_APIBlockedStaticExempt(t *testing.T) {
 	}
 }
 
+func TestWebThrottle_DiscordLoginIsBounded(t *testing.T) {
+	_, h := setupThrottledGateway(t, 1, 0)
+	if rec := ipRequest(h, http.MethodGet, "/auth/discord/login", "10.0.0.9", ""); rec.Code != http.StatusFound {
+		t.Fatalf("first login status = %d, want 302", rec.Code)
+	}
+	if rec := ipRequest(h, http.MethodGet, "/auth/discord/login", "10.0.0.9", ""); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second login status = %d, want 429", rec.Code)
+	}
+}
+
 func TestWebThrottle_DisabledByZero(t *testing.T) {
 	_, h := setupThrottledGateway(t, 0, 0)
 	for i := 0; i < 50; i++ {
@@ -105,6 +116,7 @@ func TestAuthFailThrottle_InvalidKeysThrottled(t *testing.T) {
 	// Invalid-key requests: first 2 rejected with 401, 3rd with 429.
 	for i := 0; i < 2; i++ {
 		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+		req.RemoteAddr = "127.0.0.1:12345"
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer d2a_bogus")
 		req.Header.Set("X-Forwarded-For", "10.9.9.9")
@@ -115,6 +127,7 @@ func TestAuthFailThrottle_InvalidKeysThrottled(t *testing.T) {
 		}
 	}
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:12345"
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer d2a_bogus")
 	req.Header.Set("X-Forwarded-For", "10.9.9.9")
@@ -145,7 +158,8 @@ func TestAuthFailThrottle_ValidKeyNeverCounted(t *testing.T) {
 
 	body := `{"model":"[general]m","messages":[{"role":"user","content":"x"}]}`
 	for i := 0; i < 4; i++ {
-		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/chat/completions", strings.NewReader(body))
+		req.RemoteAddr = "127.0.0.1:12345"
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+key)
 		req.Header.Set("X-Forwarded-For", "10.8.8.8")

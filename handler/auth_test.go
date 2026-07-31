@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"dify2api/auth"
 	"dify2api/config"
@@ -28,6 +30,8 @@ func setupAuthGateway(t *testing.T, adminPassword string) (*Gateway, *db.Store) 
 		DifyHTTPTimeoutMs:   600000,
 		MaxChatInFlight:     64,
 		MaxRequestBodyMB:    4,
+		MaxWebRequestBodyKB: 256,
+		TrustedProxyCIDRs:   []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")},
 		SSEBufferMB:         1,
 		LoginMaxFailures:    5,
 		LoginWindowMin:      10,
@@ -43,6 +47,7 @@ func setupAuthGateway(t *testing.T, adminPassword string) (*Gateway, *db.Store) 
 			DiscordClientSecret: "csecret",
 			SiteBaseURL:         "http://localhost:10086",
 			SiteHost:            "localhost",
+			SiteURLHost:         "localhost:10086",
 			AdminHost:           "admin.localhost",
 		},
 	}
@@ -170,6 +175,34 @@ func callbackRequest(gw *Gateway, mux *http.ServeMux, code, state, stateCookie s
 	return rec
 }
 
+func TestOAuthState_IsAuthenticatedAndExpires(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "x")
+	now := time.Unix(1_800_000_000, 0)
+	state, err := gw.newOAuthState(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gw.validOAuthState(state, now.Add(9*time.Minute)) {
+		t.Fatal("fresh state should validate")
+	}
+	if gw.validOAuthState(state, now.Add(11*time.Minute)) {
+		t.Fatal("expired state should be rejected")
+	}
+	tamperedBytes := []byte(state)
+	if tamperedBytes[10] == 'A' {
+		tamperedBytes[10] = 'B'
+	} else {
+		tamperedBytes[10] = 'A'
+	}
+	if gw.validOAuthState(string(tamperedBytes), now) {
+		t.Fatal("tampered state should be rejected")
+	}
+	gw.Config.Admin.DiscordClientSecret = "rotated"
+	if gw.validOAuthState(state, now) {
+		t.Fatal("state signed with another secret should be rejected")
+	}
+}
+
 func TestDiscordCallback_BadState(t *testing.T) {
 	gw, _ := setupAuthGateway(t, "x")
 	mux := http.NewServeMux()
@@ -193,7 +226,7 @@ func TestDiscordCallback_RegisterWithRole(t *testing.T) {
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
 
-	state, _ := newOAuthState()
+	state, _ := gw.newOAuthState(time.Now())
 	rec := callbackRequest(gw, mux, "code", state, state)
 	if rec.Code != http.StatusFound {
 		t.Fatalf("status = %d, want 302; body: %s", rec.Code, rec.Body.String())
@@ -227,7 +260,7 @@ func TestDiscordCallback_RegisterDenied(t *testing.T) {
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
 
-	state, _ := newOAuthState()
+	state, _ := gw.newOAuthState(time.Now())
 	rec := callbackRequest(gw, mux, "code", state, state)
 	if rec.Code != http.StatusFound {
 		t.Errorf("status = %d, want 302", rec.Code)
@@ -250,7 +283,7 @@ func TestDiscordCallback_NotGuildMember(t *testing.T) {
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
 
-	state, _ := newOAuthState()
+	state, _ := gw.newOAuthState(time.Now())
 	rec := callbackRequest(gw, mux, "code", state, state)
 	if rec.Code != http.StatusFound {
 		t.Errorf("status = %d, want 302", rec.Code)
@@ -271,7 +304,7 @@ func TestDiscordCallback_DisabledUser(t *testing.T) {
 	u, _ := store.CreateUser("42", "tester", "")
 	store.SetUserDisabled(u.ID, true, "test")
 
-	state, _ := newOAuthState()
+	state, _ := gw.newOAuthState(time.Now())
 	rec := callbackRequest(gw, mux, "code", state, state)
 	if rec.Code != http.StatusFound {
 		t.Errorf("status = %d, want 302 for disabled user", rec.Code)
@@ -290,7 +323,7 @@ func TestDiscordCallback_NoGuildConfigured(t *testing.T) {
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
 
-	state, _ := newOAuthState()
+	state, _ := gw.newOAuthState(time.Now())
 	rec := callbackRequest(gw, mux, "code", state, state)
 	if rec.Code != http.StatusFound {
 		t.Errorf("status = %d, want 302 (registration closed)", rec.Code)
@@ -310,7 +343,7 @@ func TestDiscordCallback_NoStateCookie(t *testing.T) {
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
 
-	state, _ := newOAuthState()
+	state, _ := gw.newOAuthState(time.Now())
 	// No cookie — login-CSRF check must fail.
 	rec := callbackRequest(gw, mux, "code", state, "")
 	if rec.Code != http.StatusFound {
@@ -335,7 +368,7 @@ func TestDiscordCallback_StateCookieMismatch(t *testing.T) {
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
 
-	state, _ := newOAuthState()
+	state, _ := gw.newOAuthState(time.Now())
 	// Cookie has a different value than query state — login-CSRF check must fail.
 	rec := callbackRequest(gw, mux, "code", state, "attackers-state")
 	if rec.Code != http.StatusFound {

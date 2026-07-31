@@ -116,7 +116,7 @@ func TestDeleteUser_RecordsClearedAndReregisterAllowed(t *testing.T) {
 	withDiscordStub(t, stub)
 	store.SetSetting(db.SettingGuildID, "g1")
 	store.SetSetting(db.SettingRoleID, "role-1")
-	state, _ := newOAuthState()
+	state, _ := gw.newOAuthState(time.Now())
 	rec = callbackRequest(gw, mux, "code", state, state)
 	if rec.Code != http.StatusFound {
 		t.Fatalf("re-register: status = %d, want 302; body: %s", rec.Code, rec.Body.String())

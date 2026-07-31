@@ -18,23 +18,33 @@ func TestForceHTTPS_Redirect(t *testing.T) {
 	gw.RegisterRoutes(mux)
 	h := gw.Wrap(mux)
 
-	req := httptest.NewRequest(http.MethodGet, "http://example.com/v1/models", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://localhost/v1/models", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusMovedPermanently {
 		t.Fatalf("status = %d, want 301", rec.Code)
 	}
-	if loc := rec.Header().Get("Location"); loc != "https://example.com/v1/models" {
+	if loc := rec.Header().Get("Location"); loc != "https://localhost:10086/v1/models" {
 		t.Errorf("Location = %q", loc)
 	}
 
-	// X-Forwarded-Proto: https passes through (proxy-terminated TLS).
-	req = httptest.NewRequest(http.MethodGet, "http://example.com/health", nil)
+	// X-Forwarded-Proto is honored only from a trusted proxy peer.
+	req = httptest.NewRequest(http.MethodGet, "http://localhost/health", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
 	req.Header.Set("X-Forwarded-Proto", "https")
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Errorf("https forwarded: status = %d, want 200", rec.Code)
+		t.Errorf("trusted forwarded https: status = %d, want 200", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "http://localhost/health", nil)
+	req.RemoteAddr = "198.51.100.7:12345"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusMovedPermanently {
+		t.Errorf("untrusted forwarded proto: status = %d, want 301", rec.Code)
 	}
 }
 
@@ -44,11 +54,61 @@ func TestForceHTTPS_OffByDefault(t *testing.T) {
 	gw.RegisterRoutes(mux)
 	h := gw.Wrap(mux)
 
-	req := httptest.NewRequest(http.MethodGet, "http://example.com/health", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://localhost/health", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Errorf("default (http allowed): status = %d, want 200", rec.Code)
+	}
+}
+
+func TestHostValidation_PrecedesHTTPSRedirect(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "x")
+	gw.Config.ForceHTTPS = true
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	h := gw.Wrap(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "http://attacker.example/health?next=1", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusMisdirectedRequest {
+		t.Fatalf("unknown host status = %d, want 421", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "" {
+		t.Fatalf("unknown host must not redirect, got %q", loc)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "http://admin.localhost/health", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if loc := rec.Header().Get("Location"); loc != "https://admin.localhost/health" {
+		t.Fatalf("admin redirect = %q", loc)
+	}
+}
+
+func TestWebBodyLimit(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "x")
+	gw.Config.MaxWebRequestBodyKB = 1
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	h := gw.Wrap(mux)
+
+	body := strings.Repeat("x", 1025)
+	req := httptest.NewRequest(http.MethodPost, "http://admin.localhost/api/auth/admin/login", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized body status = %d, want 413; body=%s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil || out.Error.Code != "request_too_large" {
+		t.Fatalf("oversized body response = %+v, decode err=%v", out, err)
 	}
 }
 
@@ -137,9 +197,9 @@ func TestCheckAppBinding_Verdicts(t *testing.T) {
 	}
 	var resp struct {
 		AppCheck struct {
-			Compatible      bool     `json:"compatible"`
-			ExtraOptional   []string `json:"extra_app_optional"`
-			Error           string   `json:"error"`
+			Compatible    bool     `json:"compatible"`
+			ExtraOptional []string `json:"extra_app_optional"`
+			Error         string   `json:"error"`
 		} `json:"app_check"`
 	}
 	json.NewDecoder(rec.Body).Decode(&resp)
@@ -302,8 +362,8 @@ func TestConfigsCRUD_AndGuards(t *testing.T) {
 	}
 	var createResp struct {
 		Config struct {
-			ID     int64  `json:"id"`
-			HasKey bool   `json:"has_key"`
+			ID     int64 `json:"id"`
+			HasKey bool  `json:"has_key"`
 		} `json:"config"`
 		AppCheck struct {
 			Error string `json:"error"`
@@ -377,7 +437,7 @@ func TestMaintenanceMode(t *testing.T) {
 	gw.RegisterRoutes(mux)
 	h := gw.Wrap(mux)
 
-	enable := func()  { store.SetSetting(db.SettingMaintenanceMode, "true") }
+	enable := func() { store.SetSetting(db.SettingMaintenanceMode, "true") }
 	disable := func() { store.SetSetting(db.SettingMaintenanceMode, "false") }
 
 	// --- Disabled by default: everything works normally. ---

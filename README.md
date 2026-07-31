@@ -83,11 +83,13 @@ I18N_FILE=i18n.json           # 多语言字典文件（可选；站点名称通
 REPORT_EMAIL=report@example.com  # DMCA/CSAM 举报联络邮箱（展示于服务协议与隐私政策页）
 FAVICON_PATH=                  # 浏览器标签页图标文件路径（可选,支持 .ico/.png/.svg/.webp）
 LISTEN_ADDR=localhost:10086
+TRUSTED_PROXY_CIDRS=127.0.0.0/8,::1/128  # 仅这些 TCP 来源可提供 X-Forwarded-*；无代理填 none
 DIFY2API_DB_PATH=dify2api.db
 DIFY2API_MASTER_KEY_PATH=dify2api.key
 DIFY_HTTP_TIMEOUT_MS=900000
-MAX_CHAT_IN_FLIGHT=64        # 全局并发聊天上限（超出 429）
-MAX_REQUEST_BODY_MB=10       # 请求体上限 MB（超出 413）
+MAX_CHAT_IN_FLIGHT=32        # 全局并发聊天上限（超出 429）
+MAX_REQUEST_BODY_MB=10       # chat 请求体上限 MiB（超出 413）
+MAX_WEB_REQUEST_BODY_KB=256  # 状态变更类 /api/* 请求体上限 KiB（超出 413）
 SSE_BUFFER_MB=10             # 每流 SSE 初始缓冲 MB
 LOGIN_MAX_FAILURES=5         # 登录失败锁定阈值
 LOGIN_WINDOW_MIN=10          # 失败计数窗口（分钟）
@@ -103,9 +105,11 @@ LOGIN_MIN_LATENCY_MS=300     # 登录恒定时延（毫秒）
 # -debug        调试拦截模式（见下）
 ```
 
-- 双域名（`<域名>` 与 `admin.<域名>`）均需解析与证书；
-  **⚠️ 公网部署必须置于可信反代后**（如 nginx），因为网关信任 `X-Forwarded-*` 头部；
-  直接暴露到公网存在安全风险；
+- 双域名（`<域名>` 与 `admin.<域名>`）均需解析与证书；应用只接受 `SITE_BASE_URL`
+  与 `ADMIN_HOST` 对应 Host，未知 Host 返回 421；
+- 公网部署建议置于 nginx 后。网关仅对 `TRUSTED_PROXY_CIDRS` 中的 TCP peer 读取
+  `X-Forwarded-*`，并从右向左剥离可信代理；单层 nginx 必须覆盖 XFF 为 `$remote_addr`，
+  不得使用会保留客户端伪造值的 `$proxy_add_x_forwarded_for`；
 - SSE 流式必须 `proxy_buffering off`；超时建议 ≥900s（与 `DIFY_HTTP_TIMEOUT_MS` 默认值一致）；
 - 未加 `-force-https` 时启动日志会警告 HTTP 风险（本机部署可忽略）。
 
@@ -187,13 +191,14 @@ result_limit: 4000               # 超限结果写临时文件，仅回路径+�
   **公益资源路由**中每条捐赠条目有独立 RPM 上限（默认 10 次/分，60 秒窗口），
   路由加权选择时自动跳过超限条目，全部超限返回 429 `charity_overloaded`；
   管理员可为每条捐赠单独调整上限；
-- **IP 限流**：`/api/*` 网页接口按源 IP 限流（默认 120 次/分，超限
+- **IP 限流**：`/api/*` 网页接口与 Discord 登录入口按经过可信代理链解析的源 IP 限流（默认 120 次/分，超限
   60 秒内 429，不封禁、不影响 `/v1/*`；`WEB_RPM_PER_IP=0` 关闭）；
   `/v1/*` 无效密钥请求按源 IP 节流（默认 30 次/分，防无效密钥
   洪泛；有效密钥不受影响）；
 - **封禁 vs 删除**：封禁（定时/永久）保留记录且禁止再注册；删除清空记录并允许再注册；
-- **内置加固**：HTTP 服务超时（Slowloris）、可配请求体上限（默认 10 MiB）、并发背压（429）、
-  管理员登录爆破锁定（IP+用户名滑窗，5 次/10 分钟 → 锁 1h）、密钥 AES-GCM 加密存储；
+- **内置加固**：HTTP 服务超时（Slowloris）、chat 10 MiB 与 Web API 256 KiB 两级请求体上限、
+  并发背压（429）、可信代理/固定 Host 门禁、无状态 HMAC OAuth state、管理员登录爆破锁定
+  （IP+用户名滑窗，5 次/10 分钟 → 锁 1h）、密钥 AES-GCM 加密存储；
 - **日志**：`request_logs` 仅存元数据（时间/模型/状态/错误码/服务/HTTP状态/详情/扣分）；防滥用触发时
   额外记录 `anti_abuse_info` JSON（触发类型与惩罚内容）；服务启动时及
   此后每 24 小时自动清理 30 天以上的日志与过期会话（启动日志含

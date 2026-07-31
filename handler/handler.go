@@ -223,7 +223,7 @@ func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 	user := g.userFromCallerKey(r)
 	if user == nil {
-		ip := clientIP(r)
+		ip := g.clientIP(r)
 		now := time.Now()
 		if !g.authFailThrottle.allow(ip, now) {
 			w.Header().Set("Retry-After", strconv.Itoa(g.authFailThrottle.retryAfterSec(ip, now)))
@@ -350,7 +350,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	// throttle (flood defence); valid keys are never counted there.
 	user := g.userFromCallerKey(r)
 	if user == nil {
-		ip := clientIP(r)
+		ip := g.clientIP(r)
 		if !g.authFailThrottle.allow(ip, startedAt) {
 			w.Header().Set("Retry-After", strconv.Itoa(g.authFailThrottle.retryAfterSec(ip, startedAt)))
 			g.writeError(w, http.StatusTooManyRequests, "rate_limited", t(g.resolveLang(r), "认证失败过于频繁，请稍后再试", "Too many authentication failures, please try again later"))

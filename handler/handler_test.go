@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +21,8 @@ func testConfig() *config.Config {
 		DifyHTTPTimeoutMs:   600000,
 		MaxChatInFlight:     64,
 		MaxRequestBodyMB:    4,
+		MaxWebRequestBodyKB: 256,
+		TrustedProxyCIDRs:   []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")},
 		SSEBufferMB:         1,
 		LoginMaxFailures:    5,
 		LoginWindowMin:      10,
@@ -28,6 +31,12 @@ func testConfig() *config.Config {
 		RPMWindowSec:        60,
 		IPThrottleWindowSec: 60,
 		LogDetailMaxChars:   500,
+		Admin: config.AdminConfig{
+			SiteBaseURL: "http://example.com",
+			SiteHost:    "example.com",
+			SiteURLHost: "example.com",
+			AdminHost:   "admin.example.com",
+		},
 	}
 }
 

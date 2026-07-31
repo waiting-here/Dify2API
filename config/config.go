@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -38,6 +39,11 @@ type Config struct {
 	MaxChatInFlight int
 	// MaxRequestBodyMB caps /v1/chat/completions request bodies (default 10).
 	MaxRequestBodyMB int
+	// MaxWebRequestBodyKB caps state-changing /api/* request bodies (default 256).
+	MaxWebRequestBodyKB int
+	// TrustedProxyCIDRs is the explicit set of reverse-proxy source networks
+	// allowed to supply X-Forwarded-* headers. It defaults to loopback only.
+	TrustedProxyCIDRs []netip.Prefix
 	// SSEBufferMB is the initial per-stream SSE parse buffer in MB (default 10;
 	// the hard max per SSE line stays 50MB).
 	SSEBufferMB int
@@ -73,8 +79,8 @@ type Config struct {
 	SMTP SMTPConfig
 
 	// --- alpha.3: Web IP rate-limit ---
-	// WebRPMPerIP is the per-IP requests-per-minute cap for /api/* endpoints.
-	// 0 disables IP rate-limiting.
+	// WebRPMPerIP is the per-IP requests-per-minute cap for /api/* endpoints
+	// and the anonymous Discord login initializer. 0 disables IP rate-limiting.
 	WebRPMPerIP int
 	// WebThrottleSec is how many seconds the caller gets 429 after exceeding
 	// WebRPMPerIP.
@@ -119,8 +125,11 @@ type AdminConfig struct {
 	// SiteBaseURL is the public base URL of this gateway (Discord redirect URI,
 	// session cookie Secure flag).
 	SiteBaseURL string
-	// SiteHost is derived from SiteBaseURL at load.
+	// SiteHost is the hostname (without port) derived from SiteBaseURL.
 	SiteHost string
+	// SiteURLHost is the authority (including an optional port) derived from
+	// SiteBaseURL and is used for fixed-host redirects.
+	SiteURLHost string
 	// AdminHost is the admin-site hostname. Defaults to "admin."+SiteHost;
 	// overridable via ADMIN_HOST.
 	AdminHost string
@@ -144,18 +153,19 @@ func LoadStartup(path string) (*Config, error) {
 	}
 
 	cfg := &Config{
-		ListenAddr:        getOr(envMap, "LISTEN_ADDR", "localhost:10086"),
-		DifyHTTPTimeoutMs: getIntOr(envMap, "DIFY_HTTP_TIMEOUT_MS", 900000),
-		DBPath:            getOr(envMap, "DIFY2API_DB_PATH", "dify2api.db"),
-		MasterKeyPath:     getOr(envMap, "DIFY2API_MASTER_KEY_PATH", "dify2api.key"),
-		FaviconPath:       getOr(envMap, "FAVICON_PATH", ""),
-		MaxChatInFlight:   getIntOr(envMap, "MAX_CHAT_IN_FLIGHT", 32),
-		MaxRequestBodyMB:  getIntOr(envMap, "MAX_REQUEST_BODY_MB", 10),
-		SSEBufferMB:       getIntOr(envMap, "SSE_BUFFER_MB", 10),
-		LoginMaxFailures:  getIntOr(envMap, "LOGIN_MAX_FAILURES", 5),
-		LoginWindowMin:    getIntOr(envMap, "LOGIN_WINDOW_MIN", 10),
-		LoginLockMin:      getIntOr(envMap, "LOGIN_LOCK_MIN", 60),
-		LoginMinLatencyMs: getIntOr(envMap, "LOGIN_MIN_LATENCY_MS", 300),
+		ListenAddr:          getOr(envMap, "LISTEN_ADDR", "localhost:10086"),
+		DifyHTTPTimeoutMs:   getIntOr(envMap, "DIFY_HTTP_TIMEOUT_MS", 900000),
+		DBPath:              getOr(envMap, "DIFY2API_DB_PATH", "dify2api.db"),
+		MasterKeyPath:       getOr(envMap, "DIFY2API_MASTER_KEY_PATH", "dify2api.key"),
+		FaviconPath:         getOr(envMap, "FAVICON_PATH", ""),
+		MaxChatInFlight:     getIntOr(envMap, "MAX_CHAT_IN_FLIGHT", 32),
+		MaxRequestBodyMB:    getIntOr(envMap, "MAX_REQUEST_BODY_MB", 10),
+		MaxWebRequestBodyKB: getIntOr(envMap, "MAX_WEB_REQUEST_BODY_KB", 256),
+		SSEBufferMB:         getIntOr(envMap, "SSE_BUFFER_MB", 10),
+		LoginMaxFailures:    getIntOr(envMap, "LOGIN_MAX_FAILURES", 5),
+		LoginWindowMin:      getIntOr(envMap, "LOGIN_WINDOW_MIN", 10),
+		LoginLockMin:        getIntOr(envMap, "LOGIN_LOCK_MIN", 60),
+		LoginMinLatencyMs:   getIntOr(envMap, "LOGIN_MIN_LATENCY_MS", 300),
 
 		// alpha.3 — public-resource credits.
 		CreditsLogoText: getOr(envMap, "CREDITS_LOGO_TEXT", "🌟"),
@@ -192,6 +202,7 @@ func LoadStartup(path string) (*Config, error) {
 	a.SiteBaseURL = strings.TrimRight(getOr(envMap, "SITE_BASE_URL", ""), "/")
 	if u, err := url.Parse(a.SiteBaseURL); err == nil {
 		a.SiteHost = u.Hostname()
+		a.SiteURLHost = u.Host
 	}
 	a.AdminHost = getOr(envMap, "ADMIN_HOST", "")
 	if a.AdminHost == "" && a.SiteHost != "" {
@@ -226,12 +237,68 @@ func LoadStartup(path string) (*Config, error) {
 		return nil, fmt.Errorf("startup file %s missing required keys: %s", path, strings.Join(missing, ", "))
 	}
 
+	if err := validatePublicOrigins(a); err != nil {
+		return nil, fmt.Errorf("startup file %s: %w", path, err)
+	}
+	trustedProxies, err := parseCIDRList(getOr(envMap, "TRUSTED_PROXY_CIDRS", "127.0.0.0/8,::1/128"))
+	if err != nil {
+		return nil, fmt.Errorf("startup file %s: TRUSTED_PROXY_CIDRS: %w", path, err)
+	}
+	cfg.TrustedProxyCIDRs = trustedProxies
+
 	// SMTP_FROM falls back to SMTP_USER when empty.
 	if cfg.SMTP.From == "" {
 		cfg.SMTP.From = cfg.SMTP.User
 	}
 
 	return cfg, nil
+}
+
+func validatePublicOrigins(a *AdminConfig) error {
+	u, err := url.Parse(a.SiteBaseURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
+		u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("SITE_BASE_URL must be an http(s) origin without credentials, path, query, or fragment")
+	}
+	if u.Hostname() == "" {
+		return fmt.Errorf("SITE_BASE_URL has no valid hostname")
+	}
+	adminURL, err := url.Parse("http://" + a.AdminHost)
+	if err != nil || adminURL.Host != a.AdminHost || adminURL.Hostname() == "" ||
+		adminURL.User != nil || adminURL.Path != "" || adminURL.RawQuery != "" || adminURL.Fragment != "" {
+		return fmt.Errorf("ADMIN_HOST must be a hostname with an optional port, not a URL")
+	}
+	if strings.EqualFold(adminURL.Hostname(), u.Hostname()) {
+		return fmt.Errorf("ADMIN_HOST must use a hostname distinct from SITE_BASE_URL")
+	}
+	return nil
+}
+
+func parseCIDRList(raw string) ([]netip.Prefix, error) {
+	if strings.EqualFold(strings.TrimSpace(raw), "none") {
+		return nil, nil
+	}
+	parts := strings.Split(raw, ",")
+	prefixes := make([]netip.Prefix, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(part)
+		if err != nil {
+			addr, addrErr := netip.ParseAddr(part)
+			if addrErr != nil {
+				return nil, fmt.Errorf("invalid IP/CIDR %q", part)
+			}
+			prefix = netip.PrefixFrom(addr, addr.BitLen())
+		}
+		prefixes = append(prefixes, prefix.Masked())
+	}
+	if len(prefixes) == 0 {
+		return nil, fmt.Errorf("at least one CIDR is required, or use 'none'")
+	}
+	return prefixes, nil
 }
 
 // getOr looks up a key (OS environment first, then file), falling back.

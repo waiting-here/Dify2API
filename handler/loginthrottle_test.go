@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,9 @@ import (
 func adminLoginAttempt(gw *Gateway, mux *http.ServeMux, password, ip string) *httptest.ResponseRecorder {
 	body := fmt.Sprintf(`{"username":"root","password":%q}`, password)
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/admin/login", strings.NewReader(body))
+	// Emulate the default loopback reverse proxy; direct untrusted peers must
+	// not be able to influence the effective IP with this header.
+	req.RemoteAddr = "127.0.0.1:12345"
 	req.Header.Set("Content-Type", "application/json")
 	if ip != "" {
 		req.Header.Set("X-Forwarded-For", ip)
@@ -94,20 +98,46 @@ func TestLoginThrottle_LockExpires(t *testing.T) {
 	}
 }
 
-func TestClientIP(t *testing.T) {
+func TestClientIP_TrustedProxyBoundary(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "x")
+	gw.Config.TrustedProxyCIDRs = append(gw.Config.TrustedProxyCIDRs, netip.MustParsePrefix("10.0.0.0/8"))
+
+	// Trusted loopback peer: strip the trusted 10/8 hop from the right and
+	// return the first untrusted address. The spoofed far-left value is the
+	// claimed client and is accepted only because every hop to its right is trusted.
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	r.Header.Set("X-Forwarded-For", "1.1.1.1, 2.2.2.2")
-	if got := clientIP(r); got != "1.1.1.1" {
-		t.Errorf("clientIP XFF = %q", got)
+	r.RemoteAddr = "127.0.0.1:1234"
+	r.Header.Set("X-Forwarded-For", "1.1.1.1, 10.2.2.2")
+	if got := gw.clientIP(r); got != "1.1.1.1" {
+		t.Errorf("trusted proxy chain = %q, want 1.1.1.1", got)
 	}
+
+	// A direct, untrusted peer cannot spoof either forwarding header.
 	r2 := httptest.NewRequest(http.MethodGet, "/", nil)
+	r2.RemoteAddr = "4.4.4.4:5678"
+	r2.Header.Set("X-Forwarded-For", "1.1.1.1")
 	r2.Header.Set("X-Real-IP", "3.3.3.3")
-	if got := clientIP(r2); got != "3.3.3.3" {
-		t.Errorf("clientIP X-Real-IP = %q", got)
+	if got := gw.clientIP(r2); got != "4.4.4.4" {
+		t.Errorf("direct spoof = %q, want peer", got)
 	}
+
+	// X-Real-IP remains a supported fallback for a trusted single proxy.
 	r3 := httptest.NewRequest(http.MethodGet, "/", nil)
-	r3.RemoteAddr = "4.4.4.4:5678"
-	if got := clientIP(r3); got != "4.4.4.4" {
-		t.Errorf("clientIP RemoteAddr = %q", got)
+	r3.RemoteAddr = "127.0.0.1:1234"
+	r3.Header.Set("X-Real-IP", "3.3.3.3")
+	if got := gw.clientIP(r3); got != "3.3.3.3" {
+		t.Errorf("trusted X-Real-IP = %q", got)
+	}
+
+	// Malformed or oversized chains fail closed to the immediate peer.
+	r4 := httptest.NewRequest(http.MethodGet, "/", nil)
+	r4.RemoteAddr = "127.0.0.1:1234"
+	r4.Header.Set("X-Forwarded-For", "1.1.1.1, not-an-ip")
+	if got := gw.clientIP(r4); got != "127.0.0.1" {
+		t.Errorf("malformed XFF = %q, want peer", got)
+	}
+	r4.Header.Set("X-Forwarded-For", strings.Repeat("1", maxForwardedForBytes+1))
+	if got := gw.clientIP(r4); got != "127.0.0.1" {
+		t.Errorf("oversized XFF = %q, want peer", got)
 	}
 }

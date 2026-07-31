@@ -1,8 +1,11 @@
 package handler
 
 import (
+	"bytes"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -11,27 +14,26 @@ import (
 )
 
 // Wrap applies gateway-wide middleware, outermost first:
-//  1. HTTPS enforcement (when -force-https is on: plain-HTTP requests get a
-//     301 redirect to https://…)
-//  2. Host-based separation between the user site and the admin site
-//  3. Maintenance mode check — after host separation so admin host is already
-//     routed; admin requests are skipped entirely.
-//  4. Per-IP rate limiting for /api/* web endpoints (F7)
+//  1. Reject unknown Host values before constructing any redirect.
+//  2. HTTPS enforcement using a configured, fixed redirect authority.
+//  3. Host-based separation between the user site and the admin site.
+//  4. Maintenance mode and per-IP web rate limiting.
+//  5. A hard byte cap for state-changing /api/* request bodies.
 func (g *Gateway) Wrap(next http.Handler) http.Handler {
-	return g.forceHTTPS(g.hostSeparation(g.maintenanceCheck(g.webRateLimit(next))))
+	return g.validateHost(g.forceHTTPS(g.hostSeparation(g.maintenanceCheck(g.webRateLimit(g.webBodyLimit(next))))))
 }
 
 // webRateLimit applies the per-IP sliding-window limit to /api/* session
-// endpoints only. Static assets and pages are exempt (a normal page
-// load fetches many resources), and the /v1/* OpenAI-compatible API is
+// endpoints and the anonymous Discord-login initializer. Static assets and
+// pages are exempt (a normal page load fetches many resources), and the /v1/* OpenAI-compatible API is
 // governed by its own defences (caller-key auth + three-class RPM +
 // invalid-key throttle). Exceeding the cap yields temporary 429 responses
 // (with Retry-After) — no ban, no effect on /v1/*.
 func (g *Gateway) webRateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") {
+		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/auth/discord/login" {
 			now := time.Now()
-			ip := clientIP(r)
+			ip := g.clientIP(r)
 			if !g.webThrottle.allow(ip, now) {
 				w.Header().Set("Retry-After", strconv.Itoa(g.webThrottle.retryAfterSec(ip, now)))
 				g.writeError(w, http.StatusTooManyRequests, "rate_limited", t(g.resolveLang(r), "请求过于频繁，请稍后再试", "Too many requests, please try again later"))
@@ -42,20 +44,63 @@ func (g *Gateway) webRateLimit(next http.Handler) http.Handler {
 	})
 }
 
-// forceHTTPS redirects HTTP requests to HTTPS when enabled. Behind a
-// TLS-terminating proxy it trusts X-Forwarded-Proto.
-//
-// SECURITY: the Go server MUST sit behind a trusted reverse proxy (nginx)
-// that correctly sets X-Forwarded-Proto.  Do NOT expose the Go listener
-// directly to the public internet — an attacker who bypasses the proxy can
-// send X-Forwarded-Proto: https and bypass the redirect.
+func (g *Gateway) validateHost(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := stripPort(r.Host)
+		if !strings.EqualFold(host, g.Config.Admin.SiteHost) &&
+			!strings.EqualFold(host, stripPort(g.Config.Admin.AdminHost)) {
+			http.Error(w, "misdirected request", http.StatusMisdirectedRequest)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// forceHTTPS redirects HTTP requests to a configured HTTPS origin. A
+// forwarding proto is trusted only from an explicitly configured proxy peer.
 func (g *Gateway) forceHTTPS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if g.Config.ForceHTTPS && r.TLS == nil && !strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
-			target := "https://" + r.Host + r.URL.RequestURI()
+		forwardedHTTPS := g.trustedProxyRequest(r) && strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
+		if g.Config.ForceHTTPS && r.TLS == nil && !forwardedHTTPS {
+			host := g.Config.Admin.SiteURLHost
+			if g.isAdminHost(r) {
+				host = g.Config.Admin.AdminHost
+			}
+			target := (&url.URL{Scheme: "https", Host: host, Path: r.URL.Path, RawPath: r.URL.RawPath, RawQuery: r.URL.RawQuery}).String()
 			http.Redirect(w, r, target, http.StatusMovedPermanently)
 			return
 		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (g *Gateway) webBodyLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/") ||
+			(r.Method != http.MethodPost && r.Method != http.MethodPut && r.Method != http.MethodPatch && r.Method != http.MethodDelete) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		limit := int64(g.Config.MaxWebRequestBodyKB) << 10
+		if r.ContentLength > limit {
+			g.writeError(w, http.StatusRequestEntityTooLarge, "request_too_large",
+				"[Dify2API] request body exceeds the configured limit")
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
+		if err != nil {
+			g.writeError(w, http.StatusBadRequest, "invalid_request", "[Dify2API] unable to read request body")
+			return
+		}
+		if int64(len(body)) > limit {
+			g.writeError(w, http.StatusRequestEntityTooLarge, "request_too_large",
+				"[Dify2API] request body exceeds the configured limit")
+			return
+		}
+		_ = r.Body.Close()
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		r.ContentLength = int64(len(body))
 		next.ServeHTTP(w, r)
 	})
 }
@@ -143,7 +188,7 @@ func (g *Gateway) maintenanceCheck(next http.Handler) http.Handler {
 
 // isAdminHost reports whether the request targets the admin site.
 func (g *Gateway) isAdminHost(r *http.Request) bool {
-	return strings.EqualFold(stripPort(r.Host), g.Config.Admin.AdminHost)
+	return strings.EqualFold(stripPort(r.Host), stripPort(g.Config.Admin.AdminHost))
 }
 
 func stripPort(host string) string {
