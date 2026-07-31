@@ -16,7 +16,7 @@
 ## 架构
 
 ```
-SillyTavern / Pi ──HTTPS──▶ Nginx ──HTTP──▶ Dify2API ──HTTP──▶ Dify Apps（每用户各自绑定）
+SillyTavern / Pi ──HTTPS──▶ Nginx ──HTTP──▶ Dify2API ──HTTP(S)──▶ Dify Apps（每用户各自绑定）
 浏览器（用户/管理员） ──HTTPS──▶ Nginx ──HTTP──▶ Dify2API（内嵌 SPA，go:embed）
 ```
 
@@ -38,8 +38,10 @@ SillyTavern / Pi ──HTTPS──▶ Nginx ──HTTP──▶ Dify2API ──H
 ├── handler/              # HTTP 路由、中间件（双站点/HTTPS）、限流背压
 ├── web/static/           # 内嵌 SPA（Pico.css + 原生 JS，i18n 字典）
 ├── integrations/         # 客户端集成（pi-dify-subagent）
+├── CHANGELOG.md          # 已发布版本与 Unreleased 变更
 ├── SECURITY.md           # 安全漏洞报告指引
 ├── CONTRIBUTING.md       # 贡献指南（含 DCO 要求）
+├── THIRD_PARTY_NOTICES.md  # 内嵌浏览器依赖许可清单
 ├── dify_app/             # 参考 Dify App DSL 导出
 ├── nginx/                # Nginx 示例（HTTPS 跳转版 / 纯 HTTP 版）
 └── admin.env.example     # 启动配置模板（唯一配置来源）
@@ -55,6 +57,31 @@ SillyTavern / Pi ──HTTPS──▶ Nginx ──HTTP──▶ Dify2API ──H
 4. 构建：`go build -o dify2api .`
 5. 配置反代：参考 `nginx/` 目录下的示例配置（详见下方 §3.启动）
 6. 后台常驻：使用 systemd、screen 或 Supervisor 保持服务运行
+
+### 升级现有部署
+
+从 v1.1.0 或更早版本升级至当前代码时，请先阅读以下兼容性提示：
+
+1. **先做一致性备份**：停止服务后备份 `dify2api.db` 与 `dify2api.key`；若不能停机，
+   使用 SQLite online backup 或先正确 checkpoint。不要在 WAL 活跃时只热复制主 `.db` 文件。
+2. **合并新增配置项**：以最新 `admin.env.example` 为准，重点检查
+   `TRUSTED_PROXY_CIDRS`、`DIFY_EGRESS_ALLOWLIST`、`REMOTE_CONTENT_ORIGIN_ALLOWLIST`、
+   `DIFY_MAX_RESPONSE_MB`、`DIFY_PROBE_IN_FLIGHT` 和 `MAX_WEB_REQUEST_BODY_KB`。
+3. **核对代理链**：loopback nginx 使用默认可信 CIDR 即可；Docker、远端或多级反代必须填入
+   实际代理来源 CIDR。不要填写 `0.0.0.0/0` 或 `::/0`。同步采用最新 `nginx/` 示例，
+   并确保代理覆盖 XFF，而不是保留客户端提交的 XFF。
+4. **核对 Dify 地址**：公网 Dify 无需额外配置；解析到私网、loopback 或 link-local 的既有 App
+   会被默认阻断，必须在 `DIFY_EGRESS_ALLOWLIST` 中按最小范围允许精确 origin 或 CIDR。
+   Dify 请求不再使用 `HTTP_PROXY`/`HTTPS_PROXY` 环境代理。
+5. **核对远程内容功能**：任意 website-summary URL 和远程图片现在默认拒绝。确有需要时，
+   只把可信目标的精确 origin 加入 `REMOTE_CONTENT_ORIGIN_ALLOWLIST`；data URI 图片不受影响。
+6. **数据库自动升级**：新增表和索引会在启动时幂等创建，无需手工 SQL。首次启动后检查
+   `[RECOVERY]`、`[CLEANUP]` 和出站安全配置日志，再执行普通/公益模型冒烟测试。
+7. **资源默认值**：未显式配置时，`SSE_BUFFER_MB` 的默认值由 10 MiB 降为 1 MiB；
+   已在旧启动文件中明确写为 10 的部署不会自动改变，可按内存预算调整。
+
+当前静态资源策略要求浏览器/CDN 每次重新验证：`index.html` 使用 `no-cache`，其余内嵌静态文件
+使用 `max-age=0, must-revalidate`。请勿在 CDN 规则中强制覆盖为长期 immutable 缓存。
 
 ### 1. 准备
 
@@ -110,7 +137,7 @@ LOGIN_MIN_LATENCY_MS=300     # 登录恒定时延（毫秒）
 ```
 
 - 双域名（`<域名>` 与 `admin.<域名>`）均需解析与证书；应用只接受 `SITE_BASE_URL`
-  与 `ADMIN_HOST` 对应 Host，未知 Host 返回 421；
+  与 `ADMIN_HOST` 对应 Host，未知 Host 返回 421；直接探测 `/health` 时也须发送其中一个合法 Host；
 - 公网部署建议置于 nginx 后。网关仅对 `TRUSTED_PROXY_CIDRS` 中的 TCP peer 读取
   `X-Forwarded-*`，并从右向左剥离可信代理；单层 nginx 必须覆盖 XFF 为 `$remote_addr`，
   不得使用会保留客户端伪造值的 `$proxy_add_x_forwarded_for`；
@@ -189,6 +216,9 @@ result_limit: 4000               # 超限结果写临时文件，仅回路径+�
 ## 运维
 
 - **备份** = `dify2api.db` + `dify2api.key`（密钥文件丢失则已存密钥全部不可恢复）；
+  推荐停机备份或使用 SQLite online backup，WAL 活跃时不要只热复制主 `.db` 文件；定期做恢复演练；
+- **文件权限**：使用独立低权限 OS 账号和 `umask 077` 运行；配置/数据库/master key 建议 `0600`、
+  所在目录建议 `0700`；公网环境不要启用 `-debug`，调试 dump 按敏感数据管理和清理；
 - **限流（三类 RPM）**：每用户三个独立滑动窗口（60 秒）——
   A 传输完成（默认 6 次/分，不含失败）、B 请求成功（默认 12）、
   C 请求接收（默认 18，鉴权后计）；门禁在请求开始时检查三窗口，
@@ -239,7 +269,9 @@ result_limit: 4000               # 超限结果写临时文件，仅回路径+�
 - **数据权利**：用户可在网页控制台自助导出全部个人数据（JSON 下载，含解密凭据、公益结算记录），
   或自助删除账号（二次确认，清空全部记录）；管理员可从后台为单个用户导出数据。
 - **法律页面**：内嵌 `/privacy`（隐私政策）和 `/terms`（服务协议，含 DMCA/NCMEC 条款）。
-  部署者通过 `I18N_FILE` 字典中的 `site_name` 与 `REPORT_EMAIL` 配置后自动填充。
+  服务端按 `?lang=en|zh` 或已登录用户语言偏好选择中英文；未登录且未指定参数时默认中文，
+  当前不会在页面请求时直接依据 HTTP `Accept-Language` 自动切换。部署者通过 `I18N_FILE` 字典中的
+  `site_name` 与 `REPORT_EMAIL` 配置后自动填充。
   **⚠️ 部署前必须审核并修改**：模板中的 DMCA 程序等条款基于美国法律；
   非美国部署者需按当地法律替换相关内容（详见 HTML 注释与 §合规提示）。
 - **网站图标**：通过 `FAVICON_PATH` 配置浏览器标签页图标文件路径（支持常见图片格式）。
