@@ -47,24 +47,29 @@ func (s *Store) AddRequestLog(userID int64, model, service string, startedAt, en
 // error detail (never request/response content — see the RequestLog
 // design-intent comment). donationID <= 0 stores NULL (not a charity call).
 // antiAbuseInfo is a JSON string describing anti-abuse trigger & penalties,
-// or empty string if not triggered.
-func (s *Store) AddRequestLogFull(userID int64, model, service string, startedAt, endedAt time.Time, status, errorCode string, httpStatus int, errorDetail string, donationID int64, creditsConsumed int, antiAbuseInfo string) error {
+// or empty string if not triggered. Returns the new log row id (0 on error)
+// so callers can link dependent rows (e.g. admin alerts).
+func (s *Store) AddRequestLogFull(userID int64, model, service string, startedAt, endedAt time.Time, status, errorCode string, httpStatus int, errorDetail string, donationID int64, creditsConsumed int, antiAbuseInfo string) (int64, error) {
 	var don interface{}
 	if donationID > 0 {
 		don = donationID
 	}
-	_, err := s.db.Exec(
+	res, err := s.db.Exec(
 		`INSERT INTO request_logs (user_id, model, service, started_at, ended_at, status, error_code, http_status, error_detail, donation_id, credits_consumed, anti_abuse_info) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 		userID, model, service, startedAt.Unix(), endedAt.Unix(), status, errorCode, httpStatus, errorDetail, don, creditsConsumed, antiAbuseInfo,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
 }
 
 // AddRequestLogDonation records a completed call with a donation routing
 // annotation. This is a separate method (not an overload) to avoid
 // breaking all existing callers.
 func (s *Store) AddRequestLogDonation(userID int64, model, service string, startedAt, endedAt time.Time, status, errorCode string, donationID int64) error {
-	return s.AddRequestLogFull(userID, model, service, startedAt, endedAt, status, errorCode, 0, "", donationID, 0, "")
+	_, err := s.AddRequestLogFull(userID, model, service, startedAt, endedAt, status, errorCode, 0, "", donationID, 0, "")
+	return err
 }
 
 // ListRequestLogs returns a user's recent logs, newest first (bounded).

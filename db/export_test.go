@@ -25,14 +25,14 @@ func TestExportUserData_Complete(t *testing.T) {
 	}
 
 	// Add a request log with full fields.
-	if err := st.AddRequestLogFull(u.ID, "claude-opus-4-6", "general",
+	if _, err := st.AddRequestLogFull(u.ID, "claude-opus-4-6", "general",
 		time.Now().Add(-1*time.Hour), time.Now(),
 		"success", "", 200, "", 0, 0, ""); err != nil {
 		t.Fatalf("AddRequestLogFull: %v", err)
 	}
 
 	// Add a second log with error details, credits consumed, and anti-abuse info.
-	if err := st.AddRequestLogFull(u.ID, "gpt-5", "general",
+	if _, err := st.AddRequestLogFull(u.ID, "gpt-5", "general",
 		time.Now(), time.Now(),
 		"error", "content_too_short", 400, "message too short",
 		0, 5, `{"trigger":"content_too_short","penalties":[{"type":"deduct","credits":5}]}`); err != nil {

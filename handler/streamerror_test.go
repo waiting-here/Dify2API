@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"dify2api/db"
 )
 
 // mockDifySSE serves a scripted SSE stream for /v1/workflows/run.
@@ -146,5 +148,60 @@ func TestBlocking_UpstreamError_PassesThrough4xx(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "app_unavailable") {
 		t.Errorf("body should carry upstream code: %s", rec.Body.String())
+	}
+}
+
+func TestBlocking_Failed200_WritesLinkedAlert(t *testing.T) {
+	// A blocking call that returns HTTP 200 with workflow status "failed"
+	// must write an admin alert LINKED to the request log row, so the alert
+	// centre's "view linked request" action has something to jump to.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"data":{"status":"failed","error":"boom","outputs":{}}}`)
+	}))
+	defer srv.Close()
+	gw, key, userID := setupRoutedUser(t, srv.URL, "[general]x")
+
+	body := `{"model":"[general]x","messages":[{"role":"user","content":"hi"}]}`
+	rec := chatRequest(gw, key, body)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 for 200-but-failed; body: %s", rec.Code, rec.Body.String())
+	}
+
+	alerts, total, err := gw.Store.ListAdminAlerts(10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(alerts) != 1 {
+		t.Fatalf("alerts total=%d len=%d, want 1/1", total, len(alerts))
+	}
+	a := alerts[0]
+	if a.Type != db.AlertBlockingFailed200 {
+		t.Fatalf("alert type = %s, want blocking_failed_200", a.Type)
+	}
+	if a.RequestLogID == nil {
+		t.Fatal("alert must be linked to the request log (request_log_id set)")
+	}
+	if a.UserID == nil || *a.UserID != userID {
+		t.Fatalf("alert user_id = %v, want %d (resolved from the linked log)", a.UserID, userID)
+	}
+
+	// The linked log row must exist and describe this failed call.
+	logs, err := gw.Store.ExportAllRequestLogs(db.LogFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, l := range logs {
+		if l.ID == *a.RequestLogID {
+			found = true
+			if l.UserID != userID || l.ErrorCode != "upstream_error" {
+				t.Fatalf("linked log user=%d code=%s, want %d/upstream_error", l.UserID, l.ErrorCode, userID)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("linked log id %d not found in request_logs", *a.RequestLogID)
 	}
 }

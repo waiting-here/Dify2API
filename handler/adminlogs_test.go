@@ -61,7 +61,7 @@ func TestAdminLogs_BasicListing(t *testing.T) {
 	now := time.Now()
 	addTestLog(store, u1.ID, "[general]claude", "general", "success", "", now.Add(-10*time.Minute), now.Add(-9*time.Minute))
 	const antiAbuseInfo = `{"triggered":"content_too_short","penalties":[]}`
-	if err := store.AddRequestLogFull(u2.ID, "[custom]gemini", "custom", now.Add(-5*time.Minute), now.Add(-4*time.Minute), "error", "content_too_short", 400, "too short", 0, 0, antiAbuseInfo); err != nil {
+	if _, err := store.AddRequestLogFull(u2.ID, "[custom]gemini", "custom", now.Add(-5*time.Minute), now.Add(-4*time.Minute), "error", "content_too_short", 400, "too short", 0, 0, antiAbuseInfo); err != nil {
 		t.Fatalf("AddRequestLogFull: %v", err)
 	}
 

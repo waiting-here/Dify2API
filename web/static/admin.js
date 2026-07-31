@@ -555,6 +555,9 @@ const adminLogPager = newPager(adminLogRow);
 const alertPager = newPager(alertRow);
 // Users fetched for the admin-log filter (username → id resolution).
 let adminLogUsers = [];
+// Jump target set by the alert centre's "view linked request" action:
+// { logId, userId } — consumed by loadAdminLogs/renderAdminLogs.
+let alertJump = null;
 
 // resolveLogUserFilter maps the free-text user filter to a user id.
 // Returns { id } on success, { id: null } for "all" (empty input), or
@@ -821,7 +824,7 @@ function adminLogRow(l) {
   const statusText = l.status === "success" ? T('adminLogsSuccess') : T('adminLogsError');
   const donationSrc = l.source_display || (l.donation_id ? "—" : "");
   return `
-    <tr>
+    <tr data-id="${l.id}">
       <td class="muted">${fmtT(l.started_at)}</td>
       <td>${userCell}</td>
       <td class="mono">${esc(l.model)}</td>
@@ -839,7 +842,12 @@ function adminLogRow(l) {
 
 async function loadAdminLogs() {
   const params = new URLSearchParams();
-  const resolved = resolveLogUserFilter($("#alf-user").value);
+  // When jumping from an alert, use the alert's user id directly: the
+  // server-side user_id filter works for deleted users too, while the
+  // client-side resolver only knows live users.
+  const resolved = alertJump && alertJump.userId
+    ? { id: Number(alertJump.userId) }
+    : resolveLogUserFilter($("#alf-user").value);
   if (resolved.error) {
     $("#alf-rows").innerHTML = `<tr><td colspan="12" class="muted">${esc(resolved.error)}</td></tr>`;
     $("#alf-pager").innerHTML = "";
@@ -899,6 +907,21 @@ function renderAdminLogs(data) {
   };
   c.querySelector(".pg-prev").onclick = () => { adminLogPager.page--; loadAdminLogs(); };
   c.querySelector(".pg-next").onclick = () => { adminLogPager.page++; loadAdminLogs(); };
+
+  // When jumping from an alert, highlight the linked request row (if it is
+  // within the loaded range) and then forget the jump target.
+  if (alertJump) {
+    const row = document.querySelector(`#alf-rows tr[data-id="${alertJump.logId}"]`);
+    if (row) {
+      row.scrollIntoView({ behavior: "smooth", block: "center" });
+      row.style.outline = "2px solid var(--pico-primary, #1095c1)";
+      row.style.background = "var(--pico-mark-background-color, #fff3bf)";
+      setTimeout(() => { row.style.outline = ""; row.style.background = ""; }, 3000);
+    } else {
+      toast(T('alertLinkedRequestNotFound'));
+    }
+    alertJump = null;
+  }
 }
 
 async function onExportLogs() {
@@ -1137,16 +1160,21 @@ function renderAdminAlerts(data) {
   // Link-to-request buttons.
   document.querySelectorAll(".alert-goto").forEach((btn) => {
     btn.onclick = () => {
-      // Switch to the log tab and pre-fill the model/service/user filters.
-      if (btn.dataset.logId) {
-        $("#alf-user").value = "";
-        $("#alf-service").value = "";
-        $("#alf-model").value = "";
-        // We scroll to the log section and trigger a query.
-      }
-      // Fallback: just trigger a fresh query on the log section.
-      $("#admin-logs-filter").scrollIntoView({ behavior: "smooth" });
+      // Jump to the linked request: pre-fill the user filter (when the user
+      // still exists), load the full range so the row is present, then
+      // renderAdminLogs highlights it and scrolls it into view.
+      const logId = btn.dataset.logId;
+      const userId = btn.dataset.userId || "";
+      if (!logId) return;
+      alertJump = { logId, userId };
+      const userExists = userId && adminLogUsers.some((u) => String(u.id) === userId);
+      $("#alf-user").value = userExists ? userId : "";
+      $("#alf-service").value = "";
+      $("#alf-model").value = "";
+      $("#alf-status").value = "";
+      adminLogPager.size = Infinity; // "全部" — maximise the chance the row is in range
       adminLogPager.page = 1;
+      $("#admin-logs-filter").scrollIntoView({ behavior: "smooth" });
       loadAdminLogs();
     };
   });

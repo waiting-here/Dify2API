@@ -990,10 +990,9 @@ func (g *Gateway) handleBlocking(w http.ResponseWriter, client *dify.Client, wfR
 		// "success" for class B even when the workflow status is "failed"
 		// (rare; surfaced to the admin alert centre in S3).
 		var de *dify.DifyError
-		if errors.As(err, &de) && de.Status == http.StatusOK {
+		failed200 := errors.As(err, &de) && de.Status == http.StatusOK
+		if failed200 {
 			g.limiter.record(rpmClassB, userID, time.Now())
-			// Write admin alert for 200-but-failed (non-charity path).
-			g.maybeRecordBlockingFailedAlert(userID, modelName, service, de, nil)
 		}
 		// Transport-level truncation (Cloudflare 100s timeout, connection
 		// reset, etc.): the Dify App has likely consumed its quota, but no
@@ -1007,7 +1006,12 @@ func (g *Gateway) handleBlocking(w http.ResponseWriter, client *dify.Client, wfR
 			return
 		}
 		log.Printf("[ERROR] dify blocking (user %d): %v", userID, err)
-		g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error(), "")
+		logID := g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error(), "")
+		if failed200 {
+			// Write the admin alert after the log row so the alert centre's
+			// "view linked request" action can jump to this request.
+			g.maybeRecordBlockingFailedAlert(userID, modelName, service, de, nil, logID)
+		}
 		g.writeDifyError(w, err)
 		return
 	}
@@ -1103,13 +1107,18 @@ func parseDataURI(uri string) (mime string, data []byte, err error) {
 // logRequest records one completed call (metadata only). httpStatus is the
 // status returned to the caller; detail is a short error message for admin
 // diagnostics (never request/response content — see db.RequestLog).
-func (g *Gateway) logRequest(userID int64, model, service string, startedAt time.Time, status, errorCode string, httpStatus int, detail string, antiAbuseInfo string) {
+// Returns the new log row id (0 when the write failed) so callers can link
+// dependent rows such as admin alerts.
+func (g *Gateway) logRequest(userID int64, model, service string, startedAt time.Time, status, errorCode string, httpStatus int, detail string, antiAbuseInfo string) int64 {
 	if len(detail) > g.Config.LogDetailMaxChars {
 		detail = detail[:g.Config.LogDetailMaxChars] + "…"
 	}
-	if err := g.Store.AddRequestLogFull(userID, model, service, startedAt, time.Now(), status, errorCode, httpStatus, detail, 0, 0, antiAbuseInfo); err != nil {
+	id, err := g.Store.AddRequestLogFull(userID, model, service, startedAt, time.Now(), status, errorCode, httpStatus, detail, 0, 0, antiAbuseInfo)
+	if err != nil {
 		log.Printf("[WARN] write request log: %v", err)
+		return 0
 	}
+	return id
 }
 
 // handleListLogs returns the session user's recent request logs.

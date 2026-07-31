@@ -131,6 +131,7 @@ const i18n = {
   alertDeleteSelected: "删除选中",
   alertDeleteConfirm: "确定删除选中的 {n} 条告警？",
   alertDeleted: "已删除 {n} 条告警",
+  alertLinkedRequestNotFound: "未找到关联请求（可能已过留存期或被清理）",
   alertLinkedRequest: "查看关联请求",
 
   // Charity / donations
@@ -644,6 +645,7 @@ When enabled, the full content of every API request you make (including Dify App
   alertDeleteConfirm: "Delete the selected {n} alert(s)?",
   alertDeleteSelected: "Delete Selected",
   alertDeleted: "{n} alert(s) deleted",
+  alertLinkedRequestNotFound: "Linked request not found (may be past retention or purged)",
   alertLinkedRequest: "View Linked Request",
   alertMessage: "Message",
   alertTitle: "Alert Center",

@@ -997,10 +997,10 @@ func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wf
 			// 200-but-failed: success per §1.2, but admin alert
 			g.limiter.record(rpmClassB, userID, time.Now())
 			g.charitySuccessAccounting(reservation)
-			g.maybeRecordBlockingFailedAlert(userID, modelName, service, de, &donationID)
 
-			// Log first (we need the log ID for the alert)
-			g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_error", http.StatusOK, de.Error(), donationID, reservation.Price, "")
+			// Log first so the alert can link to this request log.
+			logID := g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_error", http.StatusOK, de.Error(), donationID, reservation.Price, "")
+			g.maybeRecordBlockingFailedAlert(userID, modelName, service, de, &donationID, logID)
 			g.writeDifyError(w, err)
 			return
 		}
@@ -1110,8 +1110,11 @@ func (g *Gateway) releaseCharitySetup(reservation *db.CharityReservation) {
 }
 
 // maybeRecordBlockingFailedAlert records an admin alert for a blocking call
-// that returned HTTP 200 but workflow status==failed.
-func (g *Gateway) maybeRecordBlockingFailedAlert(userID int64, modelName, service string, de *dify.DifyError, donationID *int64) {
+// that returned HTTP 200 but workflow status==failed. The alert is linked to
+// the request log row (when one was written) so the alert centre can jump to
+// the affected request; bound alerts are purged with the log's 30-day
+// retention.
+func (g *Gateway) maybeRecordBlockingFailedAlert(userID int64, modelName, service string, de *dify.DifyError, donationID *int64, requestLogID int64) {
 	msg := fmt.Sprintf("阻塞调用返回 HTTP 200 但状态为失败：服务 %s，模型 %s，用户 %d，原始错误：%s",
 		service, modelName, userID, de.Error())
 	alert := &db.AdminAlert{
@@ -1119,19 +1122,25 @@ func (g *Gateway) maybeRecordBlockingFailedAlert(userID int64, modelName, servic
 		Message:    msg,
 		DonationID: donationID,
 	}
+	if requestLogID > 0 {
+		alert.RequestLogID = &requestLogID
+	}
 	if err := g.Store.AddAdminAlert(alert); err != nil {
 		log.Printf("[ERROR] write blocking failed 200 alert: %v", err)
 	}
 }
 
 // logRequestDonation is like logRequest but includes a donation_id for charity calls.
-func (g *Gateway) logRequestDonation(userID int64, model, service string, startedAt time.Time, status, errorCode string, httpStatus int, detail string, donationID int64, creditsConsumed int, antiAbuseInfo string) {
+func (g *Gateway) logRequestDonation(userID int64, model, service string, startedAt time.Time, status, errorCode string, httpStatus int, detail string, donationID int64, creditsConsumed int, antiAbuseInfo string) int64 {
 	if len(detail) > g.Config.LogDetailMaxChars {
 		detail = detail[:g.Config.LogDetailMaxChars] + "…"
 	}
-	if err := g.Store.AddRequestLogFull(userID, model, service, startedAt, time.Now(), status, errorCode, httpStatus, detail, donationID, creditsConsumed, antiAbuseInfo); err != nil {
+	id, err := g.Store.AddRequestLogFull(userID, model, service, startedAt, time.Now(), status, errorCode, httpStatus, detail, donationID, creditsConsumed, antiAbuseInfo)
+	if err != nil {
 		log.Printf("[WARN] write request log: %v", err)
+		return 0
 	}
+	return id
 }
 
 // resolveDonationSourceDisplay resolves source_display for a donation and

@@ -14,7 +14,7 @@ func TestRequestLogs_AntiAbuseInfoRoundTrip(t *testing.T) {
 
 	now := time.Now()
 	const info = `{"triggered":"content_too_short","penalties":["credits_deducted:5","banned:24h"]}`
-	if err := st.AddRequestLogFull(u.ID, "[general]test", "general", now, now.Add(time.Second), "error", "content_too_short", 400, "too short", 0, 0, info); err != nil {
+	if _, err := st.AddRequestLogFull(u.ID, "[general]test", "general", now, now.Add(time.Second), "error", "content_too_short", 400, "too short", 0, 0, info); err != nil {
 		t.Fatalf("AddRequestLogFull: %v", err)
 	}
 	if err := st.AddRequestLog(u.ID, "[general]normal", "general", now.Add(-time.Second), now, "success", ""); err != nil {
@@ -105,7 +105,7 @@ func TestPurgeExpiredRequestLogs_StrictPerRowAndOrphans(t *testing.T) {
 		{"exact-cutoff", cutoff, active.ID},
 	}
 	for _, entry := range entries {
-		if err := st.AddRequestLogFull(u.ID, entry.model, "general", entry.started, entry.started.Add(time.Second), "success", "", 200, "", entry.donationID, 0, ""); err != nil {
+		if _, err := st.AddRequestLogFull(u.ID, entry.model, "general", entry.started, entry.started.Add(time.Second), "success", "", 200, "", entry.donationID, 0, ""); err != nil {
 			t.Fatalf("AddRequestLogFull(%s): %v", entry.model, err)
 		}
 	}
@@ -254,5 +254,53 @@ func TestExportAllRequestLogs_NoPageClamp(t *testing.T) {
 	}
 	if len(none) != 0 {
 		t.Fatalf("export filtered out: rows=%d, want 0", len(none))
+	}
+}
+
+func TestAddRequestLogFull_ReturnsID_AndAlertJoinUser(t *testing.T) {
+	st, _ := openTemp(t)
+	u, err := st.CreateUser("log-id-user", "log-id-user", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+
+	// AddRequestLogFull must return the new row id so dependent rows
+	// (admin alerts) can link to the request log.
+	logID, err := st.AddRequestLogFull(u.ID, "[general]x", "general", now, now.Add(time.Second), "error", "upstream_error", 200, "boom", 0, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if logID <= 0 {
+		t.Fatalf("AddRequestLogFull returned id %d, want > 0", logID)
+	}
+
+	// A bound alert must surface the log owner's user id via the JOIN.
+	if err := st.AddAdminAlert(&AdminAlert{Type: AlertBlockingFailed200, Message: "m", RequestLogID: &logID}); err != nil {
+		t.Fatal(err)
+	}
+	alerts, total, err := st.ListAdminAlerts(10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(alerts) != 1 {
+		t.Fatalf("alerts total=%d len=%d, want 1/1", total, len(alerts))
+	}
+	if alerts[0].UserID == nil || *alerts[0].UserID != u.ID {
+		t.Fatalf("alert user_id = %v, want %d (via request_logs JOIN)", alerts[0].UserID, u.ID)
+	}
+	if alerts[0].RequestLogID == nil || *alerts[0].RequestLogID != logID {
+		t.Fatalf("alert request_log_id = %v, want %d", alerts[0].RequestLogID, logID)
+	}
+
+	// Unbound alerts keep user_id nil.
+	if err := st.AddAdminAlert(&AdminAlert{Type: AlertBlockingFailed200, Message: "unbound"}); err != nil {
+		t.Fatal(err)
+	}
+	alerts, _, _ = st.ListAdminAlerts(10, 0)
+	for _, a := range alerts {
+		if a.RequestLogID == nil && a.UserID != nil {
+			t.Fatalf("unbound alert must have nil user_id, got %d", *a.UserID)
+		}
 	}
 }

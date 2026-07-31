@@ -21,13 +21,17 @@ type AdminAlert struct {
 	Message      string `json:"message"`
 	RequestLogID *int64 `json:"request_log_id"`
 	DonationID   *int64 `json:"donation_id"`
-	CreatedAt    int64  `json:"created_at"`
+	// UserID is the owner of the linked request log, resolved via LEFT JOIN
+	// in ListAdminAlerts (nil when the alert has no request_log_id or the
+	// log/user no longer exists).
+	UserID    *int64 `json:"user_id,omitempty"`
+	CreatedAt int64  `json:"created_at"`
 }
 
 func scanAdminAlert(row interface{ Scan(...interface{}) error }) (*AdminAlert, error) {
 	var a AdminAlert
-	var reqLogID, donationID sql.NullInt64
-	if err := row.Scan(&a.ID, &a.Type, &a.Message, &reqLogID, &donationID, &a.CreatedAt); err != nil {
+	var reqLogID, donationID, userID sql.NullInt64
+	if err := row.Scan(&a.ID, &a.Type, &a.Message, &reqLogID, &donationID, &a.CreatedAt, &userID); err != nil {
 		return nil, err
 	}
 	if reqLogID.Valid {
@@ -35,6 +39,9 @@ func scanAdminAlert(row interface{ Scan(...interface{}) error }) (*AdminAlert, e
 	}
 	if donationID.Valid {
 		a.DonationID = &donationID.Int64
+	}
+	if userID.Valid {
+		a.UserID = &userID.Int64
 	}
 	return &a, nil
 }
@@ -69,8 +76,10 @@ func (s *Store) ListAdminAlerts(limit, offset int) ([]*AdminAlert, int, error) {
 		offset = 0
 	}
 	rows, err := s.db.Query(
-		`SELECT id, type, message, request_log_id, donation_id, created_at
-		 FROM admin_alerts ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+		`SELECT a.id, a.type, a.message, a.request_log_id, a.donation_id, a.created_at, rl.user_id
+		 FROM admin_alerts a
+		 LEFT JOIN request_logs rl ON rl.id = a.request_log_id
+		 ORDER BY a.created_at DESC LIMIT ? OFFSET ?`,
 		limit, offset,
 	)
 	if err != nil {
