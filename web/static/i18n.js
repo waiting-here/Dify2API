@@ -328,7 +328,7 @@ const i18n = {
   donationAppThCount: "次数",
 
   // Debug tab
-  debugWarning: "⚠️ 调试模式警告\n\n开启后，您的每一次 API 请求的完整内容（包括 Dify App 密钥、\n对话消息、请求参数与服务端响应）将在您的浏览器中直接展示。\nDify2API 服务端不会将这些数据写入磁盘或数据库，调试数据仅\n存在于浏览器的当前页面中。\n\n- 请勿在公共设备或他人可查看您屏幕的环境中使用此功能。\n- 关闭当前页面或手动关闭调试模式后，所有未保存的数据将\n  立即丢失且无法恢复。\n- 您对调试过程中暴露的敏感信息承担全部责任。",
+  debugWarning: "⚠️ 调试模式警告\n\n开启后，您的每一次 API 请求的完整内容（包括 Dify App 密钥、对话消息、请求参数与服务端响应）将在您的浏览器中直接展示。\nDify2API 服务端不会将这些数据写入磁盘或数据库，调试数据仅存在于浏览器的当前页面中。\n\n- 请勿在公共设备或他人可查看您屏幕的环境中使用此功能。\n- 关闭当前页面或手动关闭调试模式后，所有未保存的数据将立即丢失且无法恢复。\n- 您对调试过程中暴露的敏感信息承担全部责任。",
   debugConsent: "我已知晓并同意",
   debugStart: "开启调试",
   debugStop: "关闭调试",
@@ -344,6 +344,12 @@ const i18n = {
   debugDisconnected: "调试流已断开，正在重连……",
   debugStreamDone: "调试会话已结束",
   debugStreamReplaced: "调试会话已在其他标签页中被替代",
+  debugTruncated: "已截断",
+  debugTruncatedHint: "内容已截断，仅显示前 {size}",
+  debugDropped: "事件队列已满，部分历史事件已被丢弃",
+  debugIdleTimeout: "调试会话因长时间无活动已自动关闭（空闲超过 5 分钟）",
+  debugSessionExpired: "调试会话因达到最长生命周期已自动关闭（已运行 1 小时）",
+  debugNoAttachTimeout: "调试会话因未在 10 秒内连接而自动关闭",
   debugCollapseAll: "全部折叠",
   debugExpandAll: "全部展开",
   debugRawBody: "请求原文 (JSON)",
@@ -488,21 +494,19 @@ Note: streaming requests will be displayed all at once after completion. Continu
   debugStreamDone: "Debug session ended",
   debugStreamNote: "Note: streaming requests will be displayed all at once after completion, not frame by frame.",
   debugStreamReplaced: "Debug session was taken over in another tab",
+  debugTruncated: "Truncated",
+  debugTruncatedHint: "Content truncated, showing first {size}",
+  debugDropped: "Event queue full, some earlier events have been dropped",
+  debugIdleTimeout: "Debug session auto-closed due to inactivity (idle > 5 min)",
+  debugSessionExpired: "Debug session auto-closed; maximum lifetime reached (1 hour)",
+  debugNoAttachTimeout: "Debug session auto-closed because SSE was not attached within 10 seconds",
   debugWarning: `⚠️ Debug Mode Warning
 
-When enabled, the full content of every API request you make
-(including Dify App keys, conversation messages, request
-parameters, and server responses) will be displayed directly
-in your browser. Dify2API does NOT write this data to disk or
-database — debug data exists only within the current browser tab.
+When enabled, the full content of every API request you make (including Dify App keys, conversation messages, request parameters, and server responses) will be displayed directly in your browser. Dify2API does NOT write this data to disk or database — debug data exists only within the current browser tab.
 
-- Do not use this feature on public devices or where others
-  can see your screen.
-- Closing this page or manually disabling debug mode will
-  cause all unsaved data to be lost immediately and
-  irrecoverably.
-- You assume full responsibility for any sensitive information
-  exposed during debugging.`,
+- Do not use this feature on public devices or where others can see your screen.
+- Closing this page or manually disabling debug mode will cause all unsaved data to be lost immediately and irrecoverably.
+- You assume full responsibility for any sensitive information exposed during debugging.`,
   donationAppDonationActive: "Active",
   donationAppDonationExpired: "Expired",
   donationAppDonationInactive: "Inactive (admin can activate)",

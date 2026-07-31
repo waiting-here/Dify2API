@@ -360,9 +360,22 @@ function renderDebugEvents() {
 }
 
 function renderOneDebugEvent(evt, idx) {
+  // Terminal / lifecycle events (rendered as compact cards).
   if (evt.event === "replaced") {
     return `<div class="card" style="padding:.5rem 1rem;margin-bottom:.5rem;border-left:4px solid var(--pico-warn-color,#f9a825)">
       <strong>⚠ ${T('debugStreamReplaced')}</strong>
+    </div>`;
+  }
+  if (evt.event === "dropped") {
+    return `<div class="card" style="padding:.5rem 1rem;margin-bottom:.5rem;border-left:4px solid var(--pico-warn-color,#f9a825)">
+      <strong>⚠ ${T('debugDropped')}</strong>
+    </div>`;
+  }
+  if (evt.event === "idle_timeout" || evt.event === "session_expired" || evt.event === "no_attach_timeout") {
+    const label = evt.event === "idle_timeout" ? T('debugIdleTimeout') :
+                  evt.event === "session_expired" ? T('debugSessionExpired') : T('debugNoAttachTimeout');
+    return `<div class="card" style="padding:.5rem 1rem;margin-bottom:.5rem;border-left:4px solid var(--pico-del-color, #c62828)">
+      <strong>⏱ ${esc(label)}</strong>
     </div>`;
   }
 
@@ -388,12 +401,12 @@ function renderOneDebugEvent(evt, idx) {
         ${hasError ? `<span class="badge err">${esc(evt.error.substring(0, 40))}</span>` : ""}
       </summary>
       <div style="margin-top:.5rem">
-        <p style="margin:0 0 .25rem"><strong>${T('debugRawBody')}:</strong></p>
+        <p style="margin:0 0 .25rem"><strong>${T('debugRawBody')}:</strong>${req.truncated ? ` <span class="badge warn" title="${esc(T('debugTruncatedHint').replace('{size}', '64 KiB'))}">${esc(T('debugTruncated'))}</span>` : ""}</p>
         <pre style="max-height:16em;overflow:auto;font-size:.8rem;background:var(--pico-code-bg,#1a1a2e);color:var(--pico-code-color,#e0e0e0);padding:.5rem;border-radius:4px">${esc(reqBodyStr)}</pre>
         ${renderMessageLayout(evt.message_layout)}
-        <p style="margin:.5rem 0 .25rem"><strong>${T('debugDifyInputsLabel')}:</strong></p>
+        <p style="margin:.5rem 0 .25rem"><strong>${T('debugDifyInputsLabel')}:</strong>${evt.inputs_truncated ? ` <span class="badge warn" title="${esc(T('debugTruncatedHint').replace('{size}', '64 KiB'))}">${esc(T('debugTruncated'))}</span>` : ""}</p>
         <pre style="max-height:16em;overflow:auto;font-size:.8rem;background:var(--pico-code-bg,#1a1a2e);color:var(--pico-code-color,#e0e0e0);padding:.5rem;border-radius:4px">${esc(inputsStr)}</pre>
-        <p style="margin:.5rem 0 .25rem"><strong>${T('debugResponseBodyLabel')}:</strong></p>
+        <p style="margin:.5rem 0 .25rem"><strong>${T('debugResponseBodyLabel')}:</strong>${resp && resp.truncated ? ` <span class="badge warn" title="${esc(T('debugTruncatedHint').replace('{size}', '256 KiB'))}">${esc(T('debugTruncated'))}</span>` : ""}</p>
         <pre style="max-height:16em;overflow:auto;font-size:.8rem;background:var(--pico-code-bg,#1a1a2e);color:var(--pico-code-color,#e0e0e0);padding:.5rem;border-radius:4px">${esc(respBodyStr)}</pre>
       </div>
     </details>`;
@@ -472,11 +485,17 @@ function connectDebugSSE() {
   es.addEventListener("request", (e) => {
     try {
       const evt = JSON.parse(e.data);
-      // Handle replaced event: another tab took over the debug session.
-      if (evt.event === "replaced") {
+      // Handle terminal lifecycle events: close SSE and re-render.
+      if (evt.event === "replaced" || evt.event === "idle_timeout" ||
+          evt.event === "session_expired" || evt.event === "no_attach_timeout") {
         closeDebugSSE();
         _debugActive = false;
-        toast(T('debugStreamReplaced'), 5000);
+        var toastMsg = T('debugStreamDone');
+        if (evt.event === "replaced") toastMsg = T('debugStreamReplaced');
+        else if (evt.event === "idle_timeout") toastMsg = T('debugIdleTimeout');
+        else if (evt.event === "session_expired") toastMsg = T('debugSessionExpired');
+        else if (evt.event === "no_attach_timeout") toastMsg = T('debugNoAttachTimeout');
+        toast(toastMsg, 5000);
         renderDebugUI();
         return;
       }
