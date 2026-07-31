@@ -55,7 +55,7 @@ SITE_BASE_URL=https://dify2api.example.com
 |---|---|---|
 | `ADMIN_HOST` | `admin.<主域名>` | 管理站 Host |
 | `TRUSTED_PROXY_CIDRS` | loopback | 哪些 TCP peer 可提供转发头；无代理填 `none` |
-| `DIFY_EGRESS_ALLOWLIST` | 空 | 显式允许私有 Dify origin 或 CIDR |
+| `DIFY_EGRESS_ALLOWLIST` | 空 | 显式允许私有 Dify 的精确 origin（拒绝 CIDR/裸 IP） |
 | `REMOTE_CONTENT_ORIGIN_ALLOWLIST` | 空 | 允许 Dify 抓取的 website/image 精确 origin |
 | `DIFY_MAX_RESPONSE_MB` | `32` | 解压后 JSON / 累计 SSE 上限 |
 | `MAX_CHAT_IN_FLIGHT` | `32` | 全局聊天并发上限 |
@@ -94,7 +94,8 @@ curl https://dify2api.example.com/v1/models \
    不要在 WAL 活跃时只复制主 `.db`。
 2. 与最新 `admin.env.example` 合并新增配置，并采用最新 nginx 示例。
 3. Docker、远端或多级反代必须填写实际代理来源 CIDR，禁止使用 `0.0.0.0/0` 或 `::/0`。
-4. 私网 Dify 默认被阻断；按最小范围配置 `DIFY_EGRESS_ALLOWLIST`。
+4. 私网 Dify 默认被阻断；`DIFY_EGRESS_ALLOWLIST` 只接受精确
+   `http(s)://host[:port]` origin（拒绝 CIDR 与裸 IP），按最小范围配置。
 5. 任意 website-summary URL 与远程图片默认被阻断；按需配置精确的
    `REMOTE_CONTENT_ORIGIN_ALLOWLIST`。data URI 图片不受影响。
 6. 新表和索引会在启动时幂等创建，无需手工 SQL；启动后检查 `[RECOVERY]`、

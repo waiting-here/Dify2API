@@ -12,6 +12,7 @@ import (
 
 	"dify2api/config"
 	"dify2api/db"
+	"dify2api/dify"
 	"dify2api/translator"
 )
 
@@ -21,7 +22,6 @@ func testConfig() *config.Config {
 		DifyHTTPTimeoutMs:            600000,
 		DifyMaxResponseMB:            32,
 		DifyProbeInFlight:            8,
-		DifyEgressAllowlist:          []string{"127.0.0.0/8", "::1/128"},
 		RemoteContentOriginAllowlist: []string{"https://example.com", "http://a.b"},
 		MaxChatInFlight:              64,
 		MaxRequestBodyMB:             4,
@@ -42,6 +42,19 @@ func testConfig() *config.Config {
 			AdminHost:   "admin.example.com",
 		},
 	}
+}
+
+// allowDifyTestOrigin replaces the gateway's egress policy with one that
+// allows the given exact origins. Mock Dify Apps bind dynamic loopback
+// ports, which cannot be known when the fixture config is built, and the
+// exact-origin-only rule no longer accepts CIDR entries.
+func allowDifyTestOrigin(t *testing.T, gw *Gateway, origins ...string) {
+	t.Helper()
+	policy, err := dify.NewEgressPolicy(origins)
+	if err != nil {
+		t.Fatalf("build test egress policy: %v", err)
+	}
+	gw.difyPolicy = policy
 }
 
 func setupTestGateway(t *testing.T) *Gateway {

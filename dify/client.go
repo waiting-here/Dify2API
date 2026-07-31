@@ -106,6 +106,9 @@ type ClientOptions struct {
 	EgressPolicy     *EgressPolicy
 	MaxResponseBytes int64
 	SSEBufferSize    int
+	// UserID is an optional caller identifier used only in operational logs
+	// (e.g. self-origin egress blocks). Zero when unknown.
+	UserID int64
 }
 
 // NewClient creates a client with the secure default egress policy (public
@@ -136,7 +139,7 @@ func NewClientWithOptions(baseURL, apiKey string, opts ClientOptions) *Client {
 		client.HTTPClient = &http.Client{Timeout: opts.Timeout}
 		return client
 	}
-	client.HTTPClient = policy.newHTTPClient(base, opts.Timeout)
+	client.HTTPClient = policy.newHTTPClient(base, opts.Timeout, opts.UserID)
 	return client
 }
 

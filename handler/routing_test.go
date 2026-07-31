@@ -31,6 +31,7 @@ func mockDifyApp(t *testing.T, captured *map[string]interface{}) *httptest.Serve
 func setupRoutedUser(t *testing.T, difyURL, model string) (*Gateway, string, int64) {
 	t.Helper()
 	gw, store := setupAuthGateway(t, "x")
+	allowDifyTestOrigin(t, gw, difyURL)
 	u, err := store.CreateUser("42", "tester", "")
 	if err != nil {
 		t.Fatalf("create user: %v", err)

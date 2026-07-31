@@ -69,6 +69,9 @@ func NewGateway(cfg *config.Config, store *db.Store) *Gateway {
 		log.Printf("[ERROR] invalid Dify egress policy: %v", err)
 		difyPolicy, _ = dify.NewEgressPolicy(nil)
 	}
+	// Register the gateway's own sites (SITE_BASE_URL/ADMIN_HOST) and listen
+	// ports so Dify egress can never dial back into the gateway itself.
+	difyPolicy.AddSelfOrigins(cfg.Admin.SiteBaseURL, cfg.Admin.AdminHost, cfg.ListenAddr)
 	probeLimit := cfg.DifyProbeInFlight
 	if probeLimit <= 0 {
 		probeLimit = 8
@@ -516,7 +519,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		g.writeError(w, http.StatusInternalServerError, "internal", "credential error")
 		return
 	}
-	client, err := g.newDifyClient(appCfg.DifyBaseURL, apiKey, time.Duration(g.Config.DifyHTTPTimeoutMs)*time.Millisecond)
+	client, err := g.newDifyClient(user.ID, appCfg.DifyBaseURL, apiKey, time.Duration(g.Config.DifyHTTPTimeoutMs)*time.Millisecond)
 	if err != nil {
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "upstream_blocked",
 			http.StatusBadGateway, err.Error(), "")
@@ -730,7 +733,7 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 			g.writeError(charityWriter, http.StatusInternalServerError, "internal", "credential error")
 			return
 		}
-		client, err = g.newDifyClient(picked.DifyBaseURL, apiKey, time.Duration(g.Config.DifyHTTPTimeoutMs)*time.Millisecond)
+		client, err = g.newDifyClient(user.ID, picked.DifyBaseURL, apiKey, time.Duration(g.Config.DifyHTTPTimeoutMs)*time.Millisecond)
 		if err != nil {
 			g.releaseCharitySetup(reservation)
 			releaseRPM()

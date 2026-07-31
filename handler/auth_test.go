@@ -30,7 +30,6 @@ func setupAuthGateway(t *testing.T, adminPassword string) (*Gateway, *db.Store) 
 		DifyHTTPTimeoutMs:            600000,
 		DifyMaxResponseMB:            32,
 		DifyProbeInFlight:            8,
-		DifyEgressAllowlist:          []string{"127.0.0.0/8", "::1/128"},
 		RemoteContentOriginAllowlist: []string{"https://example.com", "http://a.b"},
 		MaxChatInFlight:              64,
 		MaxRequestBodyMB:             4,

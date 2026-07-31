@@ -64,7 +64,7 @@ MAX_WEB_REQUEST_BODY_KB=64
 TRUSTED_PROXY_CIDRS=10.0.0.0/8,192.0.2.10
 DIFY_MAX_RESPONSE_MB=16
 DIFY_PROBE_IN_FLIGHT=3
-DIFY_EGRESS_ALLOWLIST=https://dify.internal,10.0.0.0/8
+DIFY_EGRESS_ALLOWLIST=https://dify.internal,http://dify.internal:5001
 REMOTE_CONTENT_ORIGIN_ALLOWLIST=https://example.com,http://images.example.com:8080
 SSE_BUFFER_MB=2
 LOGIN_LOCK_MIN=120
@@ -143,6 +143,9 @@ func TestLoadStartup_RejectsInvalidOriginsAndProxyCIDRs(t *testing.T) {
 		minimalAdmin + "ADMIN_HOST=https://admin.example.com\n",
 		minimalAdmin + "TRUSTED_PROXY_CIDRS=127.0.0.1,not-a-cidr\n",
 		minimalAdmin + "DIFY_EGRESS_ALLOWLIST=localhost\n",
+		minimalAdmin + "DIFY_EGRESS_ALLOWLIST=10.0.0.0/8\n",
+		minimalAdmin + "DIFY_EGRESS_ALLOWLIST=192.168.1.5\n",
+		minimalAdmin + "DIFY_EGRESS_ALLOWLIST=http://dify.internal/v1\n",
 		minimalAdmin + "REMOTE_CONTENT_ORIGIN_ALLOWLIST=https://example.com/path\n",
 	}
 	for i, content := range cases {

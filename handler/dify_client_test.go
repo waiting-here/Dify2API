@@ -33,7 +33,7 @@ func TestNewDifyClient_PrivateOriginRequiresOperatorAllowlist(t *testing.T) {
 		t.Fatal(err)
 	}
 	gw.difyPolicy = policy
-	if _, err := gw.newDifyClient("http://127.0.0.1:8080", "key", 0); err == nil || !strings.Contains(err.Error(), "non-public") {
+	if _, err := gw.newDifyClient(7, "http://127.0.0.1:8080", "key", 0); err == nil || !strings.Contains(err.Error(), "non-public") {
 		t.Fatalf("private origin error = %v", err)
 	}
 }

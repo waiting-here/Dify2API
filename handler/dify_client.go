@@ -11,7 +11,7 @@ import (
 	"dify2api/dify"
 )
 
-func (g *Gateway) newDifyClient(baseURL, apiKey string, timeout time.Duration) (*dify.Client, error) {
+func (g *Gateway) newDifyClient(userID int64, baseURL, apiKey string, timeout time.Duration) (*dify.Client, error) {
 	if _, err := g.difyPolicy.ValidateBaseURL(baseURL); err != nil {
 		return nil, err
 	}
@@ -20,6 +20,7 @@ func (g *Gateway) newDifyClient(baseURL, apiKey string, timeout time.Duration) (
 		EgressPolicy:     g.difyPolicy,
 		MaxResponseBytes: int64(g.Config.DifyMaxResponseMB) << 20,
 		SSEBufferSize:    g.Config.SSEBufferMB << 20,
+		UserID:           userID,
 	})
 	return client, nil
 }

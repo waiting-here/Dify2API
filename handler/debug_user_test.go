@@ -340,6 +340,7 @@ func TestDebugNonDryRun_CapturesResponse(t *testing.T) {
 	defer srv.Close()
 
 	gw, store, u, cookie := newUserSession(t)
+	allowDifyTestOrigin(t, gw, srv.URL)
 
 	// Set up app config pointing at mock Dify.
 	_, err := store.SetCallerKey(u.ID)
@@ -463,6 +464,7 @@ func TestDebugNonDryRun_LargeResponseTruncated(t *testing.T) {
 	defer srv.Close()
 
 	gw, store, u, cookie := newUserSession(t)
+	allowDifyTestOrigin(t, gw, srv.URL)
 	if _, err := store.SetCallerKey(u.ID); err != nil {
 		t.Fatalf("set caller key: %v", err)
 	}

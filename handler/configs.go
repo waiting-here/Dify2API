@@ -29,14 +29,14 @@ func appConfigJSON(c *db.AppConfig) map[string]interface{} {
 
 // checkAppBinding fetches the App's parameter list and validates it against
 // the service contract of the model's prefix. Informational only (never blocks).
-func (g *Gateway) checkAppBinding(ctx context.Context, model, baseURL, apiKey string) map[string]interface{} {
+func (g *Gateway) checkAppBinding(ctx context.Context, userID int64, model, baseURL, apiKey string) map[string]interface{} {
 	service := translator.ServiceOfModel(model)
 	release, err := g.acquireDifyProbe(ctx)
 	if err != nil {
 		return map[string]interface{}{"service": service, "error": err.Error()}
 	}
 	defer release()
-	client, err := g.newDifyClient(baseURL, apiKey, 15*time.Second)
+	client, err := g.newDifyClient(userID, baseURL, apiKey, 15*time.Second)
 	if err != nil {
 		return map[string]interface{}{"service": service, "error": err.Error()}
 	}
@@ -180,7 +180,7 @@ func (g *Gateway) handleCreateConfig(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"ok":        true,
 		"config":    appConfigJSON(cfg),
-		"app_check": g.checkAppBinding(r.Context(), req.Model, req.BaseURL, req.APIKey),
+		"app_check": g.checkAppBinding(r.Context(), u.ID, req.Model, req.BaseURL, req.APIKey),
 	})
 }
 
@@ -224,7 +224,7 @@ func (g *Gateway) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"ok":        true,
 		"config":    appConfigJSON(cfg),
-		"app_check": g.checkAppBinding(r.Context(), req.Model, req.BaseURL, req.APIKey),
+		"app_check": g.checkAppBinding(r.Context(), u.ID, req.Model, req.BaseURL, req.APIKey),
 	})
 }
 

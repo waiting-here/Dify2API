@@ -13,7 +13,7 @@ import (
 
 func newLoopbackClient(t *testing.T, baseURL, apiKey string, timeout time.Duration) *Client {
 	t.Helper()
-	policy, err := NewEgressPolicy([]string{"127.0.0.0/8", "::1/128"})
+	policy, err := NewEgressPolicy([]string{baseURL})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -23,8 +23,9 @@ type Config struct {
 	DifyMaxResponseMB int
 	// DifyProbeInFlight caps concurrent /parameters connectivity probes.
 	DifyProbeInFlight int
-	// DifyEgressAllowlist contains operator-approved private Dify origins or
-	// IP/CIDR ranges. Public global-unicast destinations need no entry.
+	// DifyEgressAllowlist contains operator-approved private Dify origins.
+	// Entries must be exact http(s) origins; CIDR ranges and bare IPs are
+	// rejected. Public global-unicast destinations need no entry.
 	DifyEgressAllowlist []string
 	// RemoteContentOriginAllowlist contains exact origins that website-summary
 	// and remote image inputs may ask a Dify workflow to fetch.
@@ -259,11 +260,11 @@ func LoadStartup(path string) (*Config, error) {
 	cfg.TrustedProxyCIDRs = trustedProxies
 
 	cfg.DifyEgressAllowlist = splitList(getOr(envMap, "DIFY_EGRESS_ALLOWLIST", ""))
-	if err := validateOriginAllowlist(cfg.DifyEgressAllowlist, true); err != nil {
+	if err := validateOriginAllowlist(cfg.DifyEgressAllowlist); err != nil {
 		return nil, fmt.Errorf("startup file %s: DIFY_EGRESS_ALLOWLIST: %w", path, err)
 	}
 	cfg.RemoteContentOriginAllowlist = splitList(getOr(envMap, "REMOTE_CONTENT_ORIGIN_ALLOWLIST", ""))
-	if err := validateOriginAllowlist(cfg.RemoteContentOriginAllowlist, false); err != nil {
+	if err := validateOriginAllowlist(cfg.RemoteContentOriginAllowlist); err != nil {
 		return nil, fmt.Errorf("startup file %s: REMOTE_CONTENT_ORIGIN_ALLOWLIST: %w", path, err)
 	}
 
@@ -332,27 +333,18 @@ func splitList(raw string) []string {
 	return out
 }
 
-func validateOriginAllowlist(entries []string, allowNetworks bool) error {
+// validateOriginAllowlist requires every entry to be an exact http(s)
+// origin without credentials, query, fragment, or path. CIDR ranges and bare
+// IPs are rejected: an exact origin is the only way to express trust in a
+// private Dify deployment.
+func validateOriginAllowlist(entries []string) error {
 	for _, entry := range entries {
-		if allowNetworks {
-			if _, err := netip.ParsePrefix(entry); err == nil {
-				continue
-			}
-			if _, err := netip.ParseAddr(entry); err == nil {
-				continue
-			}
-		}
 		u, err := url.Parse(entry)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
 			u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-			suffix := ""
-			if allowNetworks {
-				suffix = " (or an IP/CIDR)"
-			}
-			return fmt.Errorf("%q must be an exact http(s) origin%s", entry, suffix)
+			return fmt.Errorf("%q must be an exact http(s) origin", entry)
 		}
-		path := strings.TrimRight(u.Path, "/")
-		if path != "" && !(allowNetworks && path == "/v1") {
+		if path := strings.TrimRight(u.Path, "/"); path != "" {
 			return fmt.Errorf("%q must not contain a path", entry)
 		}
 	}

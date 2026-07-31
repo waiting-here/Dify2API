@@ -86,13 +86,13 @@ func pickWeightedDonation(candidates []*db.Donation, limiter *donationRateLimite
 // validateDonationApp checks a Dify App's availability and parameter
 // compatibility for a donation entry. Returns a validation result map
 // suitable for inclusion in API responses (informational, never blocks).
-func (g *Gateway) validateDonationApp(ctx context.Context, service, baseURL, apiKey string) map[string]interface{} {
+func (g *Gateway) validateDonationApp(ctx context.Context, userID int64, service, baseURL, apiKey string) map[string]interface{} {
 	release, err := g.acquireDifyProbe(ctx)
 	if err != nil {
 		return map[string]interface{}{"compatible": false, "message": err.Error()}
 	}
 	defer release()
-	client, err := g.newDifyClient(baseURL, apiKey, 15*time.Second)
+	client, err := g.newDifyClient(userID, baseURL, apiKey, 15*time.Second)
 	if err != nil {
 		return map[string]interface{}{"compatible": false, "message": err.Error()}
 	}
@@ -128,7 +128,8 @@ func (g *Gateway) validateDonationApp(ctx context.Context, service, baseURL, api
 
 // POST /api/admin/donations
 func (g *Gateway) handleCreateDonation(w http.ResponseWriter, r *http.Request) {
-	if g.requireAdmin(r) == nil {
+	admin := g.requireAdmin(r)
+	if admin == nil {
 		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
@@ -272,7 +273,7 @@ func (g *Gateway) handleCreateDonation(w http.ResponseWriter, r *http.Request) {
 		keyPlain = "(decrypt error)"
 	}
 
-	validation := g.validateDonationApp(r.Context(), created.Service, created.DifyBaseURL, keyPlain)
+	validation := g.validateDonationApp(r.Context(), admin.ID, created.Service, created.DifyBaseURL, keyPlain)
 
 	w.Header().Set("Content-Type", "application/json")
 	resp := map[string]interface{}{
@@ -436,7 +437,8 @@ func (g *Gateway) handleDeleteDonation(w http.ResponseWriter, r *http.Request) {
 
 // PATCH /api/admin/donations/{id}
 func (g *Gateway) handlePatchDonation(w http.ResponseWriter, r *http.Request) {
-	if g.requireAdmin(r) == nil {
+	admin := g.requireAdmin(r)
+	if admin == nil {
 		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
@@ -645,7 +647,7 @@ func (g *Gateway) handlePatchDonation(w http.ResponseWriter, r *http.Request) {
 				"message":    fmt.Sprintf("密钥解密失败: %v", decErr),
 			}
 		} else {
-			validation = g.validateDonationApp(r.Context(), updated.Service, newBaseURL, keyPlain)
+			validation = g.validateDonationApp(r.Context(), admin.ID, updated.Service, newBaseURL, keyPlain)
 		}
 	}
 
@@ -1237,7 +1239,7 @@ func (g *Gateway) handleCreateDonationApp(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"ok":          true,
 		"application": applicationJSON(app),
-		"validation":  g.validateDonationApp(r.Context(), req.Service, req.DifyBaseURL, req.DifyAPIKey),
+		"validation":  g.validateDonationApp(r.Context(), u.ID, req.Service, req.DifyBaseURL, req.DifyAPIKey),
 	})
 }
 
@@ -1490,7 +1492,7 @@ func (g *Gateway) handleApproveApplication(w http.ResponseWriter, r *http.Reques
 	// beta.2: validate Dify App parameters.
 	keyPlain, decErr := g.Store.Decrypt(donation.DifyAPIKeyEnc)
 	if decErr == nil {
-		resp["validation"] = g.validateDonationApp(r.Context(), donation.Service, donation.DifyBaseURL, keyPlain)
+		resp["validation"] = g.validateDonationApp(r.Context(), adminUser.ID, donation.Service, donation.DifyBaseURL, keyPlain)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)

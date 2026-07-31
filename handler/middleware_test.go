@@ -180,6 +180,7 @@ func TestCheckAppBinding_Verdicts(t *testing.T) {
 	defer srv.Close()
 
 	gw, store := setupAuthGateway(t, "s3cret")
+	allowDifyTestOrigin(t, gw, srv.URL)
 	adminCookie := loginCookie(t, gw, "root", "s3cret")
 	_ = store
 
@@ -224,6 +225,7 @@ func TestCheckAppBinding_Incompatible(t *testing.T) {
 	defer srv.Close()
 
 	gw, _ := setupAuthGateway(t, "s3cret")
+	allowDifyTestOrigin(t, gw, srv.URL)
 	adminCookie := loginCookie(t, gw, "root", "s3cret")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/configs",
@@ -254,7 +256,8 @@ func TestCheckAppBinding_Incompatible(t *testing.T) {
 		fmt.Fprint(w, `{"user_input_form":[{"paragraph":{"variable":"other","required":false}}]}`)
 	}))
 	defer srv2.Close()
-	check := gw.checkAppBinding(context.Background(), "[general]x", srv2.URL, "k")
+	allowDifyTestOrigin(t, gw, srv.URL, srv2.URL)
+	check := gw.checkAppBinding(context.Background(), 0, "[general]x", srv2.URL, "k")
 	if check["compatible"] != false {
 		t.Errorf("missing user_0 should be incompatible: %v", check)
 	}
@@ -265,6 +268,7 @@ func TestCheckAppBinding_Incompatible(t *testing.T) {
 
 func TestConfigs_RejectUnsupportedService(t *testing.T) {
 	gw, store := setupAuthGateway(t, "s3cret")
+	allowDifyTestOrigin(t, gw, "http://127.0.0.1:1")
 	u, _ := store.CreateUser("42", "tester", "")
 	token, _, _ := store.CreateSession(u.ID)
 	mux := http.NewServeMux()
@@ -334,6 +338,7 @@ func TestListServices(t *testing.T) {
 
 func TestConfigsCRUD_AndGuards(t *testing.T) {
 	gw, store := setupAuthGateway(t, "s3cret")
+	allowDifyTestOrigin(t, gw, "http://127.0.0.1:1")
 	adminCookie := loginCookie(t, gw, "root", "s3cret")
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)

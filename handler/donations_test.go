@@ -500,6 +500,7 @@ func TestCharityRouting_Success(t *testing.T) {
 	defer srv.Close()
 
 	gw, store := setupAuthGateway(t, "x")
+	allowDifyTestOrigin(t, gw, srv.URL)
 	u, err := store.CreateUser("500", "charity_success", "")
 	if err != nil {
 		t.Fatalf("create user: %v", err)
