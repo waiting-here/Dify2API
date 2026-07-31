@@ -79,15 +79,22 @@ func (g *Gateway) handleCheckin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Re-read user to get the latest credits (avoid stale snapshot from currentUser).
-	latest, err := g.Store.GetUserByID(u.ID)
-	if err != nil || latest == nil {
-		g.writeError(w, http.StatusInternalServerError, "internal", "failed to fetch user")
-		return
+	// Random bonus in [min, max].
+	bonus := checkinMin
+	if checkinMax > checkinMin {
+		bonus = checkinMin + rand.Intn(checkinMax-checkinMin+1)
 	}
 
-	// Cap check: when credits >= cap, refuse check-in.
-	if latest.Credits >= creditsCap {
+	status, awarded, newCredits, err := g.Store.ApplyUserCheckin(u.ID, today, bonus, creditsCap)
+	if err != nil {
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	switch status {
+	case db.CheckinAlready:
+		g.writeError(w, http.StatusBadRequest, "already_checked_in", t(g.resolveLang(r), "今日已签到", "Already checked in today"))
+		return
+	case db.CheckinCapped:
 		g.writeError(w, http.StatusBadRequest, "credits_capped",
 			t(g.resolveLang(r),
 				g.Config.I18N("credits_name", "zh", config.DefaultCreditsName)+fmt.Sprintf("超过上限%d，无法签到", creditsCap),
@@ -95,27 +102,10 @@ func (g *Gateway) handleCheckin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Random bonus in [min, max].
-	bonus := checkinMin
-	if checkinMax > checkinMin {
-		bonus = checkinMin + rand.Intn(checkinMax-checkinMin+1)
-	}
-
-	newCredits := latest.Credits + bonus
-	ok, err := g.Store.SetUserCheckin(u.ID, today, newCredits)
-	if err != nil {
-		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-		return
-	}
-	if !ok {
-		g.writeError(w, http.StatusBadRequest, "already_checked_in", t(g.resolveLang(r), "今日已签到", "Already checked in today"))
-		return
-	}
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"ok":      true,
-		"bonus":   bonus,
+		"bonus":   awarded,
 		"credits": newCredits,
 	})
 }

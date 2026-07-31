@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -51,6 +52,19 @@ func main() {
 		log.Fatalf("Database error: %v", err)
 	}
 	defer store.Close()
+
+	// Resolve durable charity reservations left by an interrupted process
+	// before accepting traffic: never-dispatched work is refunded; dispatched
+	// work is conservatively settled as consumed.
+	recoveryCtx, recoveryCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	releasedReservations, committedReservations, recoveryErr := store.RecoverCharityReservations(recoveryCtx)
+	recoveryCancel()
+	if recoveryErr != nil {
+		log.Fatalf("Charity reservation recovery error: %v", recoveryErr)
+	}
+	if releasedReservations+committedReservations > 0 {
+		log.Printf("[RECOVERY] charity reservations: released=%d committed=%d", releasedReservations, committedReservations)
+	}
 
 	log.Printf("Dify2API v%s starting", Version)
 	log.Printf("  Startup file: %s", *adminPath)
@@ -122,7 +136,11 @@ func main() {
 			if err4 != nil {
 				log.Printf("[CLEANUP] sessions: %v", err4)
 			}
-			log.Printf("[CLEANUP] purged %d donation-bound logs, %d stale alerts, %d regular logs, %d sessions", n1, n2, n3, n4)
+			n5, err5 := store.PurgeSettledCharityReservations(time.Now().Add(-30 * 24 * time.Hour).Unix())
+			if err5 != nil {
+				log.Printf("[CLEANUP] charity reservations: %v", err5)
+			}
+			log.Printf("[CLEANUP] purged %d donation-bound logs, %d stale alerts, %d regular logs, %d sessions, %d charity reservations", n1, n2, n3, n4, n5)
 		}
 		runCleanup()
 		ticker := time.NewTicker(24 * time.Hour)

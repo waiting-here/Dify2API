@@ -199,12 +199,25 @@ func (s *Store) SetDonationStatus(id int64, status string) error {
 // admin_alerts rows are intentionally left intact (orphan retention policy
 // §8.4#1 — the foreign donation_id becomes dangling).
 func (s *Store) DeleteDonation(id int64) error {
+	var active int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(1) FROM charity_reservations WHERE donation_id=? AND status IN (?,?)`,
+		id, ReservationReserved, ReservationDispatched,
+	).Scan(&active); err != nil {
+		return err
+	}
+	if active > 0 {
+		return fmt.Errorf("donation %d has %d in-flight charity reservation(s)", id, active)
+	}
 	_, err := s.db.Exec(`DELETE FROM donations WHERE id=?`, id)
 	return err
 }
 
-// RecordDonationSuccess atomically decrements remaining_count, increments
-// success_count, resets consecutive_failures, and flips status to expired
+// RecordDonationSuccess is retained for low-level compatibility tests.
+// Deprecated: live charity routing must use Reserve/CommitCharityReservation
+// so donation capacity and consumer credits are claimed in one transaction.
+// It atomically decrements remaining_count, increments success_count, resets
+// consecutive_failures, and flips status to expired
 // when remaining_count reaches 0. Returns an error when the donation is
 // not in a routable state (inactive/expired/no remaining).
 func (s *Store) RecordDonationSuccess(id int64) error {

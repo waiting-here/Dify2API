@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -701,13 +702,14 @@ func TestPickWeightedDonation(t *testing.T) {
 	const trials = 500
 	count1 := 0
 	for i := 0; i < trials; i++ {
-		picked := pickWeightedDonation(donations, limiter)
+		picked, release := pickWeightedDonation(donations, limiter)
 		if picked == nil {
 			t.Fatal("pick returned nil")
 		}
 		if picked.ID == 1 {
 			count1++
 		}
+		release()
 	}
 	// Donation 1 (shorter deadline) should win significantly more often.
 	if count1 <= trials/2 {
@@ -1207,11 +1209,9 @@ func TestPickWeightedDonation_RpmFilter(t *testing.T) {
 
 	// Fill up donation 1's RPM quota.
 	for i := 0; i < 5; i++ {
-		allowed, rec := limiter.allow(1, 5)
-		if !allowed {
+		if _, ok := limiter.acquire(1, 5); !ok {
 			t.Fatalf("pre-fill step %d unexpectedly blocked", i)
 		}
-		rec()
 	}
 
 	donations := []*db.Donation{
@@ -1223,13 +1223,14 @@ func TestPickWeightedDonation_RpmFilter(t *testing.T) {
 	// Run many trials: donation 1 should never be selected.
 	const trials = 200
 	for i := 0; i < trials; i++ {
-		picked := pickWeightedDonation(donations, limiter)
+		picked, release := pickWeightedDonation(donations, limiter)
 		if picked == nil {
 			t.Fatal("pick returned nil")
 		}
 		if picked.ID == 1 {
 			t.Errorf("trial %d: donation 1 was selected despite being at RPM limit", i)
 		}
+		release()
 	}
 }
 
@@ -1241,12 +1242,8 @@ func TestPickWeightedDonation_AllOverloaded(t *testing.T) {
 
 	// Fill up both donations' RPM quotas.
 	for i := 0; i < 3; i++ {
-		if allowed, rec := limiter.allow(1, 3); allowed {
-			rec()
-		}
-		if allowed, rec := limiter.allow(2, 3); allowed {
-			rec()
-		}
+		_, _ = limiter.acquire(1, 3)
+		_, _ = limiter.acquire(2, 3)
 	}
 
 	donations := []*db.Donation{
@@ -1254,7 +1251,7 @@ func TestPickWeightedDonation_AllOverloaded(t *testing.T) {
 		{ID: 2, Deadline: now + 86400, RpmLimit: 3},
 	}
 
-	picked := pickWeightedDonation(donations, limiter)
+	picked, _ := pickWeightedDonation(donations, limiter)
 	if picked != nil {
 		t.Errorf("expected nil when all overloaded, got donation %d", picked.ID)
 	}
@@ -1418,6 +1415,18 @@ func TestCreateDonation_DefaultInactive(t *testing.T) {
 	}
 }
 
+func settleCharityForTest(t *testing.T, gw *Gateway, consumerID int64, donation *db.Donation, pricing *db.CharityPricing) {
+	t.Helper()
+	reservation, err := gw.Store.ReserveCharityCall(context.Background(), consumerID, donation.ID, pricing.Price, pricing.Reward)
+	if err != nil {
+		t.Fatalf("reserve charity call: %v", err)
+	}
+	if err := gw.Store.MarkCharityDispatched(context.Background(), reservation.ID); err != nil {
+		t.Fatalf("mark dispatched: %v", err)
+	}
+	gw.charitySuccessAccounting(reservation)
+}
+
 // TestCharitySuccessAccounting_Reward verifies that the reward is granted
 // to the donor and cost is deducted from the consumer.
 func TestCharitySuccessAccounting_Reward(t *testing.T) {
@@ -1465,8 +1474,7 @@ func TestCharitySuccessAccounting_Reward(t *testing.T) {
 		t.Fatalf("create donation: %v", err)
 	}
 
-	// Call charitySuccessAccounting.
-	gw.charitySuccessAccounting(consumer.ID, created, "[公益][general]reward-test", "general", time.Now(), pricing)
+	settleCharityForTest(t, gw, consumer.ID, created, pricing)
 
 	// Verify consumer: 100 - 31 = 69.
 	cu, _ := store.GetUserByID(consumer.ID)
@@ -1527,7 +1535,7 @@ func TestCharitySuccessAccounting_NoRewardWhenZero(t *testing.T) {
 		t.Fatalf("create donation: %v", err)
 	}
 
-	gw.charitySuccessAccounting(consumer.ID, created, "[公益][general]reward-zero", "general", time.Now(), pricing)
+	settleCharityForTest(t, gw, consumer.ID, created, pricing)
 
 	// Consumer: 100 - 0 = 100 (price is 0).
 	cu, _ := store.GetUserByID(consumer.ID)
@@ -1574,7 +1582,7 @@ func TestCharitySuccessAccounting_NoRewardWhenNoSourceUser(t *testing.T) {
 		t.Fatalf("create donation: %v", err)
 	}
 
-	gw.charitySuccessAccounting(consumer.ID, created, "[公益][general]no-source", "general", time.Now(), pricing)
+	settleCharityForTest(t, gw, consumer.ID, created, pricing)
 
 	// Consumer: 100 - 31 = 69.
 	cu, _ := store.GetUserByID(consumer.ID)
@@ -1804,7 +1812,7 @@ func TestAdminListApplications(t *testing.T) {
 	}
 	var resp struct {
 		Applications []map[string]interface{} `json:"applications"`
-		Total        int                       `json:"total"`
+		Total        int                      `json:"total"`
 	}
 	json.Unmarshal(rec.Body.Bytes(), &resp)
 	if resp.Total < 2 {

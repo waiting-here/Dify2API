@@ -343,38 +343,29 @@ func TestAdminAlerts(t *testing.T) {
 	}
 }
 
-func TestSetUserCheckin_AntiReplay(t *testing.T) {
+func TestApplyUserCheckin_AntiReplayAndCap(t *testing.T) {
 	st, _ := openTemp(t)
 	u, _ := st.CreateUser("333", "charlie", "")
 
-	// First check-in on day "2026-07-24": accepted.
-	ok, err := st.SetUserCheckin(u.ID, "2026-07-24", 15)
-	if err != nil || !ok {
-		t.Fatalf("first check-in: ok=%v err=%v", ok, err)
-	}
-	got, _ := st.GetUserByID(u.ID)
-	if got.Credits != 15 || got.LastCheckinDay != "2026-07-24" {
-		t.Errorf("credits=%d day=%q, want 15/2026-07-24", got.Credits, got.LastCheckinDay)
+	status, awarded, credits, err := st.ApplyUserCheckin(u.ID, "2026-07-24", 15, 25)
+	if err != nil || status != CheckinApplied || awarded != 15 || credits != 15 {
+		t.Fatalf("first check-in: status=%s awarded=%d credits=%d err=%v", status, awarded, credits, err)
 	}
 
-	// Second check-in same day: rejected.
-	ok2, err := st.SetUserCheckin(u.ID, "2026-07-24", 20)
-	if err != nil || ok2 {
-		t.Fatalf("duplicate check-in should be rejected: ok=%v err=%v", ok2, err)
-	}
-	got, _ = st.GetUserByID(u.ID)
-	if got.Credits != 15 {
-		t.Errorf("credits should still be 15, got %d", got.Credits)
+	status, _, credits, err = st.ApplyUserCheckin(u.ID, "2026-07-24", 5, 25)
+	if err != nil || status != CheckinAlready || credits != 15 {
+		t.Fatalf("duplicate check-in: status=%s credits=%d err=%v", status, credits, err)
 	}
 
-	// Next day: accepted.
-	ok3, err := st.SetUserCheckin(u.ID, "2026-07-25", 12)
-	if err != nil || !ok3 {
-		t.Fatalf("next-day check-in: ok=%v err=%v", ok3, err)
+	// The next award is incremental and clamped instead of overwriting a
+	// balance that may have changed through charity accounting.
+	status, awarded, credits, err = st.ApplyUserCheckin(u.ID, "2026-07-25", 12, 25)
+	if err != nil || status != CheckinApplied || awarded != 10 || credits != 25 {
+		t.Fatalf("capped check-in: status=%s awarded=%d credits=%d err=%v", status, awarded, credits, err)
 	}
-	got, _ = st.GetUserByID(u.ID)
-	if got.Credits != 12 || got.LastCheckinDay != "2026-07-25" {
-		t.Errorf("credits=%d day=%q, want 12/2026-07-25", got.Credits, got.LastCheckinDay)
+	status, _, _, err = st.ApplyUserCheckin(u.ID, "2026-07-26", 1, 25)
+	if err != nil || status != CheckinCapped {
+		t.Fatalf("at cap: status=%s err=%v", status, err)
 	}
 }
 

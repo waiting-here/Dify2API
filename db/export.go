@@ -16,12 +16,13 @@ import (
 // the administrator and belong to the public-resource pool, not to any
 // individual user's personal data.
 type ExportBundle struct {
-	ExportedAt           time.Time                `json:"exported_at"`
-	User                 ExportUser               `json:"user"`
-	Configs              []ExportConfig           `json:"app_configs"`
-	CallerKey            string                   `json:"caller_key"`
-	Logs                 []ExportLog              `json:"request_logs"`
-	DonationApplications []ExportDonationApp      `json:"donation_applications"`
+	ExportedAt           time.Time                  `json:"exported_at"`
+	User                 ExportUser                 `json:"user"`
+	Configs              []ExportConfig             `json:"app_configs"`
+	CallerKey            string                     `json:"caller_key"`
+	Logs                 []ExportLog                `json:"request_logs"`
+	DonationApplications []ExportDonationApp        `json:"donation_applications"`
+	CharityReservations  []ExportCharityReservation `json:"charity_reservations"`
 }
 
 // ExportUser mirrors the users row without internal sentinel fields.
@@ -75,6 +76,19 @@ type ExportDonationApp struct {
 	ReviewNote  string `json:"review_note"`
 	DonationID  *int64 `json:"donation_id"`
 	CreatedAt   int64  `json:"created_at"`
+}
+
+// ExportCharityReservation exposes the user's role in a recent accounting
+// reservation without disclosing the other party's internal user id.
+type ExportCharityReservation struct {
+	ID         string `json:"id"`
+	Role       string `json:"role"`
+	DonationID int64  `json:"donation_id"`
+	Price      int    `json:"price"`
+	Reward     int    `json:"reward"`
+	Status     string `json:"status"`
+	CreatedAt  int64  `json:"created_at"`
+	UpdatedAt  int64  `json:"updated_at"`
 }
 
 // ExportLog mirrors one request_log entry.
@@ -207,6 +221,26 @@ func (s *Store) ExportUserData(userID int64) (*ExportBundle, error) {
 			expApp.DonationID = &a.DonationID.Int64
 		}
 		bundle.DonationApplications = append(bundle.DonationApplications, expApp)
+	}
+
+	reservations, err := s.ListUserCharityReservations(userID)
+	if err != nil {
+		return nil, err
+	}
+	bundle.CharityReservations = make([]ExportCharityReservation, 0, len(reservations))
+	for _, r := range reservations {
+		role := "consumer"
+		if r.DonorUserID.Valid && r.DonorUserID.Int64 == userID {
+			if r.UserID == userID {
+				role = "consumer_and_donor"
+			} else {
+				role = "donor"
+			}
+		}
+		bundle.CharityReservations = append(bundle.CharityReservations, ExportCharityReservation{
+			ID: r.ID, Role: role, DonationID: r.DonationID, Price: r.Price,
+			Reward: r.Reward, Status: r.Status, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		})
 	}
 
 	return bundle, nil

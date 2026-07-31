@@ -45,63 +45,42 @@ func charityModelName(service, backend string) string {
 	return fmt.Sprintf("[公益][%s]%s", service, backend)
 }
 
-// pickWeightedDonation selects a donation from candidates using weighted
-// random sampling. Weight_i = 1 / max(deadline_i - now, 60).
-// Candidates that have reached their per-donation RPM limit are filtered
-// out before sampling. When all candidates are rate-limited, returns nil.
-func pickWeightedDonation(candidates []*db.Donation, limiter *donationRateLimiter) *db.Donation {
-	if len(candidates) == 0 {
-		return nil
-	}
-
-	// Filter candidates by per-donation RPM; collect record callbacks.
-	type candidateRec struct {
-		d      *db.Donation
-		record func()
-	}
-	filtered := make([]candidateRec, 0, len(candidates))
-	for _, d := range candidates {
-		if allowed, rec := limiter.allow(d.ID, d.RpmLimit); allowed {
-			filtered = append(filtered, candidateRec{d: d, record: rec})
+// pickWeightedDonation atomically acquires an RPM lease for one weighted
+// candidate. If a sampled candidate loses an acquire race, it is removed and
+// sampling continues. releaseRPM is called only when setup aborts before any
+// donated Dify credential is used.
+func pickWeightedDonation(candidates []*db.Donation, limiter *donationRateLimiter) (picked *db.Donation, releaseRPM func()) {
+	remainingCandidates := append([]*db.Donation(nil), candidates...)
+	for len(remainingCandidates) > 0 {
+		now := time.Now().Unix()
+		total := 0.0
+		weights := make([]float64, len(remainingCandidates))
+		for i, d := range remainingCandidates {
+			remaining := d.Deadline - now
+			if remaining < 60 {
+				remaining = 60
+			}
+			weights[i] = 1.0 / float64(remaining)
+			total += weights[i]
 		}
-	}
-	if len(filtered) == 0 {
-		return nil
-	}
-
-	now := time.Now().Unix()
-	type wd struct {
-		cr candidateRec
-		w  float64
-	}
-	weights := make([]wd, 0, len(filtered))
-	total := 0.0
-	for _, cr := range filtered {
-		remaining := cr.d.Deadline - now
-		if remaining < 60 {
-			remaining = 60
+		index := len(remainingCandidates) - 1
+		if total > 0 {
+			r := rand.Float64() * total
+			for i, weight := range weights {
+				r -= weight
+				if r <= 0 {
+					index = i
+					break
+				}
+			}
 		}
-		w := 1.0 / float64(remaining)
-		weights = append(weights, wd{cr: cr, w: w})
-		total += w
-	}
-	if total <= 0 {
-		// Record the first candidate's RPM consumption.
-		filtered[0].record()
-		return filtered[0].d
-	}
-	r := rand.Float64() * total
-	for _, wd := range weights {
-		r -= wd.w
-		if r <= 0 {
-			wd.cr.record()
-			return wd.cr.d
+		candidate := remainingCandidates[index]
+		if release, ok := limiter.acquire(candidate.ID, candidate.RpmLimit); ok {
+			return candidate, release
 		}
+		remainingCandidates = append(remainingCandidates[:index], remainingCandidates[index+1:]...)
 	}
-	// Fallthrough: pick the last one.
-	last := weights[len(weights)-1]
-	last.cr.record()
-	return last.cr.d
+	return nil, nil
 }
 
 // validateDonationApp checks a Dify App's availability and parameter
@@ -825,7 +804,7 @@ func (g *Gateway) handlePutCharity(w http.ResponseWriter, r *http.Request) {
 // --- Charity streaming/blocking handlers ---
 
 // charityStreaming handles streaming charity calls with donation accounting.
-func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time, donation *db.Donation, pricing *db.CharityPricing, ctx context.Context) {
+func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time, donation *db.Donation, reservation *db.CharityReservation, ctx context.Context) {
 	wfReq.ResponseMode = "streaming"
 	events, errCh := client.StreamWorkflowContext(ctx, wfReq)
 
@@ -838,16 +817,20 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 		}
 	case err := <-errCh:
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
-			g.logRequest(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest, "client disconnected before first upstream event", "")
+			g.charitySuccessAccounting(reservation)
+			g.logRequestDonation(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest,
+				"client disconnected before first upstream event", donation.ID, reservation.Price, "")
 			return
 		}
 		if err != nil {
-			g.charityFailAccounting(userID, donation, err)
+			g.charityFailAccounting(userID, donation, reservation, err)
 			g.writeDifyError(w, err)
 			return
 		}
 	case <-ctx.Done():
-		g.logRequest(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest, ctx.Err().Error(), "")
+		g.charitySuccessAccounting(reservation)
+		g.logRequestDonation(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest,
+			ctx.Err().Error(), donation.ID, reservation.Price, "")
 		return
 	}
 	if firstEvt == nil {
@@ -858,11 +841,13 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 				if ctx.Err() != nil {
 					detail = ctx.Err().Error()
 				}
-				g.logRequest(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest, detail, "")
+				g.charitySuccessAccounting(reservation)
+				g.logRequestDonation(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest,
+					detail, donation.ID, reservation.Price, "")
 				return
 			}
 			if err != nil {
-				g.charityFailAccounting(userID, donation, err)
+				g.charityFailAccounting(userID, donation, reservation, err)
 				g.writeDifyError(w, err)
 				return
 			}
@@ -871,13 +856,15 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 	}
 
 	if ctx.Err() != nil {
-		g.logRequest(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest, ctx.Err().Error(), "")
+		g.charitySuccessAccounting(reservation)
+		g.logRequestDonation(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest,
+			ctx.Err().Error(), donation.ID, reservation.Price, "")
 		return
 	}
 
-	// Stream started (Dify HTTP 200): record success per §1.2
+	// Stream started (Dify HTTP 200): atomically settle the reservation.
 	donationID := donation.ID
-	g.charitySuccessAccounting(userID, donation, modelName, service, startedAt, pricing)
+	g.charitySuccessAccounting(reservation)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -885,8 +872,8 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 	w.Header().Set("X-Accel-Buffering", "no")
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		g.logRequest(userID, modelName, service, startedAt, "error", "stream_unsupported",
-			http.StatusInternalServerError, "response writer does not support streaming", "")
+		g.logRequestDonation(userID, modelName, service, startedAt, "error", "stream_unsupported",
+			http.StatusInternalServerError, "response writer does not support streaming", donationID, reservation.Price, "")
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
 		return
 	}
@@ -930,7 +917,7 @@ loop:
 		if ctx.Err() != nil {
 			detail = ctx.Err().Error()
 		}
-		g.logRequestDonation(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest, detail, donationID, pricing.Price, "")
+		g.logRequestDonation(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest, detail, donationID, reservation.Price, "")
 		return
 	}
 
@@ -970,7 +957,7 @@ loop:
 		flusher.Flush()
 		status, code = "error", "upstream_error"
 		detail = streamErr.Error()
-		g.charityFailAccounting(userID, donation, streamErr)
+		g.charityPostCommitFailure(userID, donation, streamErr)
 	default:
 		for _, msg := range conv.Finalize() {
 			fmt.Fprint(w, msg.Data)
@@ -981,11 +968,11 @@ loop:
 		g.limiter.record(rpmClassA, userID, time.Now())
 	}
 
-	g.logRequestDonation(userID, modelName, service, startedAt, status, code, http.StatusOK, detail, donationID, pricing.Price, "")
+	g.logRequestDonation(userID, modelName, service, startedAt, status, code, http.StatusOK, detail, donationID, reservation.Price, "")
 }
 
 // charityBlocking handles blocking charity calls with donation accounting.
-func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time, donation *db.Donation, pricing *db.CharityPricing, ctx context.Context) {
+func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time, donation *db.Donation, reservation *db.CharityReservation, ctx context.Context) {
 	wfReq.ResponseMode = "blocking"
 	text, err := client.BlockingWorkflowContext(ctx, wfReq)
 	donationID := donation.ID
@@ -996,18 +983,20 @@ func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wf
 			if ctx.Err() != nil {
 				detail = ctx.Err().Error()
 			}
-			g.logRequest(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest, detail, "")
+			g.charitySuccessAccounting(reservation)
+			g.logRequestDonation(userID, modelName, service, startedAt, "error", "client_canceled",
+				statusClientClosedRequest, detail, donationID, reservation.Price, "")
 			return
 		}
 		var de *dify.DifyError
 		if errors.As(err, &de) && de.Status == http.StatusOK {
 			// 200-but-failed: success per §1.2, but admin alert
 			g.limiter.record(rpmClassB, userID, time.Now())
-			g.charitySuccessAccounting(userID, donation, modelName, service, startedAt, pricing)
+			g.charitySuccessAccounting(reservation)
 			g.maybeRecordBlockingFailedAlert(userID, modelName, service, de, &donationID)
 
 			// Log first (we need the log ID for the alert)
-			g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_error", http.StatusOK, de.Error(), donationID, pricing.Price, "")
+			g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_error", http.StatusOK, de.Error(), donationID, reservation.Price, "")
 			g.writeDifyError(w, err)
 			return
 		}
@@ -1017,14 +1006,14 @@ func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wf
 		// clear timeout diagnosis so they know the request was counted.
 		if dify.IsTimeoutError(err) {
 			g.limiter.record(rpmClassB, userID, time.Now())
-			g.charitySuccessAccounting(userID, donation, modelName, service, startedAt, pricing)
-			g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_timeout", http.StatusGatewayTimeout, err.Error(), donationID, pricing.Price, "")
+			g.charitySuccessAccounting(reservation)
+			g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_timeout", http.StatusGatewayTimeout, err.Error(), donationID, reservation.Price, "")
 			g.writeError(w, http.StatusGatewayTimeout, "upstream_timeout",
 				"上游 Dify 服务响应超时：请求可能因 Cloudflare 100 秒限制被截断。建议使用流式传输（stream: true）或拆分任务后重试。")
 			return
 		}
 		// Real upstream failure — donation failure
-		g.charityFailAccounting(userID, donation, err)
+		g.charityFailAccounting(userID, donation, reservation, err)
 		g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error(), "")
 		g.writeDifyError(w, err)
 		return
@@ -1032,7 +1021,7 @@ func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wf
 
 	// Success
 	g.limiter.record(rpmClassB, userID, time.Now())
-	g.charitySuccessAccounting(userID, donation, modelName, service, startedAt, pricing)
+	g.charitySuccessAccounting(reservation)
 
 	resp := map[string]interface{}{
 		"id":      fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()/1000%1000000000000),
@@ -1054,67 +1043,65 @@ func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wf
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 	g.limiter.record(rpmClassA, userID, time.Now())
-	g.logRequestDonation(userID, modelName, service, startedAt, "success", "", http.StatusOK, "", donationID, pricing.Price, "")
+	g.logRequestDonation(userID, modelName, service, startedAt, "success", "", http.StatusOK, "", donationID, reservation.Price, "")
 }
 
-// charitySuccessAccounting records the success side of donation accounting.
-func (g *Gateway) charitySuccessAccounting(userID int64, donation *db.Donation, modelName, service string, startedAt time.Time, pricing *db.CharityPricing) {
-	// 1. Record donation success (remaining_count--, success_count++, may expire)
-	if err := g.Store.RecordDonationSuccess(donation.ID); err != nil {
-		log.Printf("[ERROR] charity success accounting race (donation %d): %v", donation.ID, err)
-		alert := &db.AdminAlert{
-			Type:    db.AlertDonationExhaustedRace,
-			Message: fmt.Sprintf("公益资源竞争：捐赠条目 %d 在成功调用时已被消耗完", donation.ID),
-		}
-		alert.DonationID = &donation.ID
-		if err := g.Store.AddAdminAlert(alert); err != nil {
-			log.Printf("[ERROR] write donation exhausted alert: %v", err)
-		}
+// charitySuccessAccounting commits a durable reservation. The donation use
+// and consumer debit were already claimed atomically before dispatch.
+func (g *Gateway) charitySuccessAccounting(reservation *db.CharityReservation) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := g.Store.CommitCharityReservation(ctx, reservation.ID); err != nil {
+		log.Printf("[ERROR] commit charity reservation %s: %v", reservation.ID, err)
+	}
+}
+
+// charityFailAccounting refunds a pre-dispatch debit/use and records a Dify
+// endpoint failure in the same transaction.
+func (g *Gateway) charityFailAccounting(userID int64, donation *db.Donation, reservation *db.CharityReservation, err error) {
+	log.Printf("[DONATION] donation %d failure (user %d, reservation %s): %v", donation.ID, userID, reservation.ID, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	consecutive, recErr := g.Store.ReleaseCharityReservation(ctx, reservation.ID, true)
+	if recErr != nil {
+		log.Printf("[ERROR] release charity reservation %s: %v", reservation.ID, recErr)
 		return
 	}
-
-	// 2. Adjust donation credit for source user (if applicable)
-	if donation.SourceUserID.Valid {
-		if _, err := g.Store.AdjustUserDonationCredit(donation.SourceUserID.Int64, 1); err != nil {
-			log.Printf("[ERROR] adjust donation credit (user %d): %v", donation.SourceUserID.Int64, err)
-		}
-	}
-
-	// 3. Deduct charity cost from the calling user (beta.2: per-model pricing).
-	if pricing != nil && pricing.Price > 0 {
-		if _, err := g.Store.AdjustUserCredits(userID, -pricing.Price); err != nil {
-			log.Printf("[ERROR] deduct charity credit (user %d): %v", userID, err)
-		}
-	}
-
-	// 4. Reward donor (beta.2: per-model reward).
-	if pricing != nil && pricing.Reward > 0 && donation.SourceUserID.Valid {
-		if _, err := g.Store.AdjustUserCredits(donation.SourceUserID.Int64, pricing.Reward); err != nil {
-			log.Printf("[ERROR] reward donor credit (user %d): %v", donation.SourceUserID.Int64, err)
-		}
-	}
+	g.maybeInactivateDonation(donation, consecutive)
 }
 
-// charityFailAccounting records a donation failure (Dify-side error only).
-func (g *Gateway) charityFailAccounting(userID int64, donation *db.Donation, err error) {
-	log.Printf("[DONATION] donation %d failure (user %d): %v", donation.ID, userID, err)
+// charityPostCommitFailure records a transport failure that happened after an
+// HTTP 200 already committed the reservation. It must not refund consumption.
+func (g *Gateway) charityPostCommitFailure(userID int64, donation *db.Donation, err error) {
+	log.Printf("[DONATION] donation %d post-commit failure (user %d): %v", donation.ID, userID, err)
 	consecutive, recErr := g.Store.RecordDonationFailure(donation.ID)
 	if recErr != nil {
 		log.Printf("[ERROR] record donation failure (donation %d): %v", donation.ID, recErr)
 		return
 	}
+	g.maybeInactivateDonation(donation, consecutive)
+}
 
-	// If consecutive >= limit, auto-inactivate.
+func (g *Gateway) maybeInactivateDonation(donation *db.Donation, consecutive int) {
 	limit := g.Store.GetSettingInt(db.SettingDonationFailLimit, db.DefaultDonationFailLimit)
-	if consecutive >= limit {
-		if err2 := g.Store.SetDonationStatus(donation.ID, db.DonationInactive); err2 != nil {
-			log.Printf("[ERROR] auto-inactivate donation %d after %d failures: %v", donation.ID, consecutive, err2)
-		} else {
-			log.Printf("[DONATION] donation %d auto-inactivated after %d consecutive failures", donation.ID, consecutive)
-			if g.mailer != nil {
-				g.mailer.DonationInactive(donation.Service, donation.Model, donation.ID, consecutive)
-			}
-		}
+	if consecutive < limit {
+		return
+	}
+	if err := g.Store.SetDonationStatus(donation.ID, db.DonationInactive); err != nil {
+		log.Printf("[ERROR] auto-inactivate donation %d after %d failures: %v", donation.ID, consecutive, err)
+		return
+	}
+	log.Printf("[DONATION] donation %d auto-inactivated after %d consecutive failures", donation.ID, consecutive)
+	if g.mailer != nil {
+		g.mailer.DonationInactive(donation.Service, donation.Model, donation.ID, consecutive)
+	}
+}
+
+func (g *Gateway) releaseCharitySetup(reservation *db.CharityReservation) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := g.Store.ReleaseCharityReservation(ctx, reservation.ID, false); err != nil {
+		log.Printf("[ERROR] release charity setup reservation %s: %v", reservation.ID, err)
 	}
 }
 

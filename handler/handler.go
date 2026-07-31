@@ -597,22 +597,52 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// Check credits against pricing.
+	// Fast rejection avoids exposing pool availability to callers that cannot
+	// pay. ReserveCharityCall repeats this check atomically to enforce the hard
+	// concurrency boundary.
 	if user.Credits < pricing.Price {
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "insufficient_credits",
 			http.StatusForbidden, fmt.Sprintf("credits %d < price %d", user.Credits, pricing.Price), "")
 		g.writeError(w, http.StatusForbidden, "insufficient_credits",
 			t(g.resolveLang(r),
 				fmt.Sprintf("您的%s不足（需要 %d，当前 %d），无法调用公益模型",
-					g.Config.I18N("credits_name", "zh", config.DefaultCreditsName),
-					pricing.Price, user.Credits),
+					g.Config.I18N("credits_name", "zh", config.DefaultCreditsName), pricing.Price, user.Credits),
 				fmt.Sprintf("Insufficient %s (need %d, have %d), cannot use charity model",
-					g.Config.I18N("credits_name", "en", config.DefaultCreditsName),
-					pricing.Price, user.Credits)))
+					g.Config.I18N("credits_name", "en", config.DefaultCreditsName), pricing.Price, user.Credits)))
 		return
 	}
 
-	// 3. List routable donations
+	// 3. Validate the contract and remote-content policy before touching any
+	// donation RPM/count/credits.
+	inputs, images, err := translator.TranslateForService(service, req.Messages)
+	if err != nil {
+		raw, _ := json.Marshal(req)
+		g.debugWrapError(r, user.ID, raw, nil, req.Messages, err.Error(), http.StatusBadRequest)
+		g.logRequest(user.ID, req.Model, service, startedAt, "error", "invalid_message_sequence",
+			http.StatusBadRequest, err.Error(), "")
+		g.writeError(w, http.StatusBadRequest, "invalid_message_sequence", err.Error())
+		return
+	}
+	logModel := charityModelName(service, backend)
+	rawCharity, _ := json.Marshal(req)
+	wCharity, dbgFinalize := g.debugWrap(w, r, user.ID, logModel, rawCharity, inputs, req.Messages)
+	if dbgFinalize == nil && wCharity == nil {
+		g.logRequest(user.ID, logModel, service, startedAt, "success", "debug_dry_run", http.StatusOK, "", "")
+		return
+	}
+	charityWriter := w
+	if dbgFinalize != nil {
+		defer dbgFinalize()
+		charityWriter = wCharity
+	}
+	if err := g.validateRemoteContent(service, inputs, images); err != nil {
+		g.logRequest(user.ID, logModel, service, startedAt, "error", "remote_url_not_allowed",
+			http.StatusBadRequest, err.Error(), "")
+		g.writeError(charityWriter, http.StatusBadRequest, "remote_url_not_allowed", err.Error())
+		return
+	}
+
+	// 4. List routable donations.
 	donations, err := g.Store.ListRoutableDonations(service, backend)
 	if err != nil {
 		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
@@ -626,72 +656,86 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// 4. Weighted random selection (with per-donation RPM filtering).
-	picked := pickWeightedDonation(donations, g.donationLimiter)
-	if picked == nil {
-		g.logRequest(user.ID, req.Model, service, startedAt, "error", "charity_overloaded",
-			http.StatusTooManyRequests, "all routable donations at RPM limit", "")
-		g.writeError(w, http.StatusTooManyRequests, "charity_overloaded",
-			t(g.resolveLang(r), "当前该公益模型所有捐赠条目均已达速率上限，请稍后重试", "All donation entries for this charity model have reached their RPM limit, please try again later"))
-		return
-	}
+	// 5. Atomically acquire donation RPM and reserve one donation use plus the
+	// consumer's price. Candidates that lose a DB race are retried.
+	remainingCandidates := append([]*db.Donation(nil), donations...)
+	var picked *db.Donation
+	var releaseRPM func()
+	var reservation *db.CharityReservation
+	var client *dify.Client
+	for len(remainingCandidates) > 0 {
+		picked, releaseRPM = pickWeightedDonation(remainingCandidates, g.donationLimiter)
+		if picked == nil {
+			g.logRequest(user.ID, logModel, service, startedAt, "error", "charity_overloaded",
+				http.StatusTooManyRequests, "all routable donations at RPM limit", "")
+			g.writeError(charityWriter, http.StatusTooManyRequests, "charity_overloaded",
+				t(g.resolveLang(r), "当前该公益模型所有捐赠条目均已达速率上限，请稍后重试", "All donation entries for this charity model have reached their RPM limit, please try again later"))
+			return
+		}
 
-	// 5. Decrypt API key and build Dify client
-	apiKey, err := g.Store.Decrypt(picked.DifyAPIKeyEnc)
-	if err != nil {
-		log.Printf("[ERROR] decrypt donation key (donation %d): %v", picked.ID, err)
-		g.logRequest(user.ID, req.Model, service, startedAt, "error", "internal",
-			http.StatusInternalServerError, "credential decryption error", "")
-		g.writeError(w, http.StatusInternalServerError, "internal", "credential error")
-		return
-	}
-	client, err := g.newDifyClient(picked.DifyBaseURL, apiKey, time.Duration(g.Config.DifyHTTPTimeoutMs)*time.Millisecond)
-	if err != nil {
-		g.logRequest(user.ID, req.Model, service, startedAt, "error", "upstream_blocked",
-			http.StatusBadGateway, err.Error(), "")
-		g.writeError(w, http.StatusBadGateway, "upstream_blocked", "configured Dify origin is blocked by the egress policy")
-		return
-	}
+		reservation, err = g.Store.ReserveCharityCall(r.Context(), user.ID, picked.ID, pricing.Price, pricing.Reward)
+		if errors.Is(err, db.ErrDonationUnavailable) {
+			releaseRPM()
+			for i, candidate := range remainingCandidates {
+				if candidate.ID == picked.ID {
+					remainingCandidates = append(remainingCandidates[:i], remainingCandidates[i+1:]...)
+					break
+				}
+			}
+			continue
+		}
+		if errors.Is(err, db.ErrInsufficientCredits) {
+			releaseRPM()
+			latest, _ := g.Store.GetUserByID(user.ID)
+			credits := 0
+			if latest != nil {
+				credits = latest.Credits
+			}
+			g.logRequest(user.ID, logModel, service, startedAt, "error", "insufficient_credits",
+				http.StatusForbidden, fmt.Sprintf("credits %d < price %d", credits, pricing.Price), "")
+			g.writeError(charityWriter, http.StatusForbidden, "insufficient_credits",
+				t(g.resolveLang(r),
+					fmt.Sprintf("您的%s不足（需要 %d，当前 %d），无法调用公益模型",
+						g.Config.I18N("credits_name", "zh", config.DefaultCreditsName), pricing.Price, credits),
+					fmt.Sprintf("Insufficient %s (need %d, have %d), cannot use charity model",
+						g.Config.I18N("credits_name", "en", config.DefaultCreditsName), pricing.Price, credits)))
+			return
+		}
+		if err != nil {
+			releaseRPM()
+			if errors.Is(err, context.Canceled) {
+				return
+			}
+			g.writeError(charityWriter, http.StatusInternalServerError, "internal", "failed to reserve charity capacity")
+			return
+		}
 
-	// 6. Contract validation (failure does NOT count as donation failure)
-	inputs, images, err := translator.TranslateForService(service, req.Messages)
-	if err != nil {
-		raw, _ := json.Marshal(req)
-		g.debugWrapError(r, user.ID, raw, nil, req.Messages, err.Error(), http.StatusBadRequest)
-		g.logRequest(user.ID, req.Model, service, startedAt, "error", "invalid_message_sequence",
-			http.StatusBadRequest, err.Error(), "")
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"error": map[string]interface{}{
-				"message": err.Error(),
-				"type":    "invalid_request_error",
-				"code":    "invalid_message_sequence",
-			},
-		})
-		return
+		apiKey, decryptErr := g.Store.Decrypt(picked.DifyAPIKeyEnc)
+		if decryptErr != nil {
+			g.releaseCharitySetup(reservation)
+			releaseRPM()
+			log.Printf("[ERROR] decrypt donation key (donation %d): %v", picked.ID, decryptErr)
+			g.logRequest(user.ID, logModel, service, startedAt, "error", "internal",
+				http.StatusInternalServerError, "credential decryption error", "")
+			g.writeError(charityWriter, http.StatusInternalServerError, "internal", "credential error")
+			return
+		}
+		client, err = g.newDifyClient(picked.DifyBaseURL, apiKey, time.Duration(g.Config.DifyHTTPTimeoutMs)*time.Millisecond)
+		if err != nil {
+			g.releaseCharitySetup(reservation)
+			releaseRPM()
+			g.logRequest(user.ID, logModel, service, startedAt, "error", "upstream_blocked",
+				http.StatusBadGateway, err.Error(), "")
+			g.writeError(charityWriter, http.StatusBadGateway, "upstream_blocked", "configured Dify origin is blocked by the egress policy")
+			return
+		}
+		break
 	}
-
-	// Log model name (hides donation identity)
-	logModel := charityModelName(service, backend)
-
-	// 6b. Debug interception.
-	rawCharity, _ := json.Marshal(req)
-	wCharity, dbgFinalize := g.debugWrap(w, r, user.ID, logModel, rawCharity, inputs, req.Messages)
-	if dbgFinalize == nil && wCharity == nil {
-		g.logRequest(user.ID, logModel, service, startedAt, "success", "debug_dry_run", http.StatusOK, "", "")
-		return
-	}
-	charityWriter := w
-	if dbgFinalize != nil {
-		defer dbgFinalize()
-		charityWriter = wCharity
-	}
-
-	if err := g.validateRemoteContent(service, inputs, images); err != nil {
-		g.logRequest(user.ID, logModel, service, startedAt, "error", "remote_url_not_allowed",
-			http.StatusBadRequest, err.Error(), "")
-		g.writeError(charityWriter, http.StatusBadRequest, "remote_url_not_allowed", err.Error())
+	if reservation == nil {
+		g.logRequest(user.ID, logModel, service, startedAt, "error", "service_unavailable",
+			http.StatusServiceUnavailable, "donations exhausted during reservation", "")
+		g.writeError(charityWriter, http.StatusServiceUnavailable, "service_unavailable",
+			t(g.resolveLang(r), "公益捐赠额度刚刚用尽，请稍后重试", "Charity capacity was just exhausted; please retry"))
 		return
 	}
 
@@ -701,11 +745,30 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 		wfInputs[k] = v
 	}
 
+	// Mark before the first upload/workflow request. If the process dies after
+	// this point, startup recovery conservatively commits the reservation.
+	if err := g.Store.MarkCharityDispatched(r.Context(), reservation.ID); err != nil {
+		g.releaseCharitySetup(reservation)
+		releaseRPM()
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+		g.writeError(charityWriter, http.StatusInternalServerError, "internal", "failed to dispatch charity reservation")
+		return
+	}
+
 	// Handle images if applicable
 	if len(images) > 0 {
 		files, err := g.buildImageFiles(r.Context(), client, wfReq_User(user.ID), images)
 		if err != nil {
+			if r.Context().Err() != nil || errors.Is(err, context.Canceled) {
+				g.charitySuccessAccounting(reservation)
+				g.logRequestDonation(user.ID, logModel, service, startedAt, "error", "client_canceled",
+					statusClientClosedRequest, "client disconnected during image upload", picked.ID, reservation.Price, "")
+				return
+			}
 			log.Printf("[ERROR] charity image files (user %d): %v", user.ID, err)
+			g.charityFailAccounting(user.ID, picked, reservation, err)
 			g.logRequest(user.ID, logModel, service, startedAt, "error", "image_upload_failed",
 				difyErrorStatus(err), err.Error(), "")
 			g.writeDifyError(charityWriter, err)
@@ -722,9 +785,9 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 
 	// 7. Forward (streaming or blocking)
 	if req.Stream {
-		g.charityStreaming(charityWriter, client, wfReq, logModel, user.ID, service, startedAt, picked, pricing, r.Context())
+		g.charityStreaming(charityWriter, client, wfReq, logModel, user.ID, service, startedAt, picked, reservation, r.Context())
 	} else {
-		g.charityBlocking(charityWriter, client, wfReq, logModel, user.ID, service, startedAt, picked, pricing, r.Context())
+		g.charityBlocking(charityWriter, client, wfReq, logModel, user.ID, service, startedAt, picked, reservation, r.Context())
 	}
 }
 

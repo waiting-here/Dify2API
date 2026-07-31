@@ -121,6 +121,21 @@ CREATE TABLE IF NOT EXISTS donations (
 );
 CREATE INDEX IF NOT EXISTS idx_donations_route ON donations(service, model, status);
 
+CREATE TABLE IF NOT EXISTS charity_reservations (
+	id            TEXT PRIMARY KEY,
+	user_id       INTEGER NOT NULL,
+	donation_id   INTEGER NOT NULL,
+	donor_user_id INTEGER,
+	price         INTEGER NOT NULL DEFAULT 0,
+	reward        INTEGER NOT NULL DEFAULT 0,
+	status        TEXT NOT NULL DEFAULT 'reserved',
+	created_at    INTEGER NOT NULL,
+	updated_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cr_user ON charity_reservations(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_cr_donor ON charity_reservations(donor_user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_cr_status ON charity_reservations(status, updated_at);
+
 CREATE TABLE IF NOT EXISTS admin_alerts (
 	id             INTEGER PRIMARY KEY AUTOINCREMENT,
 	type           TEXT NOT NULL,

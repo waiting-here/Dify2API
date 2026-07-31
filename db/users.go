@@ -36,7 +36,7 @@ type User struct {
 	// CharityEnabled is the user-side public-resource opt-in switch (§1.3).
 	CharityEnabled bool `json:"charity_enabled"`
 	// Lang is the user's preferred UI language ("zh" or "en"). Empty means unset.
-	Lang      string `json:"lang"`
+	Lang string `json:"lang"`
 
 	CreatedAt int64
 	UpdatedAt int64
@@ -203,19 +203,45 @@ func (s *Store) AdjustUserCredits(userID int64, delta int) (int, error) {
 	return newVal, nil
 }
 
-// SetUserCheckin atomically records a check-in for the given day if not
-// already checked in. Returns the new credit balance and whether the
-// check-in was accepted (false = already checked in today).
-func (s *Store) SetUserCheckin(userID int64, day string, newCredits int) (bool, error) {
-	res, err := s.db.Exec(
-		`UPDATE users SET last_checkin_day=?, credits=?, updated_at=? WHERE id=? AND last_checkin_day != ?`,
-		day, newCredits, time.Now().Unix(), userID, day,
-	)
+const (
+	CheckinApplied = "applied"
+	CheckinAlready = "already"
+	CheckinCapped  = "capped"
+)
+
+// ApplyUserCheckin serializes the day check and an incremental, capped credit
+// award in one transaction. It cannot overwrite a concurrent charity debit.
+func (s *Store) ApplyUserCheckin(userID int64, day string, bonus, cap int) (status string, awarded, credits int, err error) {
+	tx, err := s.db.Begin()
 	if err != nil {
-		return false, err
+		return "", 0, 0, err
 	}
-	n, _ := res.RowsAffected()
-	return n > 0, nil
+	defer tx.Rollback()
+	var lastDay string
+	if err := tx.QueryRow(`SELECT last_checkin_day, credits FROM users WHERE id=?`, userID).Scan(&lastDay, &credits); err != nil {
+		return "", 0, 0, err
+	}
+	if lastDay == day {
+		return CheckinAlready, 0, credits, nil
+	}
+	if credits >= cap {
+		return CheckinCapped, 0, credits, nil
+	}
+	newCredits := credits + bonus
+	if newCredits > cap {
+		newCredits = cap
+	}
+	awarded = newCredits - credits
+	if _, err := tx.Exec(
+		`UPDATE users SET last_checkin_day=?, credits=?, updated_at=? WHERE id=?`,
+		day, newCredits, time.Now().Unix(), userID,
+	); err != nil {
+		return "", 0, 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", 0, 0, err
+	}
+	return CheckinApplied, awarded, newCredits, nil
 }
 
 // SetUserRPMLimits sets (non-nil) or clears (nil) the per-user three-class
@@ -282,6 +308,30 @@ func (s *Store) SetUserCharityEnabled(userID int64, enabled bool) error {
 
 // DeleteUser removes a user and their dependent rows.
 func (s *Store) DeleteUser(id int64) error {
+	var activeReservations int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(1) FROM charity_reservations
+		 WHERE (user_id=? OR donor_user_id=?) AND status IN (?,?)`,
+		id, id, ReservationReserved, ReservationDispatched,
+	).Scan(&activeReservations); err != nil {
+		return fmt.Errorf("delete user: %w", err)
+	}
+	if activeReservations > 0 {
+		return fmt.Errorf("delete user: %d charity call(s) are still in flight", activeReservations)
+	}
+	if _, err := s.db.Exec(
+		`DELETE FROM charity_reservations
+		 WHERE (user_id=? AND (donor_user_id IS NULL OR donor_user_id=?))
+		    OR (donor_user_id=? AND user_id=0)`, id, id, id,
+	); err != nil {
+		return fmt.Errorf("delete solely-associated reservations: %w", err)
+	}
+	if _, err := s.db.Exec(`UPDATE charity_reservations SET user_id=0 WHERE user_id=?`, id); err != nil {
+		return fmt.Errorf("anonymize consumer reservations: %w", err)
+	}
+	if _, err := s.db.Exec(`UPDATE charity_reservations SET donor_user_id=NULL WHERE donor_user_id=?`, id); err != nil {
+		return fmt.Errorf("anonymize donor reservations: %w", err)
+	}
 	for _, q := range []string{
 		`DELETE FROM sessions WHERE user_id=?`,
 		`DELETE FROM app_configs WHERE user_id=?`,
