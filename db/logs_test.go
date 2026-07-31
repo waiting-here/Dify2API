@@ -207,3 +207,52 @@ func TestPurgeExpiredRequestLogs_NoExpiredRows(t *testing.T) {
 		t.Fatalf("deleted logs=%d alerts=%d, want 0/0", logs, alerts)
 	}
 }
+
+func TestExportAllRequestLogs_NoPageClamp(t *testing.T) {
+	// Regression: the admin CSV/JSON export used ListAllRequestLogs(f, 0, 0),
+	// whose limit<=0 clamps to a 100-row page — exports were silently
+	// truncated. ExportAllRequestLogs must return every matching row.
+	st, _ := openTemp(t)
+	u, _ := st.CreateUser("export-all", "export-all", "")
+	now := time.Now().Truncate(time.Second)
+	const n = 150 // > the 100-row page clamp of ListAllRequestLogs
+	for i := 0; i < n; i++ {
+		if err := st.AddRequestLog(u.ID, "m", "general", now.Add(-time.Duration(n-i)*time.Second), now, "success", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The list endpoint still paginates at 100 max per page.
+	paged, total, err := st.ListAllRequestLogs(LogFilter{}, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paged) != 100 || total != n {
+		t.Fatalf("list: rows=%d total=%d, want 100/%d", len(paged), total, n)
+	}
+
+	// The export path returns everything.
+	all, err := st.ExportAllRequestLogs(LogFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != n {
+		t.Fatalf("export: rows=%d, want %d", len(all), n)
+	}
+
+	// Filters still apply on the export path.
+	filtered, err := st.ExportAllRequestLogs(LogFilter{UserID: &u.ID, Status: "success"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered) != n {
+		t.Fatalf("export filtered: rows=%d, want %d", len(filtered), n)
+	}
+	none, err := st.ExportAllRequestLogs(LogFilter{Status: "error"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(none) != 0 {
+		t.Fatalf("export filtered out: rows=%d, want 0", len(none))
+	}
+}

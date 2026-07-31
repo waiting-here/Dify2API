@@ -140,9 +140,15 @@ type LogFilter struct {
 	Until   int64
 }
 
-// ListAllRequestLogs returns request logs across all users with optional
-// filters and offset-based pagination.  All WHERE conditions are parameterized.
-func (s *Store) ListAllRequestLogs(f LogFilter, limit, offset int) ([]*AdminRequestLog, int, error) {
+// requestLogSelect is the shared SELECT prefix for admin log queries.
+const requestLogSelect = `SELECT l.id, l.user_id, COALESCE(u.username, ''), l.model, l.service,
+	l.started_at, l.ended_at, l.status, l.error_code, l.http_status, l.error_detail, l.donation_id, l.credits_consumed, l.anti_abuse_info
+	FROM request_logs l
+	LEFT JOIN users u ON l.user_id = u.id`
+
+// logFilterWhere builds the parameterized WHERE clause for a LogFilter.
+// Returns "" and no args when the filter is empty.
+func logFilterWhere(f LogFilter) (string, []interface{}) {
 	var conds []string
 	var args []interface{}
 
@@ -175,6 +181,43 @@ func (s *Store) ListAllRequestLogs(f LogFilter, limit, offset int) ([]*AdminRequ
 	if len(conds) > 0 {
 		where = " WHERE " + strings.Join(conds, " AND ")
 	}
+	return where, args
+}
+
+// listRequestLogs runs the shared filtered admin-log query.
+// A limit <= 0 returns every matching row without LIMIT/OFFSET (export path).
+func (s *Store) listRequestLogs(where string, args []interface{}, limit, offset int) ([]*AdminRequestLog, error) {
+	query := requestLogSelect + where + ` ORDER BY l.started_at DESC`
+	if limit > 0 {
+		query += ` LIMIT ? OFFSET ?`
+		args = append(append([]interface{}{}, args...), limit, offset)
+	}
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*AdminRequestLog
+	for rows.Next() {
+		var l AdminRequestLog
+		var donationID sql.NullInt64
+		if err := rows.Scan(&l.ID, &l.UserID, &l.Username, &l.Model, &l.Service,
+			&l.StartedAt, &l.EndedAt, &l.Status, &l.ErrorCode, &l.HTTPStatus, &l.ErrorDetail, &donationID, &l.CreditsConsumed, &l.AntiAbuseInfo); err != nil {
+			return nil, err
+		}
+		if donationID.Valid {
+			l.DonationID = &donationID.Int64
+		}
+		out = append(out, &l)
+	}
+	return out, rows.Err()
+}
+
+// ListAllRequestLogs returns request logs across all users with optional
+// filters and offset-based pagination.  All WHERE conditions are parameterized.
+func (s *Store) ListAllRequestLogs(f LogFilter, limit, offset int) ([]*AdminRequestLog, int, error) {
+	where, args := logFilterWhere(f)
 
 	// Total count (without limit/offset).
 	countArgs := make([]interface{}, len(args))
@@ -192,33 +235,16 @@ func (s *Store) ListAllRequestLogs(f LogFilter, limit, offset int) ([]*AdminRequ
 		offset = 0
 	}
 
-	query := `SELECT l.id, l.user_id, COALESCE(u.username, ''), l.model, l.service,
-		l.started_at, l.ended_at, l.status, l.error_code, l.http_status, l.error_detail, l.donation_id, l.credits_consumed, l.anti_abuse_info
-		FROM request_logs l
-		LEFT JOIN users u ON l.user_id = u.id` +
-		where + ` ORDER BY l.started_at DESC LIMIT ? OFFSET ?`
+	logs, err := s.listRequestLogs(where, args, limit, offset)
+	return logs, total, err
+}
 
-	allArgs := append(args, limit, offset)
-	rows, err := s.db.Query(query, allArgs...)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer rows.Close()
-
-	var out []*AdminRequestLog
-	for rows.Next() {
-		var l AdminRequestLog
-		var donationID sql.NullInt64
-		if err := rows.Scan(&l.ID, &l.UserID, &l.Username, &l.Model, &l.Service,
-			&l.StartedAt, &l.EndedAt, &l.Status, &l.ErrorCode, &l.HTTPStatus, &l.ErrorDetail, &donationID, &l.CreditsConsumed, &l.AntiAbuseInfo); err != nil {
-			return nil, 0, err
-		}
-		if donationID.Valid {
-			l.DonationID = &donationID.Int64
-		}
-		out = append(out, &l)
-	}
-	return out, total, rows.Err()
+// ExportAllRequestLogs returns every request log matching the filter, newest
+// first, without pagination — the admin CSV/JSON export path. Unlike
+// ListAllRequestLogs it never clamps to a page size, so exports are complete.
+func (s *Store) ExportAllRequestLogs(f LogFilter) ([]*AdminRequestLog, error) {
+	where, args := logFilterWhere(f)
+	return s.listRequestLogs(where, args, 0, 0)
 }
 
 // LogDayStat is one day's aggregated log counts.

@@ -168,8 +168,8 @@ func (g *Gateway) handleAdminExportLogs(w http.ResponseWriter, r *http.Request) 
 		format = "json"
 	}
 
-	// Fetch all matching logs (no pagination).
-	logs, _, err := g.Store.ListAllRequestLogs(f, 0, 0)
+	// Fetch all matching logs (no pagination, never truncated).
+	logs, err := g.Store.ExportAllRequestLogs(f)
 	if err != nil {
 		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return

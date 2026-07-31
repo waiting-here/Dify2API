@@ -470,3 +470,39 @@ func TestAdminHost_ServicesAllowed(t *testing.T) {
 		t.Errorf("services response should list registry entries: %s", rec.Body.String())
 	}
 }
+
+func TestAdminLogs_ExportNotTruncated(t *testing.T) {
+	// Regression: /api/admin/logs/export silently capped the export at 100
+	// rows (ListAllRequestLogs page clamp); the export must be complete.
+	gw, store := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+
+	u, _ := store.CreateUser("export-e2e", "export-e2e", "")
+	now := time.Now().Truncate(time.Second)
+	const n = 150
+	for i := 0; i < n; i++ {
+		addTestLog(store, u.ID, "[general]m", "general", "success", "", now.Add(-time.Duration(n-i)*time.Second), now)
+	}
+
+	rec := adminGet(gw, adminCookie, "/api/admin/logs/export?format=json")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("export: status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var rows []map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("export decode: %v", err)
+	}
+	if len(rows) != n {
+		t.Fatalf("export rows = %d, want %d (export must not be page-clamped)", len(rows), n)
+	}
+
+	// CSV export is equally complete.
+	recCSV := adminGet(gw, adminCookie, "/api/admin/logs/export?format=csv")
+	if recCSV.Code != http.StatusOK {
+		t.Fatalf("csv export: status = %d", recCSV.Code)
+	}
+	lines := strings.Split(strings.TrimSpace(recCSV.Body.String()), "\n")
+	if len(lines) != n+1 { // header + data rows
+		t.Fatalf("csv lines = %d, want %d", len(lines), n+1)
+	}
+}
