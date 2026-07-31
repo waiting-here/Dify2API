@@ -1160,8 +1160,9 @@ function renderAdminAlerts(data) {
   // Link-to-request buttons.
   document.querySelectorAll(".alert-goto").forEach((btn) => {
     btn.onclick = () => {
-      // Jump to the linked request: pre-fill the user filter (when the user
-      // still exists), load the full range so the row is present, then
+      // Jump to the linked request: switch to the logs tab (it is hidden
+      // until activated), pre-fill the user filter (when the user still
+      // exists), load the full range so the row is present, then
       // renderAdminLogs highlights it and scrolls it into view.
       const logId = btn.dataset.logId;
       const userId = btn.dataset.userId || "";
@@ -1174,8 +1175,14 @@ function renderAdminAlerts(data) {
       $("#alf-status").value = "";
       adminLogPager.size = Infinity; // "全部" — maximise the chance the row is in range
       adminLogPager.page = 1;
+      switchAdminTab("logs");
+      // First activation: initAdminLogsTab's own loadAdminLogs() consumes
+      // alertJump. Already initialised: trigger the load ourselves (a
+      // second load here would race with the tab's auto-load otherwise).
+      if (_adminTabLoaded.logs) {
+        loadAdminLogs();
+      }
       $("#admin-logs-filter").scrollIntoView({ behavior: "smooth" });
-      loadAdminLogs();
     };
   });
 }
