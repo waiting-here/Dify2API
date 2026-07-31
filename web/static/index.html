@@ -79,10 +79,11 @@
   #admin-logs-filter .afl-model  { grid-column: 2; grid-row: 2; }
   #admin-logs-filter .afl-since  { grid-column: 1; grid-row: 3; }
   #admin-logs-filter .afl-until  { grid-column: 2; grid-row: 3; }
-  #admin-logs-filter .afl-btn    { grid-column: 3; grid-row: 1 / 4; align-self: center; }
+  #admin-logs-filter .afl-actions { grid-column: 3; grid-row: 1 / 4; align-self: center; display: flex; flex-direction: column; gap: .5rem; }
+  #admin-logs-filter .afl-actions button { width: auto; margin: 0; }
   @media (max-width: 800px) {
     #admin-logs-filter { grid-template-columns: 1fr; }
-    #admin-logs-filter .afl-btn { grid-column: 1; grid-row: auto; }
+    #admin-logs-filter .afl-actions { grid-column: 1; grid-row: auto; flex-direction: row; }
   }
   /* ---- Mobile / tablet adaptation ----
      Two breakpoints: 768px (tablet/phone) and 480px (small phone).

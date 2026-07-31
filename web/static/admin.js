@@ -274,8 +274,10 @@ async function renderAdminDashboard() {
           <label class="afl-status">${T('thStatus')}<select id="alf-status"><option value="">${T('adminLogsAllStatus')}</option><option value="success">${T('adminLogsSuccess')}</option><option value="error">${T('adminLogsError')}</option></select></label>
           <label class="afl-since">${T('adminLogsSince')}<input id="alf-since" type="datetime-local"></label>
           <label class="afl-until">${T('adminLogsUntil')}<input id="alf-until" type="datetime-local"></label>
-          <button id="alf-query" class="afl-btn">${T('adminLogsQuery')}</button>
-          <button id="alf-export" class="secondary outline afl-btn" style="width:auto;margin:0">${T('adminLogsExport')}</button>
+          <div class="afl-actions">
+            <button id="alf-query">${T('adminLogsQuery')}</button>
+            <button id="alf-export" class="secondary outline">${T('adminLogsExport')}</button>
+          </div>
         </div>
         <canvas id="alf-chart" width="600" height="160" style="display:none;width:100%;max-width:100%;margin-bottom:.8rem;border:1px solid var(--pico-muted-border-color);border-radius:4px"></canvas>
         <div class="table-wrap"><table><thead><tr><th>${T('thTime')}</th><th>${T('thUser')}</th><th>${T('thModel')}</th><th>${T('thService')}</th><th>${T('thDuration')}</th><th>${T('thStatus')}</th><th>${T('thHTTPStatus')}</th><th>${T('thErrorCode')}</th><th>${T('thErrorDetail')}</th><th>${T('thCreditsConsumed')}</th><th>${T('thAntiAbuse')}</th><th>${T('thDonationSource')}</th></tr></thead><tbody id="alf-rows"></tbody></table></div>
