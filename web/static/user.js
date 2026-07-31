@@ -300,7 +300,7 @@ function renderDebugUI() {
       <div class="row-actions" style="gap:.5rem;flex-wrap:wrap">
         <button id="debug-stop-btn" class="contrast">${T('debugStop')}</button>
         <label style="display:flex;align-items:center;gap:.4rem;white-space:nowrap">
-          <input type="checkbox" id="debug-dryrun-toggle" role="switch" ${_debugDryRun ? "checked" : ""}>
+          <input type="checkbox" id="debug-dryrun-toggle" role="switch" ${!_debugDryRun ? "checked" : ""}>
           ${T('debugDryRunLabel')}
         </label>
         <span class="badge ok">${T('debugConnected')}</span>
@@ -336,7 +336,9 @@ function renderDebugUI() {
     $("#debug-stop-btn").onclick = stopDebug;
     const dryToggle = $("#debug-dryrun-toggle");
     if (dryToggle) {
-      dryToggle.onchange = () => toggleDebugDryRun(dryToggle.checked);
+      // The switch means "Send to Dify": checked = real forwarding,
+      // unchecked = dry-run (the default).
+      dryToggle.onchange = () => toggleDebugDryRun(!dryToggle.checked);
     }
     $("#debug-collapse-all").onclick = () => {
       document.querySelectorAll("#debug-events details[open]").forEach((d) => d.removeAttribute("open"));
@@ -450,11 +452,12 @@ async function stopDebug() {
 
 async function toggleDebugDryRun(wantDryRun) {
   if (!wantDryRun) {
-    // Turning dry-run OFF (sending to Dify) — require secondary confirmation.
+    // Turning dry-run OFF (the switch goes ON → real sending) — require
+    // secondary confirmation.
     if (!confirm(T('debugDryRunOffConfirm'))) {
-      // Revert toggle.
+      // Revert toggle to unchecked (dry-run).
       const t = $("#debug-dryrun-toggle");
-      if (t) t.checked = true;
+      if (t) t.checked = false;
       return;
     }
   }
