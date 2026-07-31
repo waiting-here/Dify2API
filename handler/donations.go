@@ -107,9 +107,17 @@ func pickWeightedDonation(candidates []*db.Donation, limiter *donationRateLimite
 // validateDonationApp checks a Dify App's availability and parameter
 // compatibility for a donation entry. Returns a validation result map
 // suitable for inclusion in API responses (informational, never blocks).
-func (g *Gateway) validateDonationApp(service, baseURL, apiKey string) map[string]interface{} {
-	client := dify.NewClient(baseURL, apiKey, 15*time.Second)
-	params, err := client.FetchParameters()
+func (g *Gateway) validateDonationApp(ctx context.Context, service, baseURL, apiKey string) map[string]interface{} {
+	release, err := g.acquireDifyProbe(ctx)
+	if err != nil {
+		return map[string]interface{}{"compatible": false, "message": err.Error()}
+	}
+	defer release()
+	client, err := g.newDifyClient(baseURL, apiKey, 15*time.Second)
+	if err != nil {
+		return map[string]interface{}{"compatible": false, "message": err.Error()}
+	}
+	params, err := client.FetchParametersContext(ctx)
 	if err != nil {
 		return map[string]interface{}{
 			"compatible": false,
@@ -191,13 +199,14 @@ func (g *Gateway) handleCreateDonation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate dify_base_url
-	req.DifyBaseURL = strings.TrimRight(strings.TrimSpace(req.DifyBaseURL), "/")
-	if req.DifyBaseURL == "" || !(strings.HasPrefix(req.DifyBaseURL, "http://") || strings.HasPrefix(req.DifyBaseURL, "https://")) {
+	// Validate and normalize dify_base_url against the deployment egress policy.
+	normalizedBaseURL, baseErr := g.difyPolicy.ValidateBaseURL(req.DifyBaseURL)
+	if baseErr != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			t(g.resolveLang(r), "dify_base_url 必须为合法的 http(s) URL", "dify_base_url must be a valid http(s) URL"))
+			t(g.resolveLang(r), "dify_base_url 不符合出站安全策略", "dify_base_url is not allowed by the egress policy")+": "+baseErr.Error())
 		return
 	}
+	req.DifyBaseURL = normalizedBaseURL
 
 	// Validate dify_api_key
 	if req.DifyAPIKey == "" {
@@ -284,7 +293,7 @@ func (g *Gateway) handleCreateDonation(w http.ResponseWriter, r *http.Request) {
 		keyPlain = "(decrypt error)"
 	}
 
-	validation := g.validateDonationApp(created.Service, created.DifyBaseURL, keyPlain)
+	validation := g.validateDonationApp(r.Context(), created.Service, created.DifyBaseURL, keyPlain)
 
 	w.Header().Set("Content-Type", "application/json")
 	resp := map[string]interface{}{
@@ -523,16 +532,16 @@ func (g *Gateway) handlePatchDonation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.DifyBaseURL != "" {
-		url := strings.TrimRight(strings.TrimSpace(req.DifyBaseURL), "/")
-		if !(strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://")) {
+		normalized, baseErr := g.difyPolicy.ValidateBaseURL(req.DifyBaseURL)
+		if baseErr != nil {
 			g.writeError(w, http.StatusBadRequest, "invalid_request",
-				t(g.resolveLang(r), "dify_base_url 必须为合法的 http(s) URL", "dify_base_url must be a valid http(s) URL"))
+				t(g.resolveLang(r), "dify_base_url 不符合出站安全策略", "dify_base_url is not allowed by the egress policy")+": "+baseErr.Error())
 			return
 		}
-		if url != d.DifyBaseURL {
+		if normalized != d.DifyBaseURL {
 			sets = append(sets, "dify_base_url=?")
-			args = append(args, url)
-			newBaseURL = url
+			args = append(args, normalized)
+			newBaseURL = normalized
 			validateDify = true
 		}
 	}
@@ -657,7 +666,7 @@ func (g *Gateway) handlePatchDonation(w http.ResponseWriter, r *http.Request) {
 				"message":    fmt.Sprintf("密钥解密失败: %v", decErr),
 			}
 		} else {
-			validation = g.validateDonationApp(updated.Service, newBaseURL, keyPlain)
+			validation = g.validateDonationApp(r.Context(), updated.Service, newBaseURL, keyPlain)
 		}
 	}
 
@@ -818,7 +827,7 @@ func (g *Gateway) handlePutCharity(w http.ResponseWriter, r *http.Request) {
 // charityStreaming handles streaming charity calls with donation accounting.
 func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time, donation *db.Donation, pricing *db.CharityPricing, ctx context.Context) {
 	wfReq.ResponseMode = "streaming"
-	events, errCh := client.StreamWorkflow(wfReq)
+	events, errCh := client.StreamWorkflowContext(ctx, wfReq)
 
 	// Wait for first event or error
 	var firstEvt *dify.StreamEvent
@@ -828,15 +837,30 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 			firstEvt = &evt
 		}
 	case err := <-errCh:
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+			g.logRequest(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest, "client disconnected before first upstream event", "")
+			return
+		}
 		if err != nil {
 			g.charityFailAccounting(userID, donation, err)
 			g.writeDifyError(w, err)
 			return
 		}
+	case <-ctx.Done():
+		g.logRequest(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest, ctx.Err().Error(), "")
+		return
 	}
 	if firstEvt == nil {
 		select {
 		case err := <-errCh:
+			if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+				detail := "client disconnected before first upstream event"
+				if ctx.Err() != nil {
+					detail = ctx.Err().Error()
+				}
+				g.logRequest(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest, detail, "")
+				return
+			}
 			if err != nil {
 				g.charityFailAccounting(userID, donation, err)
 				g.writeDifyError(w, err)
@@ -844,6 +868,11 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 			}
 		default:
 		}
+	}
+
+	if ctx.Err() != nil {
+		g.logRequest(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest, ctx.Err().Error(), "")
+		return
 	}
 
 	// Stream started (Dify HTTP 200): record success per §1.2
@@ -875,26 +904,34 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 			flusher.Flush()
 		}
 	}
+	clientCanceled := false
 loop:
-	for evt := range events {
-		if evt.TaskID != "" {
-			taskID = evt.TaskID
-		}
-		if msg := conv.Convert(evt); msg != nil {
-			fmt.Fprint(w, msg.Data)
-			flusher.Flush()
-		}
-		// Check if client disconnected
+	for {
 		select {
 		case <-ctx.Done():
-			if taskID != "" {
-				if err := client.StopWorkflow(taskID, difyUser); err != nil {
-					log.Printf("[WARN] stop workflow %s: %v", taskID, err)
-				}
-			}
+			clientCanceled = true
+			g.stopDifyWorkflow(client, taskID, difyUser)
 			break loop
-		default:
+		case evt, ok := <-events:
+			if !ok {
+				break loop
+			}
+			if evt.TaskID != "" {
+				taskID = evt.TaskID
+			}
+			if msg := conv.Convert(evt); msg != nil {
+				fmt.Fprint(w, msg.Data)
+				flusher.Flush()
+			}
 		}
+	}
+	if clientCanceled || ctx.Err() != nil {
+		detail := "client disconnected"
+		if ctx.Err() != nil {
+			detail = ctx.Err().Error()
+		}
+		g.logRequestDonation(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest, detail, donationID, pricing.Price, "")
+		return
 	}
 
 	status, code, detail := "success", "", ""
@@ -948,12 +985,20 @@ loop:
 }
 
 // charityBlocking handles blocking charity calls with donation accounting.
-func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time, donation *db.Donation, pricing *db.CharityPricing) {
+func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time, donation *db.Donation, pricing *db.CharityPricing, ctx context.Context) {
 	wfReq.ResponseMode = "blocking"
-	text, err := client.BlockingWorkflow(wfReq)
+	text, err := client.BlockingWorkflowContext(ctx, wfReq)
 	donationID := donation.ID
 
 	if err != nil {
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+			detail := err.Error()
+			if ctx.Err() != nil {
+				detail = ctx.Err().Error()
+			}
+			g.logRequest(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest, detail, "")
+			return
+		}
 		var de *dify.DifyError
 		if errors.As(err, &de) && de.Status == http.StatusOK {
 			// 200-but-failed: success per §1.2, but admin alert
@@ -1166,12 +1211,13 @@ func (g *Gateway) handleCreateDonationApp(w http.ResponseWriter, r *http.Request
 	}
 
 	// Validate dify_base_url.
-	req.DifyBaseURL = strings.TrimRight(strings.TrimSpace(req.DifyBaseURL), "/")
-	if req.DifyBaseURL == "" || !(strings.HasPrefix(req.DifyBaseURL, "http://") || strings.HasPrefix(req.DifyBaseURL, "https://")) {
+	normalizedBaseURL, baseErr := g.difyPolicy.ValidateBaseURL(req.DifyBaseURL)
+	if baseErr != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			t(g.resolveLang(r), "dify_base_url 必须为合法的 http(s) URL", "dify_base_url must be a valid http(s) URL"))
+			t(g.resolveLang(r), "dify_base_url 不符合出站安全策略", "dify_base_url is not allowed by the egress policy")+": "+baseErr.Error())
 		return
 	}
+	req.DifyBaseURL = normalizedBaseURL
 
 	// Validate dify_api_key.
 	if strings.TrimSpace(req.DifyAPIKey) == "" {
@@ -1204,7 +1250,7 @@ func (g *Gateway) handleCreateDonationApp(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"ok":          true,
 		"application": applicationJSON(app),
-		"validation":  g.validateDonationApp(req.Service, req.DifyBaseURL, req.DifyAPIKey),
+		"validation":  g.validateDonationApp(r.Context(), req.Service, req.DifyBaseURL, req.DifyAPIKey),
 	})
 }
 
@@ -1398,14 +1444,25 @@ func (g *Gateway) handleApproveApplication(w http.ResponseWriter, r *http.Reques
 			"模型名不得包含方括号")
 		return
 	}
-	if req.DifyBaseURL != "" {
-		req.DifyBaseURL = strings.TrimRight(strings.TrimSpace(req.DifyBaseURL), "/")
-		if !(strings.HasPrefix(req.DifyBaseURL, "http://") || strings.HasPrefix(req.DifyBaseURL, "https://")) {
-			g.writeError(w, http.StatusBadRequest, "invalid_request",
-				"dify_base_url 必须为合法的 http(s) URL")
-			return
-		}
+	existingApp, err := g.Store.GetApplication(id)
+	if err != nil {
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
 	}
+	if existingApp == nil {
+		g.writeError(w, http.StatusNotFound, "not_found", "application not found")
+		return
+	}
+	effectiveBaseURL := req.DifyBaseURL
+	if effectiveBaseURL == "" {
+		effectiveBaseURL = existingApp.DifyBaseURL
+	}
+	normalized, baseErr := g.difyPolicy.ValidateBaseURL(effectiveBaseURL)
+	if baseErr != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "dify_base_url 不符合出站安全策略: "+baseErr.Error())
+		return
+	}
+	req.DifyBaseURL = normalized
 
 	modified := &db.ApproveApplicationFields{
 		Service:     req.Service,
@@ -1446,7 +1503,7 @@ func (g *Gateway) handleApproveApplication(w http.ResponseWriter, r *http.Reques
 	// beta.2: validate Dify App parameters.
 	keyPlain, decErr := g.Store.Decrypt(donation.DifyAPIKeyEnc)
 	if decErr == nil {
-		resp["validation"] = g.validateDonationApp(donation.Service, donation.DifyBaseURL, keyPlain)
+		resp["validation"] = g.validateDonationApp(r.Context(), donation.Service, donation.DifyBaseURL, keyPlain)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -1549,6 +1606,10 @@ func (g *Gateway) handleBatchApproveApplications(w http.ResponseWriter, r *http.
 		if app.Status != db.AppStatusPending {
 			writeBatchDonationError(w,
 				fmt.Sprintf("申请 %d 状态不是 pending（当前：%s）", id, app.Status), id)
+			return
+		}
+		if _, baseErr := g.difyPolicy.ValidateBaseURL(app.DifyBaseURL); baseErr != nil {
+			writeBatchDonationError(w, fmt.Sprintf("申请 %d 的 Dify 地址不符合出站安全策略", id), id)
 			return
 		}
 	}

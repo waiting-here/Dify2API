@@ -220,15 +220,15 @@ workflow:
         method: get
         params: ''
         retry_config:
-          max_retries: 3
+          max_retries: 1
           retry_enabled: true
-          retry_interval: 100
+          retry_interval: 500
         selected: false
         ssl_verify: true
         timeout:
-          max_connect_timeout: 0
-          max_read_timeout: 0
-          max_write_timeout: 0
+          max_connect_timeout: 10
+          max_read_timeout: 30
+          max_write_timeout: 10
         title: HTTP Request
         type: http-request
         url: '{{#1784230714832.request_url#}}'

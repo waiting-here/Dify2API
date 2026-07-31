@@ -26,20 +26,24 @@ func setupAuthGateway(t *testing.T, adminPassword string) (*Gateway, *db.Store) 
 	}
 	t.Cleanup(func() { store.Close() })
 	cfg := &config.Config{
-		ListenAddr:          "localhost:10086",
-		DifyHTTPTimeoutMs:   600000,
-		MaxChatInFlight:     64,
-		MaxRequestBodyMB:    4,
-		MaxWebRequestBodyKB: 256,
-		TrustedProxyCIDRs:   []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")},
-		SSEBufferMB:         1,
-		LoginMaxFailures:    5,
-		LoginWindowMin:      10,
-		LoginLockMin:        60,
-		LoginMinLatencyMs:   0, // keep the shared fixture fast; throttle tests adjust their own
-		RPMWindowSec:        60,
-		IPThrottleWindowSec: 60,
-		LogDetailMaxChars:   500,
+		ListenAddr:                   "localhost:10086",
+		DifyHTTPTimeoutMs:            600000,
+		DifyMaxResponseMB:            32,
+		DifyProbeInFlight:            8,
+		DifyEgressAllowlist:          []string{"127.0.0.0/8", "::1/128"},
+		RemoteContentOriginAllowlist: []string{"https://example.com", "http://a.b"},
+		MaxChatInFlight:              64,
+		MaxRequestBodyMB:             4,
+		MaxWebRequestBodyKB:          256,
+		TrustedProxyCIDRs:            []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")},
+		SSEBufferMB:                  1,
+		LoginMaxFailures:             5,
+		LoginWindowMin:               10,
+		LoginLockMin:                 60,
+		LoginMinLatencyMs:            0, // keep the shared fixture fast; throttle tests adjust their own
+		RPMWindowSec:                 60,
+		IPThrottleWindowSec:          60,
+		LogDetailMaxChars:            500,
 		Admin: config.AdminConfig{
 			Username:            "root",
 			Password:            adminPassword,

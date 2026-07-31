@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -46,23 +47,50 @@ type Gateway struct {
 	userDebug *userDebugHub
 	// donationLimiter enforces per-donation RPM limits.
 	donationLimiter *donationRateLimiter
+	// difyPolicy pins DNS and blocks non-public Dify egress unless the
+	// deployment operator explicitly allowlists an origin/network.
+	difyPolicy *dify.EgressPolicy
+	// difyProbeSem bounds concurrent user-triggered /parameters probes.
+	difyProbeSem chan struct{}
+	// remoteContentOrigins gates URLs fetched inside remote Dify workflows.
+	remoteContentOrigins map[string]struct{}
 	// antiAbuseCache maps service -> per-service anti-abuse config (hot path).
 	antiAbuseCache map[string]*db.AntiAbuseConfig
 }
 
 // NewGateway creates a new Gateway.
 func NewGateway(cfg *config.Config, store *db.Store) *Gateway {
+	difyPolicy, err := dify.NewEgressPolicy(cfg.DifyEgressAllowlist)
+	if err != nil {
+		// LoadStartup validates this configuration. Directly constructed test
+		// configs still fail closed rather than silently allowing private egress.
+		log.Printf("[ERROR] invalid Dify egress policy: %v", err)
+		difyPolicy, _ = dify.NewEgressPolicy(nil)
+	}
+	probeLimit := cfg.DifyProbeInFlight
+	if probeLimit <= 0 {
+		probeLimit = 8
+	}
+	remoteOrigins := make(map[string]struct{}, len(cfg.RemoteContentOriginAllowlist))
+	for _, raw := range cfg.RemoteContentOriginAllowlist {
+		if u, parseErr := url.Parse(raw); parseErr == nil {
+			remoteOrigins[canonicalOrigin(u)] = struct{}{}
+		}
+	}
 	gw := &Gateway{
-		Config:           cfg,
-		Store:            store,
-		limiter:          newRateLimiter(cfg.RPMWindowSec),
-		chatSem:          make(chan struct{}, cfg.MaxChatInFlight),
-		loginThrottle:    newLoginThrottle(cfg),
-		webThrottle:      newIPThrottle(cfg.WebRPMPerIP, cfg.WebThrottleSec, cfg.IPThrottleWindowSec),
-		authFailThrottle: newIPThrottle(cfg.AuthFailRPMPerIP, 60, cfg.IPThrottleWindowSec),
-		mailer:           mailer.New(cfg.SMTP, db.DefaultMailerCoolMinutes),
-		userDebug:        newUserDebugHub(),
-		donationLimiter:  newDonationRateLimiter(),
+		Config:               cfg,
+		Store:                store,
+		limiter:              newRateLimiter(cfg.RPMWindowSec),
+		chatSem:              make(chan struct{}, cfg.MaxChatInFlight),
+		loginThrottle:        newLoginThrottle(cfg),
+		webThrottle:          newIPThrottle(cfg.WebRPMPerIP, cfg.WebThrottleSec, cfg.IPThrottleWindowSec),
+		authFailThrottle:     newIPThrottle(cfg.AuthFailRPMPerIP, 60, cfg.IPThrottleWindowSec),
+		mailer:               mailer.New(cfg.SMTP, db.DefaultMailerCoolMinutes),
+		userDebug:            newUserDebugHub(),
+		donationLimiter:      newDonationRateLimiter(),
+		difyPolicy:           difyPolicy,
+		difyProbeSem:         make(chan struct{}, probeLimit),
+		remoteContentOrigins: remoteOrigins,
 	}
 	if err := gw.loadAntiAbuseCache(); err != nil {
 		log.Printf("[WARN] load anti-abuse cache: %v", err)
@@ -478,8 +506,19 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		g.writeError(w, http.StatusInternalServerError, "internal", "credential error")
 		return
 	}
-	client := dify.NewClient(appCfg.DifyBaseURL, apiKey, time.Duration(g.Config.DifyHTTPTimeoutMs)*time.Millisecond)
-	client.SSEBufferSize = g.Config.SSEBufferMB << 20
+	client, err := g.newDifyClient(appCfg.DifyBaseURL, apiKey, time.Duration(g.Config.DifyHTTPTimeoutMs)*time.Millisecond)
+	if err != nil {
+		g.logRequest(user.ID, req.Model, service, startedAt, "error", "upstream_blocked",
+			http.StatusBadGateway, err.Error(), "")
+		g.writeError(writer, http.StatusBadGateway, "upstream_blocked", "configured Dify origin is blocked by the egress policy")
+		return
+	}
+	if err := g.validateRemoteContent(service, inputs, images); err != nil {
+		g.logRequest(user.ID, req.Model, service, startedAt, "error", "remote_url_not_allowed",
+			http.StatusBadRequest, err.Error(), "")
+		g.writeError(writer, http.StatusBadRequest, "remote_url_not_allowed", err.Error())
+		return
+	}
 
 	wfInputs := make(map[string]interface{}, len(inputs)+1)
 	for k, v := range inputs {
@@ -489,7 +528,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	// 6. Images (image-processing): http(s) URLs pass through as remote_url;
 	// data URIs are uploaded first (/v1/files/upload -> upload_file_id).
 	if len(images) > 0 {
-		files, err := g.buildImageFiles(client, wfReq_User(user.ID), images)
+		files, err := g.buildImageFiles(r.Context(), client, wfReq_User(user.ID), images)
 		if err != nil {
 			log.Printf("[ERROR] image files (user %d): %v", user.ID, err)
 			g.logRequest(user.ID, req.Model, service, startedAt, "error", "image_upload_failed",
@@ -516,7 +555,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if req.Stream {
 		g.handleStreaming(writer, client, wfReq, modelName, user.ID, service, startedAt, r.Context())
 	} else {
-		g.handleBlocking(writer, client, wfReq, modelName, user.ID, service, startedAt)
+		g.handleBlocking(writer, client, wfReq, modelName, user.ID, service, startedAt, r.Context())
 	}
 }
 
@@ -606,8 +645,13 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 		g.writeError(w, http.StatusInternalServerError, "internal", "credential error")
 		return
 	}
-	client := dify.NewClient(picked.DifyBaseURL, apiKey, time.Duration(g.Config.DifyHTTPTimeoutMs)*time.Millisecond)
-	client.SSEBufferSize = g.Config.SSEBufferMB << 20
+	client, err := g.newDifyClient(picked.DifyBaseURL, apiKey, time.Duration(g.Config.DifyHTTPTimeoutMs)*time.Millisecond)
+	if err != nil {
+		g.logRequest(user.ID, req.Model, service, startedAt, "error", "upstream_blocked",
+			http.StatusBadGateway, err.Error(), "")
+		g.writeError(w, http.StatusBadGateway, "upstream_blocked", "configured Dify origin is blocked by the egress policy")
+		return
+	}
 
 	// 6. Contract validation (failure does NOT count as donation failure)
 	inputs, images, err := translator.TranslateForService(service, req.Messages)
@@ -644,6 +688,13 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 		charityWriter = wCharity
 	}
 
+	if err := g.validateRemoteContent(service, inputs, images); err != nil {
+		g.logRequest(user.ID, logModel, service, startedAt, "error", "remote_url_not_allowed",
+			http.StatusBadRequest, err.Error(), "")
+		g.writeError(charityWriter, http.StatusBadRequest, "remote_url_not_allowed", err.Error())
+		return
+	}
+
 	// Build workflow inputs
 	wfInputs := make(map[string]interface{}, len(inputs)+1)
 	for k, v := range inputs {
@@ -652,7 +703,7 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 
 	// Handle images if applicable
 	if len(images) > 0 {
-		files, err := g.buildImageFiles(client, wfReq_User(user.ID), images)
+		files, err := g.buildImageFiles(r.Context(), client, wfReq_User(user.ID), images)
 		if err != nil {
 			log.Printf("[ERROR] charity image files (user %d): %v", user.ID, err)
 			g.logRequest(user.ID, logModel, service, startedAt, "error", "image_upload_failed",
@@ -673,13 +724,13 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 	if req.Stream {
 		g.charityStreaming(charityWriter, client, wfReq, logModel, user.ID, service, startedAt, picked, pricing, r.Context())
 	} else {
-		g.charityBlocking(charityWriter, client, wfReq, logModel, user.ID, service, startedAt, picked, pricing)
+		g.charityBlocking(charityWriter, client, wfReq, logModel, user.ID, service, startedAt, picked, pricing, r.Context())
 	}
 }
 
 func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time, ctx context.Context) {
 	wfReq.ResponseMode = "streaming"
-	events, errCh := client.StreamWorkflow(wfReq)
+	events, errCh := client.StreamWorkflowContext(ctx, wfReq)
 
 	// Wait for the FIRST event or an error before committing to SSE
 	// response headers.  This is a blocking wait (not a racy non-blocking
@@ -695,17 +746,32 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 		// !ok: stream closed without events; fall through — the error
 		// (if any) is picked up from errCh below.
 	case err := <-errCh:
+		if ctx.Err() != nil {
+			g.logRequest(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest, ctx.Err().Error(), "")
+			return
+		}
 		if err != nil {
 			g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error(), "")
 			g.writeDifyError(w, err)
 			return
 		}
+	case <-ctx.Done():
+		g.logRequest(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest, ctx.Err().Error(), "")
+		return
 	}
 	if firstEvt == nil {
 		// Channel closed with no events: check for a late error, else treat
 		// as an empty-but-successful stream.
 		select {
 		case err := <-errCh:
+			if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+				detail := "client disconnected"
+				if ctx.Err() != nil {
+					detail = ctx.Err().Error()
+				}
+				g.logRequest(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest, detail, "")
+				return
+			}
 			if err != nil {
 				g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error(), "")
 				g.writeDifyError(w, err)
@@ -713,6 +779,11 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 			}
 		default:
 		}
+	}
+
+	if ctx.Err() != nil {
+		g.logRequest(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest, ctx.Err().Error(), "")
+		return
 	}
 
 	// The stream has started (Dify returned HTTP 200): this is a "success"
@@ -744,26 +815,34 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 			flusher.Flush()
 		}
 	}
+	clientCanceled := false
 loop:
-	for evt := range events {
-		if evt.TaskID != "" {
-			taskID = evt.TaskID
-		}
-		if msg := conv.Convert(evt); msg != nil {
-			fmt.Fprint(w, msg.Data)
-			flusher.Flush()
-		}
-		// Check if client disconnected
+	for {
 		select {
 		case <-ctx.Done():
-			if taskID != "" {
-				if err := client.StopWorkflow(taskID, difyUser); err != nil {
-					log.Printf("[WARN] stop workflow %s: %v", taskID, err)
-				}
-			}
+			clientCanceled = true
+			g.stopDifyWorkflow(client, taskID, difyUser)
 			break loop
-		default:
+		case evt, ok := <-events:
+			if !ok {
+				break loop
+			}
+			if evt.TaskID != "" {
+				taskID = evt.TaskID
+			}
+			if msg := conv.Convert(evt); msg != nil {
+				fmt.Fprint(w, msg.Data)
+				flusher.Flush()
+			}
 		}
+	}
+	if clientCanceled || ctx.Err() != nil {
+		detail := "client disconnected"
+		if ctx.Err() != nil {
+			detail = ctx.Err().Error()
+		}
+		g.logRequest(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest, detail, "")
+		return
 	}
 
 	// Drain errCh after the event channel closes: a transport-level failure
@@ -815,10 +894,18 @@ loop:
 	g.logRequest(userID, modelName, service, startedAt, status, code, http.StatusOK, detail, "")
 }
 
-func (g *Gateway) handleBlocking(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time) {
+func (g *Gateway) handleBlocking(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time, ctx context.Context) {
 	wfReq.ResponseMode = "blocking"
-	text, err := client.BlockingWorkflow(wfReq)
+	text, err := client.BlockingWorkflowContext(ctx, wfReq)
 	if err != nil {
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+			detail := err.Error()
+			if ctx.Err() != nil {
+				detail = ctx.Err().Error()
+			}
+			g.logRequest(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest, detail, "")
+			return
+		}
 		// Per the §1.2 definition, an upstream HTTP 200 counts as a
 		// "success" for class B even when the workflow status is "failed"
 		// (rare; surfaced to the admin alert centre in S3).
@@ -875,7 +962,7 @@ func wfReq_User(userID int64) string { return fmt.Sprintf("u%d", userID) }
 
 // buildImageFiles turns image references (data URIs / http(s) URLs) into Dify
 // workflow file objects.
-func (g *Gateway) buildImageFiles(client *dify.Client, difyUser string, images []string) ([]map[string]interface{}, error) {
+func (g *Gateway) buildImageFiles(ctx context.Context, client *dify.Client, difyUser string, images []string) ([]map[string]interface{}, error) {
 	files := make([]map[string]interface{}, 0, len(images))
 	for i, img := range images {
 		switch {
@@ -897,7 +984,7 @@ func (g *Gateway) buildImageFiles(client *dify.Client, difyUser string, images [
 			if ext == "jpeg" {
 				ext = "jpg"
 			}
-			id, err := client.UploadFile(difyUser, fmt.Sprintf("image-%d.%s", i+1, ext), mime, data)
+			id, err := client.UploadFileContext(ctx, difyUser, fmt.Sprintf("image-%d.%s", i+1, ext), mime, data)
 			if err != nil {
 				return nil, err
 			}

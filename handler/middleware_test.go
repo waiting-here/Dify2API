@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -253,7 +254,7 @@ func TestCheckAppBinding_Incompatible(t *testing.T) {
 		fmt.Fprint(w, `{"user_input_form":[{"paragraph":{"variable":"other","required":false}}]}`)
 	}))
 	defer srv2.Close()
-	check := gw.checkAppBinding("[general]x", srv2.URL, "k")
+	check := gw.checkAppBinding(context.Background(), "[general]x", srv2.URL, "k")
 	if check["compatible"] != false {
 		t.Errorf("missing user_0 should be incompatible: %v", check)
 	}

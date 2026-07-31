@@ -87,10 +87,14 @@ TRUSTED_PROXY_CIDRS=127.0.0.0/8,::1/128  # 仅这些 TCP 来源可提供 X-Forwa
 DIFY2API_DB_PATH=dify2api.db
 DIFY2API_MASTER_KEY_PATH=dify2api.key
 DIFY_HTTP_TIMEOUT_MS=900000
+DIFY_MAX_RESPONSE_MB=32       # 解压后 JSON / 累计 SSE 响应上限 MiB
+DIFY_PROBE_IN_FLIGHT=8        # App /parameters 探测全局并发上限
+DIFY_EGRESS_ALLOWLIST=        # 私有 Dify 精确 origin 或 CIDR；公网地址无需配置
+REMOTE_CONTENT_ORIGIN_ALLOWLIST=  # Dify 可代用户抓取的精确可信 origin；默认禁用
 MAX_CHAT_IN_FLIGHT=32        # 全局并发聊天上限（超出 429）
 MAX_REQUEST_BODY_MB=10       # chat 请求体上限 MiB（超出 413）
 MAX_WEB_REQUEST_BODY_KB=256  # 状态变更类 /api/* 请求体上限 KiB（超出 413）
-SSE_BUFFER_MB=10             # 每流 SSE 初始缓冲 MB
+SSE_BUFFER_MB=1              # 每流 SSE 初始缓冲 MiB（单行 10MiB，累计见上）
 LOGIN_MAX_FAILURES=5         # 登录失败锁定阈值
 LOGIN_WINDOW_MIN=10          # 失败计数窗口（分钟）
 LOGIN_LOCK_MIN=60            # 锁定时长（分钟）
@@ -133,8 +137,11 @@ LOGIN_MIN_LATENCY_MS=300     # 登录恒定时延（毫秒）
 | `sillytavern-main-200` | `system`（可选）后接 0–200 组 `assistant, user`（1–403 条） | `system_prompt`（可选）、`user_0`、`assistant_1..200`、`user_1..200`、`assistant_prefill` |
 | `sillytavern-SP·数据库-填表` | `system` 必填 + `user` 可选 + assistant 打头严格交替 `A U A U A U A`（1–8 条） | `system_prompt`、`user_0`（可选）、`assistant_0`、`user_1`、`assistant_1`、`user_2`、`assistant_2`、`user_3`、`assistant_prefill` |
 
-- 未知服务一律拒绝（严格模式）；多模态图片经 data URI 预上传（`/v1/files/upload`）
-  或以 `remote_url` 直传；
+- 未知服务一律拒绝（严格模式）；多模态图片经 data URI 预上传（`/v1/files/upload`）。
+  `website-summary` URL 和图片 `remote_url` 只有 origin 位于部署者配置的
+  `REMOTE_CONTENT_ORIGIN_ALLOWLIST` 时才会交给 Dify 抓取；默认列表为空，避免消费者借捐赠者 Dify 访问内网。
+  该名单表示部署者同时信任目标 origin 的重定向行为；Dify 侧仍须启用其 SSRF/出站防火墙。
+  参考 Website Summary DSL 已设置 10s connect / 30s read / 10s write timeout 且只重试 1 次；
 - 绑定校验：契约**必选**变量须在 App 中存在，App **必选**变量须被契约覆盖，
   App 多余可选变量允许（提示但不阻断）。
 
@@ -197,6 +204,7 @@ result_limit: 4000               # 超限结果写临时文件，仅回路径+�
   洪泛；有效密钥不受影响）；
 - **封禁 vs 删除**：封禁（定时/永久）保留记录且禁止再注册；删除清空记录并允许再注册；
 - **内置加固**：HTTP 服务超时（Slowloris）、chat 10 MiB 与 Web API 256 KiB 两级请求体上限、
+  Dify 解压后响应上限、出站 DNS/IP 钉扎（默认拒绝私网/metadata/重定向/环境代理）、
   并发背压（429）、可信代理/固定 Host 门禁、无状态 HMAC OAuth state、管理员登录爆破锁定
   （IP+用户名滑窗，5 次/10 分钟 → 锁 1h）、密钥 AES-GCM 加密存储；
 - **日志**：`request_logs` 仅存元数据（时间/模型/状态/错误码/服务/HTTP状态/详情/扣分）；防滥用触发时
@@ -207,8 +215,9 @@ result_limit: 4000               # 超限结果写临时文件，仅回路径+�
 - **调试模式**：`-debug` 拦截请求落盘（`request.json` + `dify_inputs.json`）不转发；
   普通用户可在控制台"调试"标签页自主开启调试（SSE 流式推送至浏览器，
   服务端零磁盘留存，支持演习模式，需确认免责声明）。
-- **流式断开保护**：客户端中途断开流式连接时，网关自动调用 Dify Stop API
-  终止上游 Workflow，避免无效消耗 Dify 调用配额。
+- **流式断开保护**：所有 Dify 请求绑定下游 request context；客户端中途断开时立即取消
+  上游 HTTP，并以独立 3 秒 context 尝试 Dify Stop API。SSE channel 背压发送同样可取消，
+  不会因无人消费而永久泄漏 goroutine。
 - **公告栏**：管理员可发布/编辑/删除公告（HTML 正文），用户端以卡片列表展示，
   点击弹出详情；系统公告（签到未启用/捐赠未启用/公益未启用）自动生成。
 - **维护模式**：管理员在设置页开启后，用户端显示友好维护页面（503），
@@ -295,7 +304,8 @@ SMTP_TLS=implicit
 | 400 | `credits_capped` | 签到积分已达上限 |
 | 400 | `debug_not_active` | 用户自助调试模式未开启 |
 | 400 | `invalid_message_sequence` | 消息布局不符该服务契约 |
-| 400 | `invalid_request` | 请求体/参数非法（含未注册服务名） |
+| 400 | `invalid_request` | 请求体/参数非法（含未注册服务名或不安全的 Dify Base URL） |
+| 400 | `remote_url_not_allowed` | website-summary/远程图片 origin 未经部署者允许 |
 | 400 | `invalid_role` | 消息包含不支持的角色类型（仅限 system/user/assistant） |
 | 400 | `too_many_pending` | 待审核捐赠申请已达上限 |
 | 401 | `invalid_credentials` | 管理员登录用户名或密码错误 |
@@ -317,7 +327,8 @@ SMTP_TLS=implicit
 | 429 | `server_busy` | 全局并发已满（附 Retry-After） |
 | 4xx | （透传上游 code） | Dify 返回 4xx 时原状态码与错误码透传（如 400 `invalid_param`），消息带 `[Dify]` 前缀 |
 | 500 | `internal` | 网关内部错误 |
-| 502 | `upstream_error` 等 | Dify 5xx 或网络错误 |
+| 502 | `upstream_blocked` | 旧配置中的 Dify origin 被当前出站安全策略阻断 |
+| 502 | `upstream_error` 等 | Dify 5xx、响应超限或网络错误 |
 | 503 | `maintenance` | 站点处于维护模式 |
 | 503 | `service_unavailable` | 当前该公益模型无可用捐赠条目，或定价缺失/停用 |
 | 504 | `upstream_timeout` | 上游 Dify 响应超时（可能因 Cloudflare 100 秒限制被截断），消息带 `[Dify2API]` 前缀，建议使用流式传输（`stream: true`） |

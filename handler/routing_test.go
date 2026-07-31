@@ -147,6 +147,18 @@ func TestRouting_WebsiteSummary(t *testing.T) {
 		t.Errorf("inputs = %v", inputs)
 	}
 
+	// A syntactically valid URL is still rejected unless the deployment
+	// operator explicitly trusts its origin; it must never reach Dify.
+	gw.remoteContentOrigins = map[string]struct{}{}
+	captured = nil
+	rec = chatRequest(gw, key, `{"model":"[website-summary]claude-opus-4-6","messages":[{"role":"user","content":"https://example.com/private"}]}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "remote_url_not_allowed") {
+		t.Fatalf("unallowlisted URL: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if captured != nil {
+		t.Error("unallowlisted remote URL must not be forwarded")
+	}
+
 	// Missing URL -> 400, not forwarded.
 	captured = nil
 	rec = chatRequest(gw, key, `{"model":"[website-summary]claude-opus-4-6","messages":[{"role":"user","content":"not-a-url"}]}`)

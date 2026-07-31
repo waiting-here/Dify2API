@@ -19,6 +19,16 @@ type Config struct {
 	ListenAddr string
 	// DifyHTTPTimeoutMs is the per-request timeout for calls to Dify Apps (default 900000).
 	DifyHTTPTimeoutMs int
+	// DifyMaxResponseMB caps decompressed JSON and cumulative SSE responses.
+	DifyMaxResponseMB int
+	// DifyProbeInFlight caps concurrent /parameters connectivity probes.
+	DifyProbeInFlight int
+	// DifyEgressAllowlist contains operator-approved private Dify origins or
+	// IP/CIDR ranges. Public global-unicast destinations need no entry.
+	DifyEgressAllowlist []string
+	// RemoteContentOriginAllowlist contains exact origins that website-summary
+	// and remote image inputs may ask a Dify workflow to fetch.
+	RemoteContentOriginAllowlist []string
 	// DBPath is the SQLite database file path (default ./dify2api.db).
 	DBPath string
 	// MasterKeyPath is the encryption master key file path (default ./dify2api.key).
@@ -44,8 +54,8 @@ type Config struct {
 	// TrustedProxyCIDRs is the explicit set of reverse-proxy source networks
 	// allowed to supply X-Forwarded-* headers. It defaults to loopback only.
 	TrustedProxyCIDRs []netip.Prefix
-	// SSEBufferMB is the initial per-stream SSE parse buffer in MB (default 10;
-	// the hard max per SSE line stays 50MB).
+	// SSEBufferMB is the initial per-stream SSE parse buffer in MiB (default 1;
+	// the hard max per SSE line is enforced by the Dify client).
 	SSEBufferMB int
 
 	// LoginMaxFailures: failures within the window that trigger a lock (default 5).
@@ -155,13 +165,15 @@ func LoadStartup(path string) (*Config, error) {
 	cfg := &Config{
 		ListenAddr:          getOr(envMap, "LISTEN_ADDR", "localhost:10086"),
 		DifyHTTPTimeoutMs:   getIntOr(envMap, "DIFY_HTTP_TIMEOUT_MS", 900000),
+		DifyMaxResponseMB:   getIntOr(envMap, "DIFY_MAX_RESPONSE_MB", 32),
+		DifyProbeInFlight:   getIntOr(envMap, "DIFY_PROBE_IN_FLIGHT", 8),
 		DBPath:              getOr(envMap, "DIFY2API_DB_PATH", "dify2api.db"),
 		MasterKeyPath:       getOr(envMap, "DIFY2API_MASTER_KEY_PATH", "dify2api.key"),
 		FaviconPath:         getOr(envMap, "FAVICON_PATH", ""),
 		MaxChatInFlight:     getIntOr(envMap, "MAX_CHAT_IN_FLIGHT", 32),
 		MaxRequestBodyMB:    getIntOr(envMap, "MAX_REQUEST_BODY_MB", 10),
 		MaxWebRequestBodyKB: getIntOr(envMap, "MAX_WEB_REQUEST_BODY_KB", 256),
-		SSEBufferMB:         getIntOr(envMap, "SSE_BUFFER_MB", 10),
+		SSEBufferMB:         getIntOr(envMap, "SSE_BUFFER_MB", 1),
 		LoginMaxFailures:    getIntOr(envMap, "LOGIN_MAX_FAILURES", 5),
 		LoginWindowMin:      getIntOr(envMap, "LOGIN_WINDOW_MIN", 10),
 		LoginLockMin:        getIntOr(envMap, "LOGIN_LOCK_MIN", 60),
@@ -246,6 +258,15 @@ func LoadStartup(path string) (*Config, error) {
 	}
 	cfg.TrustedProxyCIDRs = trustedProxies
 
+	cfg.DifyEgressAllowlist = splitList(getOr(envMap, "DIFY_EGRESS_ALLOWLIST", ""))
+	if err := validateOriginAllowlist(cfg.DifyEgressAllowlist, true); err != nil {
+		return nil, fmt.Errorf("startup file %s: DIFY_EGRESS_ALLOWLIST: %w", path, err)
+	}
+	cfg.RemoteContentOriginAllowlist = splitList(getOr(envMap, "REMOTE_CONTENT_ORIGIN_ALLOWLIST", ""))
+	if err := validateOriginAllowlist(cfg.RemoteContentOriginAllowlist, false); err != nil {
+		return nil, fmt.Errorf("startup file %s: REMOTE_CONTENT_ORIGIN_ALLOWLIST: %w", path, err)
+	}
+
 	// SMTP_FROM falls back to SMTP_USER when empty.
 	if cfg.SMTP.From == "" {
 		cfg.SMTP.From = cfg.SMTP.User
@@ -299,6 +320,43 @@ func parseCIDRList(raw string) ([]netip.Prefix, error) {
 		return nil, fmt.Errorf("at least one CIDR is required, or use 'none'")
 	}
 	return prefixes, nil
+}
+
+func splitList(raw string) []string {
+	var out []string
+	for _, item := range strings.Split(raw, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func validateOriginAllowlist(entries []string, allowNetworks bool) error {
+	for _, entry := range entries {
+		if allowNetworks {
+			if _, err := netip.ParsePrefix(entry); err == nil {
+				continue
+			}
+			if _, err := netip.ParseAddr(entry); err == nil {
+				continue
+			}
+		}
+		u, err := url.Parse(entry)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
+			u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			suffix := ""
+			if allowNetworks {
+				suffix = " (or an IP/CIDR)"
+			}
+			return fmt.Errorf("%q must be an exact http(s) origin%s", entry, suffix)
+		}
+		path := strings.TrimRight(u.Path, "/")
+		if path != "" && !(allowNetworks && path == "/v1") {
+			return fmt.Errorf("%q must not contain a path", entry)
+		}
+	}
+	return nil
 }
 
 // getOr looks up a key (OS environment first, then file), falling back.

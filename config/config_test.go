@@ -36,7 +36,8 @@ func TestLoadStartup_Defaults(t *testing.T) {
 		cfg.DBPath != "dify2api.db" || cfg.MasterKeyPath != "dify2api.key" {
 		t.Errorf("base defaults wrong: %+v", cfg)
 	}
-	if cfg.MaxChatInFlight != 32 || cfg.MaxRequestBodyMB != 10 || cfg.MaxWebRequestBodyKB != 256 || cfg.SSEBufferMB != 10 {
+	if cfg.MaxChatInFlight != 32 || cfg.MaxRequestBodyMB != 10 || cfg.MaxWebRequestBodyKB != 256 || cfg.SSEBufferMB != 1 ||
+		cfg.DifyMaxResponseMB != 32 || cfg.DifyProbeInFlight != 8 {
 		t.Errorf("perf defaults wrong: %+v", cfg)
 	}
 	if len(cfg.TrustedProxyCIDRs) != 2 || cfg.TrustedProxyCIDRs[0].String() != "127.0.0.0/8" || cfg.TrustedProxyCIDRs[1].String() != "::1/128" {
@@ -61,7 +62,11 @@ MAX_CHAT_IN_FLIGHT=128
 MAX_REQUEST_BODY_MB=4
 MAX_WEB_REQUEST_BODY_KB=64
 TRUSTED_PROXY_CIDRS=10.0.0.0/8,192.0.2.10
-SSE_BUFFER_MB=1
+DIFY_MAX_RESPONSE_MB=16
+DIFY_PROBE_IN_FLIGHT=3
+DIFY_EGRESS_ALLOWLIST=https://dify.internal,10.0.0.0/8
+REMOTE_CONTENT_ORIGIN_ALLOWLIST=https://example.com,http://images.example.com:8080
+SSE_BUFFER_MB=2
 LOGIN_LOCK_MIN=120
 ADMIN_HOST=manage.example.com
 `)
@@ -69,8 +74,12 @@ ADMIN_HOST=manage.example.com
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.ListenAddr != "0.0.0.0:9090" || cfg.MaxChatInFlight != 128 || cfg.MaxRequestBodyMB != 4 || cfg.MaxWebRequestBodyKB != 64 || cfg.SSEBufferMB != 1 {
+	if cfg.ListenAddr != "0.0.0.0:9090" || cfg.MaxChatInFlight != 128 || cfg.MaxRequestBodyMB != 4 || cfg.MaxWebRequestBodyKB != 64 || cfg.SSEBufferMB != 2 ||
+		cfg.DifyMaxResponseMB != 16 || cfg.DifyProbeInFlight != 3 {
 		t.Errorf("custom perf values wrong: %+v", cfg)
+	}
+	if len(cfg.DifyEgressAllowlist) != 2 || len(cfg.RemoteContentOriginAllowlist) != 2 {
+		t.Errorf("custom egress lists wrong: Dify=%v remote=%v", cfg.DifyEgressAllowlist, cfg.RemoteContentOriginAllowlist)
 	}
 	if got := cfg.TrustedProxyCIDRs; len(got) != 2 || got[0].String() != "10.0.0.0/8" || got[1].String() != "192.0.2.10/32" {
 		t.Errorf("custom trusted proxies = %v", got)
@@ -108,7 +117,7 @@ func TestLoadStartup_InvalidIntsFallBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.MaxChatInFlight != 32 || cfg.SSEBufferMB != 10 {
+	if cfg.MaxChatInFlight != 32 || cfg.SSEBufferMB != 1 {
 		t.Errorf("invalid ints should fall back: %+v", cfg)
 	}
 }
@@ -133,6 +142,8 @@ func TestLoadStartup_RejectsInvalidOriginsAndProxyCIDRs(t *testing.T) {
 		strings.Replace(minimalAdmin, "https://dify2api.example.com/", "https://example.com/path", 1),
 		minimalAdmin + "ADMIN_HOST=https://admin.example.com\n",
 		minimalAdmin + "TRUSTED_PROXY_CIDRS=127.0.0.1,not-a-cidr\n",
+		minimalAdmin + "DIFY_EGRESS_ALLOWLIST=localhost\n",
+		minimalAdmin + "REMOTE_CONTENT_ORIGIN_ALLOWLIST=https://example.com/path\n",
 	}
 	for i, content := range cases {
 		if _, err := LoadStartup(writeTemp(t, fmt.Sprintf("bad-%d.env", i), content)); err == nil {

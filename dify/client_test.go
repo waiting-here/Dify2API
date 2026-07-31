@@ -11,12 +11,21 @@ import (
 	"time"
 )
 
+func newLoopbackClient(t *testing.T, baseURL, apiKey string, timeout time.Duration) *Client {
+	t.Helper()
+	policy, err := NewEgressPolicy([]string{"127.0.0.0/8", "::1/128"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewClientWithOptions(baseURL, apiKey, ClientOptions{Timeout: timeout, EgressPolicy: policy})
+}
+
 func TestNewClient_Timeout(t *testing.T) {
-	c := NewClient("http://dify.local/", "app-key", 600*time.Second)
+	c := NewClient("http://dify.example.com/", "app-key", 600*time.Second)
 	if c.HTTPClient.Timeout != 600*time.Second {
 		t.Errorf("timeout = %v, want 600s", c.HTTPClient.Timeout)
 	}
-	if c.BaseURL != "http://dify.local" {
+	if c.BaseURL != "http://dify.example.com" {
 		t.Errorf("BaseURL = %q, want trailing slash trimmed", c.BaseURL)
 	}
 }
@@ -57,7 +66,7 @@ func TestFetchParameters(t *testing.T) {
 	srv := parametersServer(t, body, http.StatusOK)
 	defer srv.Close()
 
-	c := NewClient(srv.URL, "app-key", 15*time.Second)
+	c := newLoopbackClient(t, srv.URL, "app-key", 15*time.Second)
 	vars, err := c.FetchParameters()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -80,7 +89,7 @@ func TestFetchParameters_HTTPError(t *testing.T) {
 	srv := parametersServer(t, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 	defer srv.Close()
 
-	c := NewClient(srv.URL, "app-key", 15*time.Second)
+	c := newLoopbackClient(t, srv.URL, "app-key", 15*time.Second)
 	if _, err := c.FetchParameters(); err == nil {
 		t.Fatal("expected error for 401")
 	}
@@ -94,7 +103,7 @@ func TestCheckApp(t *testing.T) {
 		`{"paragraph":{"variable":"system_prompt"}},`+
 		`{"paragraph":{"variable":"user_0"}}]}`, http.StatusOK)
 	defer okSrv.Close()
-	if got := CheckApp(NewClient(okSrv.URL, "app-key", 15*time.Second), expected); !strings.Contains(got, "OK") {
+	if got := CheckApp(newLoopbackClient(t, okSrv.URL, "app-key", 15*time.Second), expected); !strings.Contains(got, "OK") {
 		t.Errorf("expected OK, got: %s", got)
 	}
 
@@ -103,13 +112,13 @@ func TestCheckApp(t *testing.T) {
 		`{"paragraph":{"variable":"system_prompt"}},`+
 		`{"paragraph":{"variable":"something_else"}}]}`, http.StatusOK)
 	defer mmSrv.Close()
-	got := CheckApp(NewClient(mmSrv.URL, "app-key", 15*time.Second), expected)
+	got := CheckApp(newLoopbackClient(t, mmSrv.URL, "app-key", 15*time.Second), expected)
 	if !strings.Contains(got, "MISMATCH") || !strings.Contains(got, "user_0") || !strings.Contains(got, "something_else") {
 		t.Errorf("expected MISMATCH with details, got: %s", got)
 	}
 
 	// Unavailable: connection refused
-	if got := CheckApp(NewClient("http://127.0.0.1:1", "app-key", 15*time.Second), expected); !strings.Contains(got, "UNAVAILABLE") {
+	if got := CheckApp(newLoopbackClient(t, "http://127.0.0.1:1", "app-key", 15*time.Second), expected); !strings.Contains(got, "UNAVAILABLE") {
 		t.Errorf("expected UNAVAILABLE, got: %s", got)
 	}
 }
@@ -234,7 +243,7 @@ func TestBlockingWorkflow_TextOutput(t *testing.T) {
 	srv := blockingServer(t, body, http.StatusOK)
 	defer srv.Close()
 
-	c := NewClient(srv.URL, "app-key", 15*time.Second)
+	c := newLoopbackClient(t, srv.URL, "app-key", 15*time.Second)
 	result, err := c.BlockingWorkflow(&WorkflowRequest{
 		Inputs:       map[string]interface{}{"prompt": "hi"},
 		ResponseMode: "blocking",
@@ -254,7 +263,7 @@ func TestBlockingWorkflow_NoTextKey_Deterministic(t *testing.T) {
 	srv := blockingServer(t, body, http.StatusOK)
 	defer srv.Close()
 
-	c := NewClient(srv.URL, "app-key", 15*time.Second)
+	c := newLoopbackClient(t, srv.URL, "app-key", 15*time.Second)
 	req := &WorkflowRequest{
 		Inputs:       map[string]interface{}{"prompt": "hi"},
 		ResponseMode: "blocking",
@@ -283,7 +292,7 @@ func TestBlockingWorkflow_EmptyOutputs(t *testing.T) {
 	srv := blockingServer(t, body, http.StatusOK)
 	defer srv.Close()
 
-	c := NewClient(srv.URL, "app-key", 15*time.Second)
+	c := newLoopbackClient(t, srv.URL, "app-key", 15*time.Second)
 	_, err := c.BlockingWorkflow(&WorkflowRequest{
 		Inputs:       map[string]interface{}{"prompt": "hi"},
 		ResponseMode: "blocking",
@@ -302,7 +311,7 @@ func TestBlockingWorkflow_FailedStatus(t *testing.T) {
 	srv := blockingServer(t, body, http.StatusOK)
 	defer srv.Close()
 
-	c := NewClient(srv.URL, "app-key", 15*time.Second)
+	c := newLoopbackClient(t, srv.URL, "app-key", 15*time.Second)
 	_, err := c.BlockingWorkflow(&WorkflowRequest{
 		Inputs:       map[string]interface{}{"prompt": "hi"},
 		ResponseMode: "blocking",
@@ -381,7 +390,7 @@ func TestStopWorkflow_Success(t *testing.T) {
 	})
 	defer srv.Close()
 
-	c := NewClient(srv.URL, "app-key", 15*time.Second)
+	c := newLoopbackClient(t, srv.URL, "app-key", 15*time.Second)
 	if err := c.StopWorkflow("task-123", "u42"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -394,7 +403,7 @@ func TestStopWorkflow_Error(t *testing.T) {
 	})
 	defer srv.Close()
 
-	c := NewClient(srv.URL, "app-key", 15*time.Second)
+	c := newLoopbackClient(t, srv.URL, "app-key", 15*time.Second)
 	err := c.StopWorkflow("no-such-task", "u42")
 	if err == nil {
 		t.Fatal("expected error for 404")

@@ -23,8 +23,12 @@ type Client struct {
 	APIKey     string
 	HTTPClient *http.Client
 	// SSEBufferSize is the initial per-stream SSE parse buffer in bytes
-	// (0 falls back to 1MB; hard max per SSE line stays 50MB).
+	// (0 falls back to 1MiB; values are clamped to the SSE line limit).
 	SSEBufferSize int
+	// MaxResponseBytes caps decompressed JSON responses and cumulative SSE
+	// input. Zero falls back to DefaultMaxResponseBytes.
+	MaxResponseBytes int64
+	initErr          error
 }
 
 // WorkflowRequest is the body sent to Dify's /workflows/run endpoint.
@@ -90,27 +94,101 @@ func parseDifyErrorBody(statusCode int, bodyBytes []byte) *DifyError {
 	return de
 }
 
-// NewClient creates a new Dify API client. timeout applies to each call to
-// the Dify API (V0.1.0: raised from a hardcoded 300s to a configurable 600s,
-// so long-running workflows for the dify-subagent integration can complete).
-//
-// baseURL is normalized: trailing slashes and a trailing "/v1" are stripped
-// (users habitually paste the documented base "https://api.dify.ai/v1").
+const (
+	DefaultMaxResponseBytes int64 = 32 << 20
+	maxErrorResponseBytes   int64 = 64 << 10
+	maxSSELineBytes               = 10 << 20
+)
+
+// ClientOptions controls transport security and response memory bounds.
+type ClientOptions struct {
+	Timeout          time.Duration
+	EgressPolicy     *EgressPolicy
+	MaxResponseBytes int64
+	SSEBufferSize    int
+}
+
+// NewClient creates a client with the secure default egress policy (public
+// addresses only). Callers that support operator-approved private Dify
+// origins should use NewClientWithOptions with a shared EgressPolicy.
 func NewClient(baseURL, apiKey string, timeout time.Duration) *Client {
-	base := strings.TrimRight(baseURL, "/")
-	base = strings.TrimSuffix(base, "/v1")
-	return &Client{
-		BaseURL: base,
-		APIKey:  apiKey,
-		HTTPClient: &http.Client{
-			Timeout: timeout,
-		},
+	return NewClientWithOptions(baseURL, apiKey, ClientOptions{Timeout: timeout})
+}
+
+func NewClientWithOptions(baseURL, apiKey string, opts ClientOptions) *Client {
+	policy := opts.EgressPolicy
+	if policy == nil {
+		policy, _ = NewEgressPolicy(nil)
+	}
+	base, err := policy.ValidateBaseURL(baseURL)
+	if opts.MaxResponseBytes <= 0 {
+		opts.MaxResponseBytes = DefaultMaxResponseBytes
+	}
+	client := &Client{
+		BaseURL:          base,
+		APIKey:           apiKey,
+		MaxResponseBytes: opts.MaxResponseBytes,
+		SSEBufferSize:    opts.SSEBufferSize,
+		initErr:          err,
+	}
+	if err != nil {
+		client.BaseURL = strings.TrimSpace(baseURL)
+		client.HTTPClient = &http.Client{Timeout: opts.Timeout}
+		return client
+	}
+	client.HTTPClient = policy.newHTTPClient(base, opts.Timeout)
+	return client
+}
+
+func (c *Client) ready() error {
+	if c.initErr != nil {
+		return fmt.Errorf("invalid Dify base URL: %w", c.initErr)
+	}
+	return nil
+}
+
+func (c *Client) responseLimit() int64 {
+	if c.MaxResponseBytes <= 0 {
+		return DefaultMaxResponseBytes
+	}
+	return c.MaxResponseBytes
+}
+
+type responseTooLargeError struct{ limit int64 }
+
+func (e *responseTooLargeError) Error() string {
+	return fmt.Sprintf("Dify response exceeds the %d-byte limit", e.limit)
+}
+
+func readLimited(r io.Reader, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, &responseTooLargeError{limit: limit}
+	}
+	return data, nil
+}
+
+func sendStreamError(ctx context.Context, ch chan<- error, err error) {
+	select {
+	case ch <- err:
+	case <-ctx.Done():
 	}
 }
 
-// UploadFile uploads one file to the Dify App (POST /v1/files/upload) and
-// returns its upload_file_id for use in workflow file inputs.
+// UploadFile uploads using a background context. Production request paths
+// should call UploadFileContext so client cancellation propagates upstream.
 func (c *Client) UploadFile(user, fileName, mimeType string, data []byte) (string, error) {
+	return c.UploadFileContext(context.Background(), user, fileName, mimeType, data)
+}
+
+// UploadFileContext uploads one file to the Dify App and returns its id.
+func (c *Client) UploadFileContext(ctx context.Context, user, fileName, mimeType string, data []byte) (string, error) {
+	if err := c.ready(); err != nil {
+		return "", err
+	}
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	part, err := mw.CreateFormFile("file", fileName)
@@ -127,7 +205,7 @@ func (c *Client) UploadFile(user, fileName, mimeType string, data []byte) (strin
 		return "", fmt.Errorf("multipart close: %w", err)
 	}
 
-	httpReq, err := http.NewRequest("POST", c.BaseURL+"/v1/files/upload", &buf)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/files/upload", &buf)
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
 	}
@@ -141,13 +219,20 @@ func (c *Client) UploadFile(user, fileName, mimeType string, data []byte) (strin
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		bodyBytes, readErr := readLimited(resp.Body, maxErrorResponseBytes)
+		if readErr != nil {
+			return "", readErr
+		}
 		return "", parseDifyErrorBody(resp.StatusCode, bodyBytes)
+	}
+	bodyBytes, err := readLimited(resp.Body, c.responseLimit())
+	if err != nil {
+		return "", err
 	}
 	var result struct {
 		ID string `json:"id"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(bodyBytes, &result); err != nil {
 		return "", fmt.Errorf("decode upload response: %w", err)
 	}
 	if result.ID == "" {
@@ -156,24 +241,34 @@ func (c *Client) UploadFile(user, fileName, mimeType string, data []byte) (strin
 	return result.ID, nil
 }
 
-// StreamWorkflow calls Dify Workflow API (/workflows/run) in streaming mode.
+// StreamWorkflow calls with a background context. Production request paths
+// should use StreamWorkflowContext.
 func (c *Client) StreamWorkflow(req *WorkflowRequest) (<-chan StreamEvent, <-chan error) {
-	eventCh := make(chan StreamEvent, 10)
+	return c.StreamWorkflowContext(context.Background(), req)
+}
+
+// StreamWorkflowContext calls Dify Workflow API in streaming mode.
+func (c *Client) StreamWorkflowContext(ctx context.Context, req *WorkflowRequest) (<-chan StreamEvent, <-chan error) {
+	eventCh := make(chan StreamEvent, 4)
 	errCh := make(chan error, 1)
 
 	go func() {
 		defer close(eventCh)
 		defer close(errCh)
-
-		body, err := json.Marshal(req)
-		if err != nil {
-			errCh <- fmt.Errorf("marshal request: %w", err)
+		if err := c.ready(); err != nil {
+			sendStreamError(ctx, errCh, err)
 			return
 		}
 
-		httpReq, err := http.NewRequest("POST", c.BaseURL+"/v1/workflows/run", bytes.NewReader(body))
+		body, err := json.Marshal(req)
 		if err != nil {
-			errCh <- fmt.Errorf("create request: %w", err)
+			sendStreamError(ctx, errCh, fmt.Errorf("marshal request: %w", err))
+			return
+		}
+
+		httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/workflows/run", bytes.NewReader(body))
+		if err != nil {
+			sendStreamError(ctx, errCh, fmt.Errorf("create request: %w", err))
 			return
 		}
 		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
@@ -182,31 +277,43 @@ func (c *Client) StreamWorkflow(req *WorkflowRequest) (<-chan StreamEvent, <-cha
 
 		resp, err := c.HTTPClient.Do(httpReq)
 		if err != nil {
-			errCh <- fmt.Errorf("http request: %w", err)
+			sendStreamError(ctx, errCh, fmt.Errorf("http request: %w", err))
 			return
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			errCh <- parseDifyErrorBody(resp.StatusCode, bodyBytes)
+			bodyBytes, readErr := readLimited(resp.Body, maxErrorResponseBytes)
+			if readErr != nil {
+				sendStreamError(ctx, errCh, readErr)
+				return
+			}
+			sendStreamError(ctx, errCh, parseDifyErrorBody(resp.StatusCode, bodyBytes))
 			return
 		}
 
-		parseSSE(resp.Body, eventCh, errCh, c.SSEBufferSize)
+		parseSSEContext(ctx, resp.Body, eventCh, errCh, c.SSEBufferSize, c.responseLimit())
 	}()
 
 	return eventCh, errCh
 }
 
-// BlockingWorkflow calls Dify Workflow API in blocking mode.
+// BlockingWorkflow calls with a background context. Production request paths
+// should use BlockingWorkflowContext.
 func (c *Client) BlockingWorkflow(req *WorkflowRequest) (string, error) {
+	return c.BlockingWorkflowContext(context.Background(), req)
+}
+
+func (c *Client) BlockingWorkflowContext(ctx context.Context, req *WorkflowRequest) (string, error) {
+	if err := c.ready(); err != nil {
+		return "", err
+	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return "", fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequest("POST", c.BaseURL+"/v1/workflows/run", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/workflows/run", bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
 	}
@@ -220,10 +327,17 @@ func (c *Client) BlockingWorkflow(req *WorkflowRequest) (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		bodyBytes, readErr := readLimited(resp.Body, maxErrorResponseBytes)
+		if readErr != nil {
+			return "", readErr
+		}
 		return "", parseDifyErrorBody(resp.StatusCode, bodyBytes)
 	}
 
+	bodyBytes, err := readLimited(resp.Body, c.responseLimit())
+	if err != nil {
+		return "", err
+	}
 	// Blocking workflow response
 	var result struct {
 		Data struct {
@@ -232,7 +346,7 @@ func (c *Client) BlockingWorkflow(req *WorkflowRequest) (string, error) {
 			Error   string                 `json:"error"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(bodyBytes, &result); err != nil {
 		return "", fmt.Errorf("decode response: %w", err)
 	}
 
@@ -264,9 +378,16 @@ func (c *Client) BlockingWorkflow(req *WorkflowRequest) (string, error) {
 // the App's input variables as a map of variable name -> required-by-App.
 // Used to validate an App against a service contract when users bind Apps.
 func (c *Client) FetchParameters() (map[string]bool, error) {
-	// Independent short timeout: the startup check must not hang on the
-	// (potentially very long) workflow timeout of the main HTTP client.
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	return c.FetchParametersContext(context.Background())
+}
+
+func (c *Client) FetchParametersContext(parent context.Context) (map[string]bool, error) {
+	if err := c.ready(); err != nil {
+		return nil, err
+	}
+	// Independent short timeout: App probes must not inherit the potentially
+	// very long workflow timeout, but caller cancellation still propagates.
+	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", c.BaseURL+"/v1/parameters", nil)
@@ -282,8 +403,15 @@ func (c *Client) FetchParameters() (map[string]bool, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		bodyBytes, readErr := readLimited(resp.Body, maxErrorResponseBytes)
+		if readErr != nil {
+			return nil, readErr
+		}
 		return nil, parseDifyErrorBody(resp.StatusCode, bodyBytes)
+	}
+	bodyBytes, err := readLimited(resp.Body, c.responseLimit())
+	if err != nil {
+		return nil, err
 	}
 
 	// user_input_form is a list of single-key objects:
@@ -291,7 +419,7 @@ func (c *Client) FetchParameters() (map[string]bool, error) {
 	var result struct {
 		UserInputForm []map[string]json.RawMessage `json:"user_input_form"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(bodyBytes, &result); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
@@ -341,35 +469,62 @@ func CheckApp(c *Client, expected []string) string {
 	return fmt.Sprintf("[app-check] MISMATCH: missing expected inputs %v; unexpected inputs %v", missing, unexpected)
 }
 
-// parseSSE reads Server-Sent Events from the response body and emits StreamEvents.
-// initialBuf is the initial scanner buffer size in bytes (<=0 means 1MB).
+// parseSSE is retained for focused parser tests. Production streams use the
+// context-aware implementation below.
 func parseSSE(r io.Reader, eventCh chan<- StreamEvent, errCh chan<- error, initialBuf int) {
-	if initialBuf <= 0 {
-		initialBuf = 1 * 1024 * 1024
-	}
-	scanner := bufio.NewScanner(r)
-	// Small initial buffer (grows on demand), 50MB max per SSE line.
-	scanner.Buffer(make([]byte, 0, initialBuf), 50*1024*1024)
+	parseSSEContext(context.Background(), r, eventCh, errCh, initialBuf, DefaultMaxResponseBytes)
+}
 
+func parseSSEContext(ctx context.Context, r io.Reader, eventCh chan<- StreamEvent, errCh chan<- error, initialBuf int, maxBytes int64) {
+	if maxBytes <= 0 {
+		maxBytes = DefaultMaxResponseBytes
+	}
+	lineLimit := int64(maxSSELineBytes)
+	if maxBytes < lineLimit {
+		lineLimit = maxBytes
+	}
+	if lineLimit < 64<<10 {
+		lineLimit = 64 << 10
+	}
+	if initialBuf <= 0 {
+		initialBuf = 1 << 20
+	}
+	if int64(initialBuf) > lineLimit {
+		initialBuf = int(lineLimit)
+	}
+
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, initialBuf), int(lineLimit))
+	var total int64
 	for scanner.Scan() {
 		line := scanner.Text()
-
-		if !strings.HasPrefix(line, "data: ") {
+		total += int64(len(line)) + 1
+		if total > maxBytes {
+			sendStreamError(ctx, errCh, &responseTooLargeError{limit: maxBytes})
+			return
+		}
+		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
-
-		payload := strings.TrimPrefix(line, "data: ")
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" {
+			continue
+		}
 
 		var evt StreamEvent
 		if err := json.Unmarshal([]byte(payload), &evt); err != nil {
-			continue
+			sendStreamError(ctx, errCh, fmt.Errorf("invalid Dify SSE JSON: %w", err))
+			return
 		}
-
-		eventCh <- evt
+		select {
+		case eventCh <- evt:
+		case <-ctx.Done():
+			return
+		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		errCh <- fmt.Errorf("sse scan error: %w", err)
+	if err := scanner.Err(); err != nil && ctx.Err() == nil {
+		sendStreamError(ctx, errCh, fmt.Errorf("sse scan error: %w", err))
 	}
 }
 
@@ -377,11 +532,18 @@ func parseSSE(r io.Reader, eventCh chan<- StreamEvent, errCh chan<- error, initi
 // This is a best-effort call (failures are returned but should not block the
 // caller's exit path).
 func (c *Client) StopWorkflow(taskID, user string) error {
+	return c.StopWorkflowContext(context.Background(), taskID, user)
+}
+
+func (c *Client) StopWorkflowContext(ctx context.Context, taskID, user string) error {
+	if err := c.ready(); err != nil {
+		return err
+	}
 	body, err := json.Marshal(map[string]string{"user": user})
 	if err != nil {
 		return fmt.Errorf("marshal stop request: %w", err)
 	}
-	httpReq, err := http.NewRequest("POST", c.BaseURL+"/v1/workflows/tasks/"+taskID+"/stop", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/workflows/tasks/"+taskID+"/stop", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create stop request: %w", err)
 	}
@@ -395,14 +557,21 @@ func (c *Client) StopWorkflow(taskID, user string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		bodyBytes, readErr := readLimited(resp.Body, maxErrorResponseBytes)
+		if readErr != nil {
+			return readErr
+		}
 		return parseDifyErrorBody(resp.StatusCode, bodyBytes)
 	}
 
+	bodyBytes, err := readLimited(resp.Body, c.responseLimit())
+	if err != nil {
+		return err
+	}
 	var result struct {
 		Result string `json:"result"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(bodyBytes, &result); err != nil {
 		return fmt.Errorf("decode stop response: %w", err)
 	}
 	if result.Result != "success" {

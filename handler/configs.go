@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,7 +10,6 @@ import (
 	"time"
 
 	"dify2api/db"
-	"dify2api/dify"
 	"dify2api/translator"
 )
 
@@ -29,10 +29,18 @@ func appConfigJSON(c *db.AppConfig) map[string]interface{} {
 
 // checkAppBinding fetches the App's parameter list and validates it against
 // the service contract of the model's prefix. Informational only (never blocks).
-func (g *Gateway) checkAppBinding(model, baseURL, apiKey string) map[string]interface{} {
+func (g *Gateway) checkAppBinding(ctx context.Context, model, baseURL, apiKey string) map[string]interface{} {
 	service := translator.ServiceOfModel(model)
-	client := dify.NewClient(baseURL, apiKey, 15*time.Second)
-	params, err := client.FetchParameters()
+	release, err := g.acquireDifyProbe(ctx)
+	if err != nil {
+		return map[string]interface{}{"service": service, "error": err.Error()}
+	}
+	defer release()
+	client, err := g.newDifyClient(baseURL, apiKey, 15*time.Second)
+	if err != nil {
+		return map[string]interface{}{"service": service, "error": err.Error()}
+	}
+	params, err := client.FetchParametersContext(ctx)
 	if err != nil {
 		return map[string]interface{}{"service": service, "error": err.Error()}
 	}
@@ -81,7 +89,7 @@ type configRequest struct {
 	Note    string `json:"note"`
 }
 
-func (req *configRequest) validate() string {
+func (req *configRequest) validate(g *Gateway) string {
 	req.Model = strings.TrimSpace(req.Model)
 	req.BaseURL = strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")
 	req.APIKey = strings.TrimSpace(req.APIKey)
@@ -116,9 +124,11 @@ func (req *configRequest) validate() string {
 		}
 		return fmt.Sprintf("不支持的服务 %q；当前支持：%s", svc, strings.Join(names, "，"))
 	}
-	if req.BaseURL == "" || !(strings.HasPrefix(req.BaseURL, "http://") || strings.HasPrefix(req.BaseURL, "https://")) {
-		return "dify_base_url must be a non-empty http(s) URL"
+	normalizedBaseURL, err := g.difyPolicy.ValidateBaseURL(req.BaseURL)
+	if err != nil {
+		return "dify_base_url is not allowed: " + err.Error()
 	}
+	req.BaseURL = normalizedBaseURL
 	if req.APIKey == "" {
 		return "dify_api_key is required"
 	}
@@ -151,7 +161,7 @@ func (g *Gateway) handleCreateConfig(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
 		return
 	}
-	if msg := req.validate(); msg != "" {
+	if msg := req.validate(g); msg != "" {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", msg)
 		return
 	}
@@ -170,7 +180,7 @@ func (g *Gateway) handleCreateConfig(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"ok":        true,
 		"config":    appConfigJSON(cfg),
-		"app_check": g.checkAppBinding(req.Model, req.BaseURL, req.APIKey),
+		"app_check": g.checkAppBinding(r.Context(), req.Model, req.BaseURL, req.APIKey),
 	})
 }
 
@@ -191,7 +201,7 @@ func (g *Gateway) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
 		return
 	}
-	if msg := req.validate(); msg != "" {
+	if msg := req.validate(g); msg != "" {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", msg)
 		return
 	}
@@ -214,7 +224,7 @@ func (g *Gateway) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"ok":        true,
 		"config":    appConfigJSON(cfg),
-		"app_check": g.checkAppBinding(req.Model, req.BaseURL, req.APIKey),
+		"app_check": g.checkAppBinding(r.Context(), req.Model, req.BaseURL, req.APIKey),
 	})
 }
 

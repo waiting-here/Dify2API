@@ -65,9 +65,12 @@ func main() {
 			log.Printf("  ⚠️  CREDITS_LOGO_PATH points to a non-existent file: %s (logo will not display)", cfg.CreditsLogoPath)
 		}
 	}
-	log.Printf("  Limits: chat_in_flight=%d chat_body=%dMiB web_body=%dKiB sse_buffer=%dMiB login_lock=%dmin",
-		cfg.MaxChatInFlight, cfg.MaxRequestBodyMB, cfg.MaxWebRequestBodyKB, cfg.SSEBufferMB, cfg.LoginLockMin)
+	log.Printf("  Limits: chat_in_flight=%d chat_body=%dMiB web_body=%dKiB dify_response=%dMiB sse_buffer=%dMiB probes=%d login_lock=%dmin",
+		cfg.MaxChatInFlight, cfg.MaxRequestBodyMB, cfg.MaxWebRequestBodyKB, cfg.DifyMaxResponseMB,
+		cfg.SSEBufferMB, cfg.DifyProbeInFlight, cfg.LoginLockMin)
 	log.Printf("  Trusted proxy CIDRs: %v", cfg.TrustedProxyCIDRs)
+	log.Printf("  Private Dify egress allowlist: %v", cfg.DifyEgressAllowlist)
+	log.Printf("  Remote content origin allowlist: %v", cfg.RemoteContentOriginAllowlist)
 	if cfg.ForceHTTPS {
 		log.Printf("  HTTPS enforcement: ON (plain HTTP will be redirected to HTTPS)")
 	} else {
