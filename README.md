@@ -126,7 +126,9 @@ curl https://dify2api.example.com/v1/models \
 - **备份与权限**：数据库和 master key 缺一不可。建议独立低权限账号、`umask 077`、
   目录 `0700`、配置/数据库/key `0600`，并定期做恢复演练。
 - **出站防护**：Dify 默认只能解析到公网地址；阻断 loopback、私网、link-local、metadata、
-  DNS rebinding、跨 origin 重定向和环境代理。私网访问只能由部署者显式允许。
+  DNS rebinding、跨 origin 重定向和环境代理。私网访问只能由部署者以精确 origin 显式允许；
+  网关自身的 `SITE_BASE_URL`/`ADMIN_HOST` 与 loopback 监听端口即使在 allowlist 中也永久拒绝，
+  且阻断无文本/时序侧信道。
 - **请求生命周期**：下游断开会取消上游请求，并用独立短 context 尝试 Dify Stop；
   请求体、解压后响应、SSE 累计字节、探测并发和总聊天并发均有硬上限。
 - **公益结算**：出站前在单个 SQLite 事务中预留捐赠次数并扣消费者积分；成功幂等结算
@@ -138,7 +140,8 @@ curl https://dify2api.example.com/v1/models \
 - **数据权利**：用户可导出完整个人数据（包括解密后的自有凭据和公益结算记录）或删除账号；
   导出文件响应使用 `no-store`，应视为高敏感文件。
 - **调试**：管理员 `-debug` 会把原始请求落盘，禁止在公网常开；用户自助 debug 使用内存 SSE，
-  dry-run 默认不转发，断开后有清理宽限期。
+  捕获内容按 64/256 KiB 截断且不含认证类 Header，「发送到 Dify」开关直接表示是否真实转发
+  （默认演习模式），断开后有清理宽限期。
 - **法律页面**：`/privacy`、`/terms` 支持 `?lang=en|zh` 或用户语言偏好；未登录默认中文，
   不直接按页面请求的 `Accept-Language` 切换。部署前必须审核模板并配置真实举报邮箱。
 
