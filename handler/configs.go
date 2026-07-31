@@ -208,8 +208,8 @@ func (g *Gateway) selfSiteNotice(r *http.Request, baseURL string) string {
 		return ""
 	}
 	return t(g.resolveLang(r),
-		"提示：这个地址看起来是本站（Dify2API 控制台）的地址，不是你的 Dify App 的 API 端点。请填写你自己的 Dify 应用地址，例如 https://your-dify.example.com/v1",
-		"Hint: this address looks like this site (the Dify2API console), not your Dify App's API endpoint. Please enter your own Dify App URL, e.g. https://your-dify.example.com/v1")
+		"提示：这个地址看起来是本站（Dify2API 控制台）的地址，不是你的 Dify App 的 API 端点。请填写你自己的 Dify 应用地址，例如 https://api.dify.ai/v1",
+		"Hint: this address looks like this site (the Dify2API console), not your Dify App's API endpoint. Please enter your own Dify App URL, e.g. https://api.dify.ai/v1")
 }
 
 // --- POST /api/configs ---
