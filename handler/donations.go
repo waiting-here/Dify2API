@@ -1246,12 +1246,16 @@ func (g *Gateway) handleCreateDonationApp(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	resp := map[string]interface{}{
 		"ok":          true,
 		"application": applicationJSON(app),
 		"validation":  g.validateDonationApp(r.Context(), u.ID, req.Service, req.DifyBaseURL, req.DifyAPIKey),
-	})
+	}
+	if n := g.selfSiteNotice(r, req.DifyBaseURL); n != "" {
+		resp["notice"] = n
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 // GET /api/me/donations — returns the user's own applications.

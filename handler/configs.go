@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -189,6 +190,28 @@ func (g *Gateway) handleListServices(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"services": translator.SupportedServices()})
 }
 
+// selfSiteNotice returns a localized hint when a Dify base URL points at the
+// gateway's own sites (SITE_BASE_URL / ADMIN_HOST hostname). Novice users
+// sometimes paste this site's address into the App API endpoint field instead
+// of their own Dify App URL. Informational only — the config is still saved;
+// only public hostnames are compared, so the hint adds no egress side channel
+// (the dial-time self-origin guard remains the only enforcement).
+func (g *Gateway) selfSiteNotice(r *http.Request, baseURL string) string {
+	u, err := url.Parse(baseURL)
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	site := strings.ToLower(strings.TrimSuffix(stripPort(g.Config.Admin.SiteHost), "."))
+	admin := strings.ToLower(strings.TrimSuffix(stripPort(g.Config.Admin.AdminHost), "."))
+	if host != site && host != admin {
+		return ""
+	}
+	return t(g.resolveLang(r),
+		"提示：这个地址看起来是本站（Dify2API 控制台）的地址，不是你的 Dify App 的 API 端点。请填写你自己的 Dify 应用地址，例如 https://your-dify.example.com/v1",
+		"Hint: this address looks like this site (the Dify2API console), not your Dify App's API endpoint. Please enter your own Dify App URL, e.g. https://your-dify.example.com/v1")
+}
+
 // --- POST /api/configs ---
 // Creates a config, then validates the App's parameter list against the
 // service contract (informational verdict in "app_check"; never blocks).
@@ -218,12 +241,16 @@ func (g *Gateway) handleCreateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	resp := map[string]interface{}{
 		"ok":        true,
 		"config":    appConfigJSON(cfg),
 		"app_check": g.checkAppBinding(r.Context(), u.ID, req.Model, req.BaseURL, req.APIKey),
-	})
+	}
+	if n := g.selfSiteNotice(r, req.BaseURL); n != "" {
+		resp["notice"] = n
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 // --- PUT /api/configs/{id} ---
@@ -272,6 +299,9 @@ func (g *Gateway) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if !g.bindingUnchanged(existing, &req) {
 		resp["app_check"] = g.checkAppBinding(r.Context(), u.ID, req.Model, req.BaseURL, req.APIKey)
+	}
+	if n := g.selfSiteNotice(r, req.BaseURL); n != "" {
+		resp["notice"] = n
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)

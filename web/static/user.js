@@ -815,7 +815,7 @@ async function renderMyDonations() {
       msg.textContent = T('loading');
       try {
         const rpmLimit = parseInt(f.rpm_limit.value, 10) || 0;
-        await api("/api/me/donations", {
+        const resp = await api("/api/me/donations", {
           method: "POST",
           body: {
             service: f.service.value,
@@ -828,10 +828,16 @@ async function renderMyDonations() {
             note: f.note.value.trim(),
           },
         });
+        f.reset();
+        if (resp.notice) {
+          // Keep the form visible so the user can fix the address.
+          msg.innerHTML = `<div class="note warn">⚠ ${esc(resp.notice)}</div>`;
+          await renderMyDonations();
+          return;
+        }
         msg.textContent = "";
         toast(T('donationApplySubmitted'));
         form.style.display = "none";
-        f.reset();
         await renderMyDonations();
       } catch (err) {
         msg.textContent = T('error').replace("{msg}", err.message);
@@ -985,6 +991,12 @@ async function showConfigEditDialog(c) {
         html = `${T('checkSkipped')}`;
       }
       msg.innerHTML = `<div class="note ${cls}">${html}</div>`;
+      if (resp.notice) {
+        // Keep the dialog open so the user reads the hint before closing.
+        msg.innerHTML += `<div class="note warn" style="margin-top:.4rem">⚠ ${esc(resp.notice)}</div>`;
+        await loadConfigs();
+        return;
+      }
       await loadConfigs();
       close();
     } catch (err) {
@@ -1026,6 +1038,9 @@ async function onConfigSubmit(e) {
       html = `${T('checkSkipped')}`;
     }
     note.innerHTML = `<div class="note ${cls}">${html}</div>`;
+    if (resp.notice) {
+      note.innerHTML += `<div class="note warn" style="margin-top:.4rem">⚠ ${esc(resp.notice)}</div>`;
+    }
     await loadConfigs();
   } catch (err) {
     note.innerHTML = `<div class="note err">${T('error').replace("{msg}", esc(err.message))}</div>`;

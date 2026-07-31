@@ -320,3 +320,75 @@ func TestUpdateConfig_SkipsProbeWhenBindingUnchanged(t *testing.T) {
 		t.Error("base URL change should probe")
 	}
 }
+
+func TestConfig_AndDonationApply_SelfSiteURLNotice(t *testing.T) {
+	// Novice users sometimes paste this site's own address into the App API
+	// endpoint field. The API must return a friendly notice (config still
+	// saved, never a rejection) for the site's own hostname, and no notice
+	// for unrelated public origins.
+	gw, store := setupAuthGateway(t, "s3cret")
+	store.SetSetting(db.SettingDonationEnabled, "true")
+	// Fixture SITE_BASE_URL is http://localhost:10086; allowlist it so the
+	// save path is identical to any other public origin (the dial-time
+	// self guard still refuses it, which is fine — the notice is about UX).
+	allowDifyTestOrigin(t, gw, "http://localhost:10086")
+
+	u, _ := store.CreateUser("42", "tester", "")
+	token, _, _ := store.CreateSession(u.ID)
+	cookie := &http.Cookie{Name: "dify2api_session", Value: token}
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	post := func(path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(cookie)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+	noticeOf := func(rec *httptest.ResponseRecorder) string {
+		var body struct {
+			Notice string `json:"notice"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return body.Notice
+	}
+
+	// 1. Config create: site's own address (with and without /v1) -> notice.
+	for i, bad := range []string{"http://localhost:10086", "http://localhost:10086/v1"} {
+		rec := post("/api/configs", fmt.Sprintf(`{"model":"[general]self-%d","dify_base_url":%q,"dify_api_key":"k"}`, i, bad))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("self URL create: status %d, body %s", rec.Code, rec.Body.String())
+		}
+		if n := noticeOf(rec); n == "" {
+			t.Errorf("base URL %q should carry a self-site notice", bad)
+		}
+	}
+	// 2. Config create: normal public origin -> no notice.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"user_input_form":[{"paragraph":{"variable":"user_0","required":true}}]}`)
+	}))
+	defer srv.Close()
+	// allowDifyTestOrigin REPLACES the policy, so re-add the site origin too.
+	allowDifyTestOrigin(t, gw, srv.URL, "http://localhost:10086")
+	rec := post("/api/configs", fmt.Sprintf(`{"model":"[general]normal","dify_base_url":%q,"dify_api_key":"k"}`, srv.URL))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("normal URL create: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	if n := noticeOf(rec); n != "" {
+		t.Errorf("normal origin should carry no notice, got %q", n)
+	}
+
+	// 3. Donation application: site's own address -> notice; still accepted.
+	rec = post("/api/me/donations", fmt.Sprintf(`{"service":"general","model":"self-don","dify_base_url":%q,"dify_api_key":"k","deadline":%d,"total_count":10}`,
+		"http://localhost:10086/v1", time.Now().Add(48*time.Hour).Unix()))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("self URL donation: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	if n := noticeOf(rec); n == "" {
+		t.Error("self-URL donation application should carry a notice")
+	}
+}
