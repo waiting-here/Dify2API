@@ -182,6 +182,7 @@ func (g *Gateway) handleAdminGetSettings(w http.ResponseWriter, r *http.Request)
 		"rpm_limit_c":           g.Store.GetSettingInt(db.SettingRPMLimitC, db.DefaultRPMLimitC),
 		"rpm_violation_limit":   g.Store.GetSettingInt(db.SettingRPMViolationLimit, db.DefaultRPMViolationLimit),
 		"rpm_ban_hours":         g.Store.GetSettingInt(db.SettingRPMBanHours, db.DefaultRPMBanHours),
+		"probe_limit_per_user":  g.Store.GetSettingInt(db.SettingProbeLimitPerUser, db.DefaultProbeLimitPerUser),
 		"checkin_min":           g.Store.GetSettingInt(db.SettingCheckinMin, db.DefaultCheckinMin),
 		"checkin_max":           g.Store.GetSettingInt(db.SettingCheckinMax, db.DefaultCheckinMax),
 		"credits_cap":           g.Store.GetSettingIntAllowZero(db.SettingCreditsCap, db.DefaultCreditsCap),
@@ -208,6 +209,7 @@ func (g *Gateway) handleAdminPutSettings(w http.ResponseWriter, r *http.Request)
 		RPMLimitC           *int   `json:"rpm_limit_c"`
 		RPMViolationLimit   *int   `json:"rpm_violation_limit"`
 		RPMBanHours         *int   `json:"rpm_ban_hours"`
+		ProbeLimitPerUser   *int   `json:"probe_limit_per_user"`
 		CheckinMin          *int   `json:"checkin_min"`
 		CheckinMax          *int   `json:"checkin_max"`
 		CreditsCap          *int   `json:"credits_cap"`
@@ -240,6 +242,7 @@ func (g *Gateway) handleAdminPutSettings(w http.ResponseWriter, r *http.Request)
 		{req.RPMLimitC, db.SettingRPMLimitC},
 		{req.RPMViolationLimit, db.SettingRPMViolationLimit},
 		{req.RPMBanHours, db.SettingRPMBanHours},
+		{req.ProbeLimitPerUser, db.SettingProbeLimitPerUser},
 	} {
 		if f.val == nil {
 			continue

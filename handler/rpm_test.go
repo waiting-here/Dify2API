@@ -309,7 +309,7 @@ func TestAdminSettings_RPMTunablesRoundtrip(t *testing.T) {
 	adminCookie := loginCookie(t, gw, "root", "s3cret")
 
 	rec := adminPut(gw, adminCookie, "/api/admin/settings",
-		`{"guild_id":"g","role_id":"r","rpm_limit_a":7,"rpm_limit_b":14,"rpm_limit_c":21,"rpm_violation_limit":3,"rpm_ban_hours":48}`)
+		`{"guild_id":"g","role_id":"r","rpm_limit_a":7,"rpm_limit_b":14,"rpm_limit_c":21,"rpm_violation_limit":3,"rpm_ban_hours":48,"probe_limit_per_user":4}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT settings: %d, body %s", rec.Code, rec.Body.String())
 	}
@@ -323,6 +323,7 @@ func TestAdminSettings_RPMTunablesRoundtrip(t *testing.T) {
 	for k, want := range map[string]float64{
 		"rpm_limit_a": 7, "rpm_limit_b": 14, "rpm_limit_c": 21,
 		"rpm_violation_limit": 3, "rpm_ban_hours": 48,
+		"probe_limit_per_user": 4,
 	} {
 		if got[k] != want {
 			t.Errorf("%s = %v, want %v", k, got[k], want)
@@ -333,6 +334,10 @@ func TestAdminSettings_RPMTunablesRoundtrip(t *testing.T) {
 	rec = adminPut(gw, adminCookie, "/api/admin/settings", `{"guild_id":"g","role_id":"r","rpm_limit_a":0}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("rpm_limit_a=0: status %d, want 400", rec.Code)
+	}
+	rec = adminPut(gw, adminCookie, "/api/admin/settings", `{"probe_limit_per_user":0}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("probe_limit_per_user=0: status %d, want 400", rec.Code)
 	}
 }
 
@@ -346,6 +351,7 @@ func TestAdminSettings_DefaultsWhenUnset(t *testing.T) {
 	for k, want := range map[string]float64{
 		"rpm_limit_a": 6, "rpm_limit_b": 12, "rpm_limit_c": 18,
 		"rpm_violation_limit": 5, "rpm_ban_hours": 24,
+		"probe_limit_per_user": 5,
 	} {
 		if got[k] != want {
 			t.Errorf("default %s = %v, want %v", k, got[k], want)

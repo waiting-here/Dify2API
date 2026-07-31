@@ -14,30 +14,30 @@ const defaultProbeLimitPerUser = 5
 // Pure in-memory: counters reset on restart (acceptable — windows are short
 // and the check is informational only). Fully-expired user entries are
 // pruned on access, and a periodic sweep bounds memory when many distinct
-// users probe once and never come back.
+// users probe once and never come back. The limit is supplied per call so
+// an admin-tunable setting takes effect immediately without restart.
 type probeLimiter struct {
 	mu        sync.Mutex
 	hits      map[int64][]int64 // userID -> unix seconds of accepted probes
-	limit     int
 	windowSec int64
 	lastSweep time.Time
 }
 
-func newProbeLimiter(limit int) *probeLimiter {
-	if limit <= 0 {
-		limit = defaultProbeLimitPerUser
-	}
+func newProbeLimiter() *probeLimiter {
 	return &probeLimiter{
 		hits:      make(map[int64][]int64),
-		limit:     limit,
 		windowSec: 60,
 	}
 }
 
 // allow records one probe attempt for the user and reports whether it is
-// under the cap. Attempts count even when the probe later fails (they cost
-// a semaphore slot and a dial); denied attempts are not recorded.
-func (l *probeLimiter) allow(userID int64, now time.Time) bool {
+// under the given cap (a limit <= 0 falls back to the default). Attempts
+// count even when the probe later fails (they cost a semaphore slot and a
+// dial); denied attempts are not recorded.
+func (l *probeLimiter) allow(userID int64, limit int, now time.Time) bool {
+	if limit <= 0 {
+		limit = defaultProbeLimitPerUser
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	cutoff := now.Unix() - l.windowSec
@@ -48,7 +48,7 @@ func (l *probeLimiter) allow(userID int64, now time.Time) bool {
 			keep = append(keep, t)
 		}
 	}
-	if len(keep) >= l.limit {
+	if len(keep) >= limit {
 		if len(keep) > 0 {
 			l.hits[userID] = keep
 		} else {

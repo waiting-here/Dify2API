@@ -18,9 +18,11 @@ const (
 	SettingRPMLimitC         = "rpm_limit_c"         // class C: request received (default 18)
 	SettingRPMViolationLimit = "rpm_violation_limit" // violations before auto-ban (default 5)
 	SettingRPMBanHours       = "rpm_ban_hours"       // auto-ban duration in hours (default 24)
-	SettingCheckinMin        = "checkin_min"         // check-in credit lower bound (default 45)
-	SettingCheckinMax        = "checkin_max"         // check-in credit upper bound (default 55)
-	SettingCreditsCap        = "credits_cap"         // check-in credits ceiling (default 250)
+	// App probe per-user cap (per-minute sliding window; admin-tunable).
+	SettingProbeLimitPerUser = "probe_limit_per_user" // Dify compatibility probes per user per minute (default 5)
+	SettingCheckinMin        = "checkin_min"          // check-in credit lower bound (default 45)
+	SettingCheckinMax        = "checkin_max"          // check-in credit upper bound (default 55)
+	SettingCreditsCap        = "credits_cap"          // check-in credits ceiling (default 250)
 	// alpha.3 — tunable thresholds.
 	SettingDonationFailLimit = "donation_fail_limit" // consecutive failures before auto-inactive (default 10)
 	SettingMailerCoolMinutes = "mailer_cool_minutes" // email aggregation window in minutes (default 10)
@@ -40,6 +42,9 @@ const (
 	DefaultRPMViolationLimit = 5  // violations within 24h before auto-ban
 	DefaultRPMBanHours       = 24 // auto-ban duration in hours
 )
+
+// Global default for the App probe per-user cap.
+const DefaultProbeLimitPerUser = 5
 
 // Global defaults for the check-in system (alpha.3 F2).
 const (

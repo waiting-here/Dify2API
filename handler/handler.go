@@ -98,7 +98,7 @@ func NewGateway(cfg *config.Config, store *db.Store) *Gateway {
 		donationLimiter:      newDonationRateLimiter(),
 		difyPolicy:           difyPolicy,
 		difyProbeSem:         make(chan struct{}, probeLimit),
-		probeLimiter:         newProbeLimiter(defaultProbeLimitPerUser),
+		probeLimiter:         newProbeLimiter(),
 		remoteContentOrigins: remoteOrigins,
 	}
 	if err := gw.loadAntiAbuseCache(); err != nil {

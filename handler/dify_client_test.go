@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"dify2api/db"
 	"dify2api/dify"
 )
 
@@ -61,14 +62,14 @@ func TestDifyProbeSemaphoreHonorsCancellation(t *testing.T) {
 }
 
 func TestProbeLimiter_SlidingWindow(t *testing.T) {
-	l := newProbeLimiter(5)
+	l := newProbeLimiter()
 	now := time.Unix(1_700_000_000, 0)
 	for i := 0; i < 5; i++ {
-		if !l.allow(1, now) {
+		if !l.allow(1, 5, now) {
 			t.Fatalf("hit %d should be allowed", i+1)
 		}
 	}
-	if l.allow(1, now) {
+	if l.allow(1, 5, now) {
 		t.Fatal("6th hit in the same window should be denied")
 	}
 	// Denied attempts are not recorded.
@@ -79,32 +80,73 @@ func TestProbeLimiter_SlidingWindow(t *testing.T) {
 		t.Fatalf("denied attempt must not be recorded, got %d hits", n)
 	}
 	// A different user has its own budget.
-	if !l.allow(2, now) {
+	if !l.allow(2, 5, now) {
 		t.Fatal("per-user budgets must be isolated")
 	}
 	// The window slides: 60s later the budget refills.
-	if !l.allow(1, now.Add(60*time.Second)) {
+	if !l.allow(1, 5, now.Add(60*time.Second)) {
 		t.Fatal("budget should refill after the window")
+	}
+	// The limit is taken per call: a raised cap applies immediately.
+	for i := 0; i < 5; i++ {
+		if !l.allow(1, 10, now.Add(120*time.Second)) {
+			t.Fatalf("raised-cap hit %d should be allowed", i+1)
+		}
+	}
+	if l.allow(1, 5, now.Add(120*time.Second)) {
+		t.Fatal("original cap must still apply for a lowered limit")
+	}
+	// A non-positive limit falls back to the default.
+	l2 := newProbeLimiter()
+	for i := 0; i < defaultProbeLimitPerUser; i++ {
+		if !l2.allow(3, 0, now) {
+			t.Fatalf("default-cap hit %d should be allowed", i+1)
+		}
+	}
+	if l2.allow(3, 0, now) {
+		t.Fatal("default cap should deny over-limit attempts")
 	}
 }
 
 func TestProbeLimiter_SweepDropsExpiredUsers(t *testing.T) {
-	l := newProbeLimiter(5)
+	l := newProbeLimiter()
 	now := time.Unix(1_700_000_000, 0)
 	for uid := int64(1); uid <= 1200; uid++ {
-		if !l.allow(uid, now) {
+		if !l.allow(uid, 5, now) {
 			t.Fatalf("user %d should be allowed", uid)
 		}
 	}
 	// All entries are expired 61s later; the next allow triggers the sweep
 	// (map > 1024 entries, sweep cooldown elapsed).
-	if !l.allow(1, now.Add(61*time.Second)) {
+	if !l.allow(1, 5, now.Add(61*time.Second)) {
 		t.Fatal("refreshed user should be allowed")
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if len(l.hits) != 1 {
 		t.Fatalf("sweep should drop expired users, got %d entries", len(l.hits))
+	}
+}
+
+func TestCheckAppBinding_RateLimitFollowsSetting(t *testing.T) {
+	gw := setupTestGateway(t)
+	allowDifyTestOrigin(t, gw, "http://127.0.0.1:1")
+	// Admin lowers the per-user probe cap to 2; the limiter must pick it up
+	// on the next call (no restart).
+	if err := gw.Store.SetSetting(db.SettingProbeLimitPerUser, "2"); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		check := gw.checkAppBinding(ctx, 43, "[general]x", "http://127.0.0.1:1", "k")
+		msg, _ := check["error"].(string)
+		if msg == "rate limited, try again later" {
+			t.Fatalf("probe %d should pass the lowered cap, got %v", i+1, check)
+		}
+	}
+	check := gw.checkAppBinding(ctx, 43, "[general]x", "http://127.0.0.1:1", "k")
+	if check["error"] != "rate limited, try again later" {
+		t.Fatalf("3rd probe should be rate limited by the setting, got %v", check)
 	}
 }
 

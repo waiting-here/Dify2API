@@ -261,6 +261,7 @@ async function renderAdminDashboard() {
             <div style="display:flex;flex-wrap:wrap;gap:.75rem;margin-top:.25rem">
               <label style="flex:1 1 12rem">${T('rpmViolationLimit')}<input name="rpm_violation_limit" type="number" min="1" required></label>
               <label style="flex:1 1 12rem">${T('rpmBanHours')}<input name="rpm_ban_hours" type="number" min="1" required></label>
+              <label style="flex:1 1 12rem">${T('probeLimitPerUser')}<input name="probe_limit_per_user" type="number" min="1" required></label>
             </div>
           </fieldset>
           <fieldset>
@@ -500,6 +501,7 @@ async function renderAdminDashboard() {
   sf.rpm_limit_c.value = s.rpm_limit_c;
   sf.rpm_violation_limit.value = s.rpm_violation_limit;
   sf.rpm_ban_hours.value = s.rpm_ban_hours;
+  sf.probe_limit_per_user.value = s.probe_limit_per_user;
   sf.checkin_min.value = s.checkin_min;
   sf.checkin_max.value = s.checkin_max;
   sf.credits_cap.value = s.credits_cap;
@@ -519,6 +521,7 @@ async function renderAdminDashboard() {
       rpm_limit_c: parseInt(sf.rpm_limit_c.value, 10),
       rpm_violation_limit: parseInt(sf.rpm_violation_limit.value, 10),
       rpm_ban_hours: parseInt(sf.rpm_ban_hours.value, 10),
+      probe_limit_per_user: parseInt(sf.probe_limit_per_user.value, 10),
       checkin_min: parseInt(sf.checkin_min.value, 10),
       checkin_max: parseInt(sf.checkin_max.value, 10),
       credits_cap: parseInt(sf.credits_cap.value, 10) || 0,

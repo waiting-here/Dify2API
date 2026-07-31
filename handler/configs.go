@@ -41,8 +41,10 @@ const appProbeTimeout = 15 * time.Second
 func (g *Gateway) checkAppBinding(ctx context.Context, userID int64, model, baseURL, apiKey string) map[string]interface{} {
 	service := translator.ServiceOfModel(model)
 	// Per-user cap first: a rate-limited attempt must not consume a global
-	// semaphore slot (nor wait for one).
-	if !g.probeLimiter.allow(userID, time.Now()) {
+	// semaphore slot (nor wait for one). The cap is admin-tunable via the
+	// probe_limit_per_user setting; <=0 falls back to the default.
+	limit := g.Store.GetSettingInt(db.SettingProbeLimitPerUser, db.DefaultProbeLimitPerUser)
+	if !g.probeLimiter.allow(userID, limit, time.Now()) {
 		return map[string]interface{}{"service": service, "error": "rate limited, try again later"}
 	}
 	// Single total deadline for the whole probe (queueing included). The
