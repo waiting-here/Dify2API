@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -574,4 +575,61 @@ func TestDebugAbuse_WindowExpiry(t *testing.T) {
 		t.Fatal("old timestamp outside window should be cleaned, not trigger abuse")
 	}
 	go drainDebugChan(ch)
+}
+
+func TestUserDebugHub_ConcurrentPushStopAndReplace(t *testing.T) {
+	hub := newUserDebugHub()
+	const userID = int64(99)
+	hub.start(userID, true)
+
+	var wg sync.WaitGroup
+	for worker := 0; worker < 8; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 500; i++ {
+				hub.push(userID, debugEvent{Event: "request"})
+				_ = hub.isActive(userID)
+				_ = hub.isDryRun(userID)
+				hub.setDryRun(userID, i%2 == 0)
+			}
+		}()
+	}
+	for i := 0; i < 100; i++ {
+		hub.stop(userID)
+		hub.start(userID, i%2 == 0)
+	}
+	wg.Wait()
+	hub.stop(userID)
+}
+
+func TestUserDebugHub_ReconnectAndReplacementInvalidateCleanup(t *testing.T) {
+	hub := newUserDebugHub()
+	const userID = int64(100)
+	hub.start(userID, true)
+
+	first, firstEpoch, ok := hub.attachStream(userID)
+	if !ok {
+		t.Fatal("first stream did not attach")
+	}
+	hub.closeAfter(userID, first, firstEpoch, 10*time.Millisecond)
+	if _, _, ok := hub.attachStream(userID); !ok {
+		t.Fatal("reconnecting stream did not attach")
+	}
+	time.Sleep(25 * time.Millisecond)
+	if !hub.isActive(userID) {
+		t.Fatal("old stream timer closed a reconnected session")
+	}
+
+	current, epoch, _ := hub.attachStream(userID)
+	hub.closeAfter(userID, current, epoch, 10*time.Millisecond)
+	hub.start(userID, false) // replacement must not be closed by old timer
+	time.Sleep(25 * time.Millisecond)
+	if !hub.isActive(userID) {
+		t.Fatal("old stream timer closed a replacement session")
+	}
+	if hub.isDryRun(userID) {
+		t.Fatal("replacement session state was not preserved")
+	}
+	hub.stop(userID)
 }

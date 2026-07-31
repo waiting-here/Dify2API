@@ -15,20 +15,21 @@ import (
 
 const (
 	debugAbuseWindow    = 10 * time.Minute // detection window
-	debugAbuseThreshold = 5                 // trigger alert when session count exceeds this
+	debugAbuseThreshold = 5                // trigger alert when session count exceeds this
+	debugGracePeriod    = 30 * time.Second // reconnect window after SSE disconnect
 )
 
 // ---- types ----
 
 // debugEvent is pushed to the user's SSE stream for each intercepted request.
 type debugEvent struct {
-	Event         string               `json:"event"` // always "request"
-	Timestamp     int64                `json:"timestamp"`
-	Request       debugReqData         `json:"request"`
-	Inputs        map[string]any       `json:"dify_inputs"`
-	Response      *debugRespData       `json:"response"`
-	Error         string               `json:"error,omitempty"`
-	MessageLayout []debugMessageSlot   `json:"message_layout,omitempty"`
+	Event         string             `json:"event"` // always "request"
+	Timestamp     int64              `json:"timestamp"`
+	Request       debugReqData       `json:"request"`
+	Inputs        map[string]any     `json:"dify_inputs"`
+	Response      *debugRespData     `json:"response"`
+	Error         string             `json:"error,omitempty"`
+	MessageLayout []debugMessageSlot `json:"message_layout,omitempty"`
 }
 
 // debugMessageSlot describes one message position as parsed by the translator.
@@ -52,11 +53,11 @@ type debugRespData struct {
 
 // userDebugSession represents one user's active debug session.
 type userDebugSession struct {
-	ch        chan debugEvent
-	dryRun    bool
-	active    bool
-	createdAt time.Time
-	mu        sync.Mutex
+	ch          chan debugEvent
+	dryRun      bool
+	active      bool
+	streamEpoch uint64
+	mu          sync.Mutex
 }
 
 // userDebugHub manages all per-user debug sessions.
@@ -100,23 +101,24 @@ func (h *userDebugHub) start(userID int64, dryRun bool) (chan debugEvent, bool) 
 	}
 
 	if old, ok := h.sessions[userID]; ok {
-		// Push a "replaced" event so the old SSE consumer can close gracefully.
-		select {
-		case old.ch <- debugEvent{Event: "replaced", Timestamp: time.Now().Unix()}:
-		default:
-		}
 		old.mu.Lock()
-		old.active = false
-		close(old.ch)
+		if old.active {
+			// Push a "replaced" event so the old SSE consumer can close gracefully.
+			select {
+			case old.ch <- debugEvent{Event: "replaced", Timestamp: time.Now().Unix()}:
+			default:
+			}
+			old.active = false
+			close(old.ch)
+		}
 		old.mu.Unlock()
 	}
 
 	ch := make(chan debugEvent, 100)
 	h.sessions[userID] = &userDebugSession{
-		ch:        ch,
-		dryRun:    dryRun,
-		active:    true,
-		createdAt: time.Now(),
+		ch:     ch,
+		dryRun: dryRun,
+		active: true,
 	}
 	return ch, isAbuse
 }
@@ -136,12 +138,46 @@ func (h *userDebugHub) stop(userID int64) {
 	}
 }
 
-// isActive reports whether the user has an active debug session.
-func (h *userDebugHub) isActive(userID int64) bool {
+// activeSession returns the current session only while it is active. Holding
+// the hub read lock while checking the session mutex prevents replacement
+// between the map lookup and state check.
+func (h *userDebugHub) activeSession(userID int64) (*userDebugSession, bool) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	s, ok := h.sessions[userID]
-	return ok && s.active
+	if !ok {
+		return nil, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.active {
+		return nil, false
+	}
+	return s, true
+}
+
+// attachStream returns the active session and advances its stream epoch. A
+// reconnect therefore invalidates cleanup timers scheduled by an older stream.
+func (h *userDebugHub) attachStream(userID int64) (*userDebugSession, uint64, bool) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	s, ok := h.sessions[userID]
+	if !ok {
+		return nil, 0, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.active {
+		return nil, 0, false
+	}
+	s.streamEpoch++
+	return s, s.streamEpoch, true
+}
+
+// isActive reports whether the user has an active debug session.
+func (h *userDebugHub) isActive(userID int64) bool {
+	_, ok := h.activeSession(userID)
+	return ok
 }
 
 // isDryRun reports whether active session is in dry-run mode.
@@ -149,7 +185,12 @@ func (h *userDebugHub) isDryRun(userID int64) bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	s, ok := h.sessions[userID]
-	return ok && s.dryRun
+	if !ok {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.active && s.dryRun
 }
 
 // setDryRun toggles dry-run mode.  Returns false if no active session.
@@ -178,9 +219,8 @@ func (h *userDebugHub) push(userID int64, evt debugEvent) {
 		return
 	}
 	s.mu.Lock()
-	active := s.active
-	s.mu.Unlock()
-	if !active {
+	defer s.mu.Unlock()
+	if !s.active {
 		return
 	}
 	select {
@@ -191,31 +231,26 @@ func (h *userDebugHub) push(userID int64, evt debugEvent) {
 	}
 }
 
-// closeAfter schedules an auto-cleanup after grace if no new SSE consumer
-// reconnects (used when the SSE client disconnects).
-func (h *userDebugHub) closeAfter(userID int64, grace time.Duration) {
+// closeAfter schedules cleanup of the same session after the disconnect grace.
+// Replacement sessions are protected by the expected pointer identity.
+func (h *userDebugHub) closeAfter(userID int64, expected *userDebugSession, streamEpoch uint64, grace time.Duration) {
 	time.AfterFunc(grace, func() {
-		h.mu.RLock()
+		// Lock order is always hub then session. Verify identity so a delayed
+		// timer from an old stream can never close a replacement session.
+		h.mu.Lock()
+		defer h.mu.Unlock()
 		s, ok := h.sessions[userID]
-		h.mu.RUnlock()
-		if !ok {
+		if !ok || s != expected {
 			return
 		}
 		s.mu.Lock()
-		if s.active && time.Since(s.createdAt) > grace {
-			s.active = false
-			close(s.ch)
+		defer s.mu.Unlock()
+		if !s.active || s.streamEpoch != streamEpoch {
+			return
 		}
-		s.mu.Unlock()
-		h.mu.Lock()
-		if s, ok := h.sessions[userID]; ok {
-			s.mu.Lock()
-			if !s.active {
-				delete(h.sessions, userID)
-			}
-			s.mu.Unlock()
-		}
-		h.mu.Unlock()
+		s.active = false
+		close(s.ch)
+		delete(h.sessions, userID)
 	})
 }
 
@@ -332,10 +367,8 @@ func (g *Gateway) handleDebugStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Grab the current channel (or nil if debug is not active).
-	g.userDebug.mu.RLock()
-	s, ok := g.userDebug.sessions[u.ID]
-	g.userDebug.mu.RUnlock()
-	if !ok || !s.active {
+	s, streamEpoch, ok := g.userDebug.attachStream(u.ID)
+	if !ok {
 		g.writeError(w, http.StatusBadRequest, "debug_not_active", t(g.resolveLang(r), "调试模式未开启，请先开启调试", "Debug mode is not active, please enable it first"))
 		return
 	}
@@ -362,7 +395,7 @@ func (g *Gateway) handleDebugStream(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-ctx.Done():
 			// Client disconnected — schedule graceful cleanup.
-			g.userDebug.closeAfter(u.ID, 30*time.Second)
+			g.userDebug.closeAfter(u.ID, s, streamEpoch, debugGracePeriod)
 			return
 		case evt, ok := <-s.ch:
 			if !ok {
@@ -550,10 +583,6 @@ func mockChatCompletion(model string) map[string]interface{} {
 		},
 	}
 }
-
-// debugGraceSec is the window during which a reconnecting SSE client can
-// resume a debug session after disconnection.
-const debugGraceSec = 30
 
 // extractErrorMessage tries to pull a human-readable error message from a
 // JSON error response body (Dify2API or OpenAI error format).  Returns ""

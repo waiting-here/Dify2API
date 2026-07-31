@@ -175,22 +175,22 @@ func (g *Gateway) handleAdminGetSettings(w http.ResponseWriter, r *http.Request)
 	roleID, _ := g.Store.GetSetting(db.SettingRoleID)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"guild_id":               guildID,
-		"role_id":                roleID,
-		"rpm_limit_a":            g.Store.GetSettingInt(db.SettingRPMLimitA, db.DefaultRPMLimitA),
-		"rpm_limit_b":            g.Store.GetSettingInt(db.SettingRPMLimitB, db.DefaultRPMLimitB),
-		"rpm_limit_c":            g.Store.GetSettingInt(db.SettingRPMLimitC, db.DefaultRPMLimitC),
-		"rpm_violation_limit":    g.Store.GetSettingInt(db.SettingRPMViolationLimit, db.DefaultRPMViolationLimit),
-		"rpm_ban_hours":          g.Store.GetSettingInt(db.SettingRPMBanHours, db.DefaultRPMBanHours),
-		"checkin_min":            g.Store.GetSettingInt(db.SettingCheckinMin, db.DefaultCheckinMin),
-		"checkin_max":            g.Store.GetSettingInt(db.SettingCheckinMax, db.DefaultCheckinMax),
-		"credits_cap":            g.Store.GetSettingIntAllowZero(db.SettingCreditsCap, db.DefaultCreditsCap),
-		"donation_fail_limit":    g.Store.GetSettingInt(db.SettingDonationFailLimit, db.DefaultDonationFailLimit),
-		"donation_review_limit":  g.Store.GetSettingInt(db.SettingDonationReviewLimit, db.DefaultDonationReviewLimit),
-		"mailer_cool_minutes":    g.Store.GetSettingInt(db.SettingMailerCoolMinutes, db.DefaultMailerCoolMinutes),
-		"donation_enabled":       g.Store.GetSettingString(db.SettingDonationEnabled, "") == "true",
-		"charity_enabled":        g.Store.GetSettingString(db.SettingCharityEnabled, "") == "true",
-		"maintenance_mode":       g.Store.GetSettingString(db.SettingMaintenanceMode, "") == "true",
+		"guild_id":              guildID,
+		"role_id":               roleID,
+		"rpm_limit_a":           g.Store.GetSettingInt(db.SettingRPMLimitA, db.DefaultRPMLimitA),
+		"rpm_limit_b":           g.Store.GetSettingInt(db.SettingRPMLimitB, db.DefaultRPMLimitB),
+		"rpm_limit_c":           g.Store.GetSettingInt(db.SettingRPMLimitC, db.DefaultRPMLimitC),
+		"rpm_violation_limit":   g.Store.GetSettingInt(db.SettingRPMViolationLimit, db.DefaultRPMViolationLimit),
+		"rpm_ban_hours":         g.Store.GetSettingInt(db.SettingRPMBanHours, db.DefaultRPMBanHours),
+		"checkin_min":           g.Store.GetSettingInt(db.SettingCheckinMin, db.DefaultCheckinMin),
+		"checkin_max":           g.Store.GetSettingInt(db.SettingCheckinMax, db.DefaultCheckinMax),
+		"credits_cap":           g.Store.GetSettingIntAllowZero(db.SettingCreditsCap, db.DefaultCreditsCap),
+		"donation_fail_limit":   g.Store.GetSettingInt(db.SettingDonationFailLimit, db.DefaultDonationFailLimit),
+		"donation_review_limit": g.Store.GetSettingInt(db.SettingDonationReviewLimit, db.DefaultDonationReviewLimit),
+		"mailer_cool_minutes":   g.Store.GetSettingInt(db.SettingMailerCoolMinutes, db.DefaultMailerCoolMinutes),
+		"donation_enabled":      g.Store.GetSettingString(db.SettingDonationEnabled, "") == "true",
+		"charity_enabled":       g.Store.GetSettingString(db.SettingCharityEnabled, "") == "true",
+		"maintenance_mode":      g.Store.GetSettingString(db.SettingMaintenanceMode, "") == "true",
 	})
 }
 
@@ -201,22 +201,22 @@ func (g *Gateway) handleAdminPutSettings(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req struct {
-		GuildID              string `json:"guild_id"`
-		RoleID               string `json:"role_id"`
-		RPMLimitA            *int   `json:"rpm_limit_a"`
-		RPMLimitB            *int   `json:"rpm_limit_b"`
-		RPMLimitC            *int   `json:"rpm_limit_c"`
-		RPMViolationLimit    *int   `json:"rpm_violation_limit"`
-		RPMBanHours          *int   `json:"rpm_ban_hours"`
-		CheckinMin           *int   `json:"checkin_min"`
-		CheckinMax           *int   `json:"checkin_max"`
-		CreditsCap           *int   `json:"credits_cap"`
-		DonationFailLimit    *int   `json:"donation_fail_limit"`
-		DonationReviewLimit  *int   `json:"donation_review_limit"`
-		MailerCoolMinutes    *int   `json:"mailer_cool_minutes"`
-		DonationEnabled      *bool  `json:"donation_enabled"`
-		CharityEnabled       *bool  `json:"charity_enabled"`
-		MaintenanceMode      *bool  `json:"maintenance_mode"`
+		GuildID             string `json:"guild_id"`
+		RoleID              string `json:"role_id"`
+		RPMLimitA           *int   `json:"rpm_limit_a"`
+		RPMLimitB           *int   `json:"rpm_limit_b"`
+		RPMLimitC           *int   `json:"rpm_limit_c"`
+		RPMViolationLimit   *int   `json:"rpm_violation_limit"`
+		RPMBanHours         *int   `json:"rpm_ban_hours"`
+		CheckinMin          *int   `json:"checkin_min"`
+		CheckinMax          *int   `json:"checkin_max"`
+		CreditsCap          *int   `json:"credits_cap"`
+		DonationFailLimit   *int   `json:"donation_fail_limit"`
+		DonationReviewLimit *int   `json:"donation_review_limit"`
+		MailerCoolMinutes   *int   `json:"mailer_cool_minutes"`
+		DonationEnabled     *bool  `json:"donation_enabled"`
+		CharityEnabled      *bool  `json:"charity_enabled"`
+		MaintenanceMode     *bool  `json:"maintenance_mode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
@@ -774,8 +774,9 @@ func (g *Gateway) handleListAntiAbuse(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
-	list := make([]map[string]interface{}, 0, len(g.antiAbuseCache))
-	for _, c := range g.antiAbuseCache {
+	configs := g.antiAbuseConfigList()
+	list := make([]map[string]interface{}, 0, len(configs))
+	for _, c := range configs {
 		list = append(list, antiAbuseJSON(c))
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -790,11 +791,11 @@ func (g *Gateway) handlePutAntiAbuse(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Configs []struct {
-			Service             string `json:"service"`
-			Mode                int    `json:"mode"`
-			MinChars            int    `json:"min_chars"`
-			PenaltyDeductCredits int   `json:"penalty_deduct_credits"`
-			PenaltyBanHours     int    `json:"penalty_ban_hours"`
+			Service              string `json:"service"`
+			Mode                 int    `json:"mode"`
+			MinChars             int    `json:"min_chars"`
+			PenaltyDeductCredits int    `json:"penalty_deduct_credits"`
+			PenaltyBanHours      int    `json:"penalty_ban_hours"`
 		} `json:"configs"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -822,8 +823,9 @@ func (g *Gateway) handlePutAntiAbuse(w http.ResponseWriter, r *http.Request) {
 	g.refreshAntiAbuseCache()
 
 	// Return updated list.
-	list := make([]map[string]interface{}, 0, len(g.antiAbuseCache))
-	for _, c := range g.antiAbuseCache {
+	configs := g.antiAbuseConfigList()
+	list := make([]map[string]interface{}, 0, len(configs))
+	for _, c := range configs {
 		list = append(list, antiAbuseJSON(c))
 	}
 	w.Header().Set("Content-Type", "application/json")

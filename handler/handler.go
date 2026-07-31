@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"dify2api/config"
@@ -55,6 +56,7 @@ type Gateway struct {
 	// remoteContentOrigins gates URLs fetched inside remote Dify workflows.
 	remoteContentOrigins map[string]struct{}
 	// antiAbuseCache maps service -> per-service anti-abuse config (hot path).
+	antiAbuseMu    sync.RWMutex
 	antiAbuseCache map[string]*db.AntiAbuseConfig
 }
 
@@ -456,7 +458,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	// 3a. Charity model routing — takes priority over user App configs.
 	if IsCharityModel(req.Model) {
-		g.handleCharityAfterRPM(w, r, user, req, service, startedAt)
+		g.handleCharityAfterRPM(w, r, user, req, startedAt)
 		return
 	}
 
@@ -571,7 +573,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 // gate has been passed (class C already counted). It checks charity_enabled,
 // credits, routable donations, weighted selection, contract validation,
 // and then forwards to the streaming/blocking handler.
-func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, user *db.User, req openai.ChatCompletionRequest, service string, startedAt time.Time) {
+func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, user *db.User, req openai.ChatCompletionRequest, startedAt time.Time) {
 	service, backend := ParseCharityModel(req.Model)
 
 	// 1. User charity_enabled (model_not_found to not leak existence)
@@ -1242,7 +1244,9 @@ func (g *Gateway) loadAntiAbuseCache() error {
 	if err != nil {
 		return err
 	}
+	g.antiAbuseMu.Lock()
 	g.antiAbuseCache = configs
+	g.antiAbuseMu.Unlock()
 	return nil
 }
 
@@ -1251,6 +1255,22 @@ func (g *Gateway) refreshAntiAbuseCache() {
 	if err := g.loadAntiAbuseCache(); err != nil {
 		log.Printf("[WARN] refresh anti-abuse cache: %v", err)
 	}
+}
+
+func (g *Gateway) antiAbuseConfig(service string) *db.AntiAbuseConfig {
+	g.antiAbuseMu.RLock()
+	defer g.antiAbuseMu.RUnlock()
+	return g.antiAbuseCache[service]
+}
+
+func (g *Gateway) antiAbuseConfigList() []*db.AntiAbuseConfig {
+	g.antiAbuseMu.RLock()
+	defer g.antiAbuseMu.RUnlock()
+	list := make([]*db.AntiAbuseConfig, 0, len(g.antiAbuseCache))
+	for _, cfg := range g.antiAbuseCache {
+		list = append(list, cfg)
+	}
+	return list
 }
 
 type antiAbuseErr struct {
@@ -1290,7 +1310,7 @@ func (g *Gateway) checkAntiAbuse(messages []openai.Message, model string, userID
 	}
 
 	// Look up config from cache; fall back to defaults if missing.
-	cfg := g.antiAbuseCache[lookupService]
+	cfg := g.antiAbuseConfig(lookupService)
 	if cfg == nil {
 		cfg = &db.AntiAbuseConfig{Mode: 2, MinChars: 20}
 	}
