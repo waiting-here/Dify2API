@@ -132,8 +132,18 @@ function updateThemeButton() {
   if (themeBtn) {
     themeBtn.onclick = cycleTheme;
   }
+  applyFooterLang();
   route();
 })();
+
+// Footer legal links are plain HTML shared by both sites (index.html);
+// update their labels to follow the current UI language.
+function applyFooterLang() {
+  const p = $("#footer-privacy");
+  if (p) p.textContent = T('footerPrivacy');
+  const t = $("#footer-terms");
+  if (t) t.textContent = T('footerTerms');
+}
 
 function route() {
   if (state.mode === "admin") {

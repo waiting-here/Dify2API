@@ -359,6 +359,8 @@ const i18n = {
   debugDifyInputsLabel: "Dify 输入映射",
   debugResponseBodyLabel: "响应",
   langSwitch: "中/EN",
+  footerPrivacy: "隐私政策",
+  footerTerms: "服务协议",
   dataManagement: "数据管理",
   myDonations: "我的捐赠",
   debugComingSoon: "调试功能将在后续版本中提供",
@@ -546,6 +548,8 @@ When enabled, the full content of every API request you make (including Dify App
   donationReviewReject: "Reject",
   donationReviewRejected: "Rejected",
   donationReviewSection: "Pending Applications",
+  footerPrivacy: "Privacy Policy",
+  footerTerms: "Terms of Service",
   donationReviewTitle: "Review Donation Application",
   langSwitch: "EN/中",
   mailerCoolMinutesLabel: "Email cooldown (minutes)",
@@ -830,6 +834,8 @@ async function switchLang() {
   // Update the lang switch button text.
   const btn = $("#lang-switch");
   if (btn) btn.textContent = T('langSwitch');
+  // Footer legal links follow the language too.
+  if (typeof applyFooterLang === 'function') applyFooterLang();
   // Update theme button title for the new language.
   if (typeof updateThemeButton === 'function') updateThemeButton();
   route();
