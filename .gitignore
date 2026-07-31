@@ -23,6 +23,9 @@ debug/
 nginx/*.local.conf
 dify2api.service
 
+# Local test configs (admin.env.local, etc.)
+*.local
+
 # Local planning docs
 requirements/
 AGENTS.md
