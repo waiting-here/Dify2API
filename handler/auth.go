@@ -21,6 +21,14 @@ import (
 
 const oauthStateTTL = 10 * time.Minute
 
+// maxLoginUsernameLen bounds the username used as part of the login-throttle
+// map key. Without a cap, an attacker could fill the in-memory failure map
+// with near-body-sized keys (body limit 256 KiB) at the webThrottle request
+// rate, driving multi-hundred-MB retention per source IP within the failure
+// window. Truncation (not rejection) keeps a uniform error path and can only
+// make throttling stricter for colliding names.
+const maxLoginUsernameLen = 128
+
 // newOAuthState returns a self-contained, authenticated state token. Keeping
 // the state in the short-lived browser cookie avoids an attacker-controlled
 // server-side map while the HMAC and timestamp prevent tampering and stale
@@ -100,6 +108,11 @@ func (g *Gateway) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// L2: temporary lock after repeated failures (per ip+username).
+	// The username is bounded before entering the in-memory throttle key
+	// (memory-DoS defence; see maxLoginUsernameLen).
+	if len(req.Username) > maxLoginUsernameLen {
+		req.Username = req.Username[:maxLoginUsernameLen]
+	}
 	key := g.clientIP(r) + "|" + req.Username
 	now := time.Now()
 	if g.loginThrottle.locked(key, now) {

@@ -386,3 +386,48 @@ func TestDiscordCallback_StateCookieMismatch(t *testing.T) {
 		t.Error("user should not be registered with mismatched state cookie")
 	}
 }
+
+func TestAdminLogin_HugeUsernameBoundedInThrottleKey(t *testing.T) {
+	// Regression: the login-throttle map key is ip|username; an unbounded
+	// username could inflate the in-memory failure map by near-body-sized
+	// keys per attempt (memory DoS). Usernames are truncated to
+	// maxLoginUsernameLen before entering the key, so names that differ only
+	// beyond byte 128 share one throttle entry.
+	gw, _ := setupAuthGateway(t, "s3cret")
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	post := func(username string) *httptest.ResponseRecorder {
+		body := fmt.Sprintf(`{"username":%q,"password":"wrong"}`, username)
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/admin/login", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// Four failures with a name that differs from the second batch only
+	// after byte 128: the fifth attempt (with a colliding truncated name)
+	// must hit the lock on the shared key.
+	nameA := strings.Repeat("A", maxLoginUsernameLen) + "first"
+	for i := 0; i < gw.loginThrottle.maxFailures-1; i++ {
+		if rec := post(nameA); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: status = %d, want 401", i+1, rec.Code)
+		}
+	}
+
+	// A name that collides after truncation must hit the lock; without the
+	// fix it would be a fresh 401 path.
+	if rec := post(strings.Repeat("A", maxLoginUsernameLen) + "second"); rec.Code != http.StatusForbidden {
+		t.Fatalf("colliding truncated name: status = %d, want 403 login_locked", rec.Code)
+	}
+
+	// Every key in the throttle map must be bounded: ip + '|' + 128 max.
+	gw.loginThrottle.mu.Lock()
+	defer gw.loginThrottle.mu.Unlock()
+	prefix := gw.clientIP(httptest.NewRequest(http.MethodPost, "/", nil)) + "|"
+	for key := range gw.loginThrottle.fails {
+		if len(key) > len(prefix)+maxLoginUsernameLen {
+			t.Fatalf("throttle key %d bytes exceeds bound %d", len(key), len(prefix)+maxLoginUsernameLen)
+		}
+	}
+}
