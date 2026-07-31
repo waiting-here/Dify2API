@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS request_logs (
 	anti_abuse_info TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_request_logs_user ON request_logs(user_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_request_logs_started ON request_logs(started_at);
 
 CREATE TABLE IF NOT EXISTS donations (
 	id                   INTEGER PRIMARY KEY AUTOINCREMENT,

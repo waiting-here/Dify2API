@@ -89,9 +89,9 @@ func TestPurgeAlertsForExpiredLogs_NoRecentLogs(t *testing.T) {
 	}
 }
 
-func TestPurgeAlertsForExpiredLogs_SkipsDonationLogs(t *testing.T) {
-	// Alerts bound to donation logs should NOT be purged by this method
-	// (those are handled by PurgeExpiredDonationLogs).
+func TestPurgeAlertsForExpiredLogs_IncludesDonationLogs(t *testing.T) {
+	// The legacy alert-only wrapper follows the same per-row retention rule
+	// for donation and ordinary request logs.
 	st, _ := openTemp(t)
 	now := time.Now()
 
@@ -118,13 +118,11 @@ func TestPurgeAlertsForExpiredLogs_SkipsDonationLogs(t *testing.T) {
 		t.Fatalf("AddAdminAlert: %v", err)
 	}
 
-	// PurgeAlertsForExpiredLogs filters on donation_id IS NULL — should not
-	// touch the donation-bound log's alert.
 	n, err := st.PurgeAlertsForExpiredLogs(now.Unix())
 	if err != nil {
 		t.Fatalf("PurgeAlertsForExpiredLogs: %v", err)
 	}
-	if n != 0 {
-		t.Errorf("purged %d alerts, want 0 (donation-bound logs excluded)", n)
+	if n != 1 {
+		t.Errorf("purged %d alerts, want 1 (expired donation log included)", n)
 	}
 }

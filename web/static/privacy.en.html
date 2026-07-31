@@ -34,7 +34,7 @@
 </nav>
 <main class="container">
 <h1>Privacy Policy</h1>
-<p><strong>Last Updated: July 27, 2026</strong></p>
+<p><strong>Last Updated: July 31, 2026</strong></p>
 
 <h2>1. Overview</h2>
 <p>__SITE_NAME__ ("we," "the Service") is committed to protecting your privacy. This Privacy Policy explains how we collect, use, store, and share your personal information, as well as your rights regarding that information.</p>
@@ -57,6 +57,7 @@
       <li><strong>User Self-Service Debugging</strong>: Request content is streamed in real time to your browser via SSE within server memory, not written to disk, and automatically cleaned up when the page is closed.</li>
     </ul>
   </li>
+  <li><strong>Charity Settlement Records</strong>: When you use a charity model, we record internal links among the consumer, donation entry, and donor (if any), together with the settlement price and reward, state, and timestamps. These records support atomic charging, failure refunds, and crash recovery and do not contain request or response content.</li>
   <li><strong>Technical Logs</strong>: Standard server logs (e.g., IP address, request time), used solely for operational troubleshooting and abuse prevention.</li>
 </ul>
 
@@ -71,7 +72,8 @@
 <ul>
   <li>All data is stored on a server controlled by the Operator (SQLite database).</li>
   <li>Sensitive credentials (Dify API keys, caller keys) are stored encrypted with AES-256-GCM.</li>
-  <li>Request logs are retained for <strong>30 days</strong> and automatically purged upon expiry.</li>
+  <li>Each request log is retained on its own rolling <strong>30-day</strong> schedule, whether or not it is linked to a charity donation or that donation still exists. On expiry, the log and any bound alert are automatically purged.</li>
+  <li>Settled charity accounting records (committed or refunded) are retained on a rolling <strong>30-day</strong> schedule for short-term reconciliation. Incomplete records normally exist only while a call is in flight; after an abrupt stop they may remain until settlement is automatically recovered on service restart.</li>
   <li>We take reasonable technical and administrative measures to protect your data security.</li>
 </ul>
 
@@ -102,8 +104,8 @@
 <h2>7. Your Rights</h2>
 <p>Depending on applicable data protection laws—including the EU General Data Protection Regulation (GDPR), the California Consumer Privacy Act (CCPA/CPRA), and the Personal Information Protection Law of the People's Republic of China (PIPL)—you may have the following rights:</p>
 <ul>
-  <li><strong>Right of Access</strong>: You can download the data we hold about you in one click via the "Export My Data" function in the web console (including user profile, App configurations with decrypted Dify API keys, caller keys, complete request log fields, and donation application records).</li>
-  <li><strong>Right to Erasure ("Right to be Forgotten")</strong>: You can choose "Delete My Account" in the web console to permanently delete your account and all associated data (including sessions, configurations, keys, logs, and donation applications; your identity in approved donations will be anonymized).</li>
+  <li><strong>Right of Access</strong>: You can download the data we hold about you in one click via the "Export My Data" function in the web console (including user profile, App configurations with decrypted Dify API keys, caller keys, complete request log fields, donation applications, and charity settlement records).</li>
+  <li><strong>Right to Erasure ("Right to be Forgotten")</strong>: You can choose "Delete My Account" in the web console to permanently delete your account and all associated data (including sessions, configurations, keys, logs, donation applications, and charity settlement records; your identity in approved donations will be anonymized). An in-flight charity call must settle first to prevent accounting inconsistency.</li>
   <li><strong>Right to Rectification</strong>: You can update your App configurations in the console.</li>
   <li><strong>Right to Restrict Processing</strong>: Contact us to restrict processing through your Discord account settings.</li>
   <li><strong>Right to Data Portability</strong>: The export function provides a complete data bundle in JSON format.</li>

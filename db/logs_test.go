@@ -65,240 +65,145 @@ func TestRequestLogs_AntiAbuseInfoRoundTrip(t *testing.T) {
 	}
 }
 
-func TestPurgeOldRequestLogs_SkipsDonationLogs(t *testing.T) {
-	st, _ := openTemp(t)
-	now := time.Now()
-
-	// Create a user.
-	u, _ := st.CreateUser("111", "tester", "")
-
-	// Insert an old regular log (no donation_id) — should be purged.
-	oldCutoff := now.Add(-RequestLogRetention - 1*time.Hour)
-	st.AddRequestLog(u.ID, "[general]x", "general", oldCutoff, oldCutoff.Add(30*time.Second), "success", "")
-
-	// Insert an old donation-bound log — should NOT be purged by
-	// PurgeOldRequestLogs (it has donation_id set).
-	d := &Donation{
+func createRetentionDonation(t *testing.T, st *Store, model string) *Donation {
+	t.Helper()
+	d, err := st.CreateDonation(&Donation{
 		Service:     "general",
-		Model:       "test",
-		DifyBaseURL: "https://x.example.com",
-		Deadline:    now.Add(7 * 24 * time.Hour).Unix(),
-		TotalCount:  5,
-	}
-	created, err := st.CreateDonation(d, "k1")
+		Model:       model,
+		DifyBaseURL: "https://" + model + ".example.com",
+		Deadline:    time.Now().Add(7 * 24 * time.Hour).Unix(),
+		TotalCount:  10,
+	}, "key-"+model)
 	if err != nil {
-		t.Fatalf("CreateDonation: %v", err)
+		t.Fatalf("CreateDonation(%s): %v", model, err)
 	}
-	st.AddRequestLogDonation(u.ID, "[公益][general]test", "general", oldCutoff, oldCutoff.Add(30*time.Second), "success", "", created.ID)
+	return d
+}
 
-	n, err := st.PurgeOldRequestLogs()
+func TestPurgeExpiredRequestLogs_StrictPerRowAndOrphans(t *testing.T) {
+	st, _ := openTemp(t)
+	now := time.Now().Truncate(time.Second)
+	cutoff := now.Add(-RequestLogRetention)
+	old := cutoff.Add(-time.Hour)
+	recent := cutoff.Add(time.Hour)
+	u, err := st.CreateUser("retention-user", "retention", "")
 	if err != nil {
-		t.Fatalf("PurgeOldRequestLogs: %v", err)
+		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Errorf("purged %d rows, want 1 (only the regular log)", n)
+	active := createRetentionDonation(t, st, "active")
+	orphan := createRetentionDonation(t, st, "orphan")
+
+	entries := []struct {
+		model      string
+		started    time.Time
+		donationID int64
+	}{
+		{"regular-old", old, 0},
+		{"active-old", old, active.ID},
+		{"active-recent", recent, active.ID},
+		{"orphan-old", old, orphan.ID},
+		{"exact-cutoff", cutoff, active.ID},
+	}
+	for _, entry := range entries {
+		if err := st.AddRequestLogFull(u.ID, entry.model, "general", entry.started, entry.started.Add(time.Second), "success", "", 200, "", entry.donationID, 0, ""); err != nil {
+			t.Fatalf("AddRequestLogFull(%s): %v", entry.model, err)
+		}
+	}
+	if err := st.DeleteDonation(orphan.ID); err != nil {
+		t.Fatalf("DeleteDonation: %v", err)
 	}
 
-	// The donation-bound log should still exist.
+	logsDeleted, alertsDeleted, err := st.PurgeExpiredRequestLogs(now.Unix())
+	if err != nil {
+		t.Fatalf("PurgeExpiredRequestLogs: %v", err)
+	}
+	if logsDeleted != 3 || alertsDeleted != 0 {
+		t.Fatalf("deleted logs=%d alerts=%d, want 3/0", logsDeleted, alertsDeleted)
+	}
+
 	logs, err := st.ListRequestLogs(u.ID, 10)
 	if err != nil {
-		t.Fatalf("ListRequestLogs: %v", err)
+		t.Fatal(err)
 	}
-	if len(logs) != 1 {
-		t.Errorf("remaining logs = %d, want 1 (donation-bound log preserved)", len(logs))
+	if len(logs) != 2 {
+		t.Fatalf("remaining logs=%d, want 2", len(logs))
 	}
-	if logs[0].Model != "[公益][general]test" {
-		t.Errorf("unexpected remaining log: %+v", logs[0])
+	remaining := map[string]bool{}
+	for _, entry := range logs {
+		remaining[entry.Model] = true
 	}
-}
-
-func TestPurgeExpiredDonationLogs_Gate(t *testing.T) {
-	st, _ := openTemp(t)
-	now := time.Now()
-	oldCutoff := now.Add(-RequestLogRetention - 1*time.Hour).Unix()
-
-	// Create two donations.
-	u, _ := st.CreateUser("222", "tester2", "")
-	d1 := &Donation{
-		Service:     "general",
-		Model:       "d1",
-		DifyBaseURL: "https://a.example.com",
-		Deadline:    now.Add(7 * 24 * time.Hour).Unix(),
-		TotalCount:  5,
-	}
-	created1, _ := st.CreateDonation(d1, "k1")
-
-	d2 := &Donation{
-		Service:     "general",
-		Model:       "d2",
-		DifyBaseURL: "https://b.example.com",
-		Deadline:    now.Add(7 * 24 * time.Hour).Unix(),
-		TotalCount:  5,
-	}
-	created2, _ := st.CreateDonation(d2, "k2")
-
-	// d1: oldest log is >30d (should be cleaned).
-	st.AddRequestLogDonation(u.ID, "[公益][general]d1", "general", time.Unix(oldCutoff, 0), time.Unix(oldCutoff+30, 0), "success", "", created1.ID)
-
-	// d2: has a recent log (<30d, should NOT be cleaned).
-	st.AddRequestLogDonation(u.ID, "[公益][general]d2", "general", now.Add(-1*time.Hour), now.Add(-30*time.Minute), "success", "", created2.ID)
-
-	n, err := st.PurgeExpiredDonationLogs(now.Unix())
-	if err != nil {
-		t.Fatalf("PurgeExpiredDonationLogs: %v", err)
-	}
-	if n != 1 {
-		t.Errorf("purged %d rows, want 1 (only d1's log)", n)
-	}
-
-	// Check remaining logs.
-	logs, err := st.ListRequestLogs(u.ID, 10)
-	if err != nil {
-		t.Fatalf("ListRequestLogs: %v", err)
-	}
-	if len(logs) != 1 {
-		t.Errorf("remaining logs = %d, want 1 (only d2's log)", len(logs))
-	}
-	if len(logs) > 0 && logs[0].Model != "[公益][general]d2" {
-		t.Errorf("unexpected remaining log: %+v", logs[0])
+	if !remaining["active-recent"] || !remaining["exact-cutoff"] {
+		t.Fatalf("unexpected remaining logs: %#v", remaining)
 	}
 }
 
-func TestPurgeExpiredDonationLogs_UsesMaxStartedAt(t *testing.T) {
+func TestPurgeExpiredRequestLogs_DeletesBoundAlertsAtomically(t *testing.T) {
 	st, _ := openTemp(t)
-	now := time.Now()
+	now := time.Now().Truncate(time.Second)
+	old := now.Add(-RequestLogRetention - time.Hour)
+	recent := now.Add(-time.Hour)
+	u, _ := st.CreateUser("retention-alert", "retention-alert", "")
+	d := createRetentionDonation(t, st, "alerts")
 
-	u, _ := st.CreateUser("333", "tester3", "")
-	d := &Donation{
-		Service:     "general",
-		Model:       "multi",
-		DifyBaseURL: "https://x.example.com",
-		Deadline:    now.Add(7 * 24 * time.Hour).Unix(),
-		TotalCount:  5,
+	if err := st.AddRequestLogDonation(u.ID, "old", "general", old, old.Add(time.Second), "error", "upstream", d.ID); err != nil {
+		t.Fatal(err)
 	}
-	created, _ := st.CreateDonation(d, "k")
-
-	// Insert two logs for the same donation: one old, one recent.
-	oldCutoff := now.Add(-RequestLogRetention - 1*time.Hour)
-	st.AddRequestLogDonation(u.ID, "[公益][general]multi", "general", oldCutoff, oldCutoff.Add(30*time.Second), "success", "", created.ID)
-	st.AddRequestLogDonation(u.ID, "[公益][general]multi", "general", now.Add(-1*time.Hour), now.Add(-30*time.Minute), "success", "", created.ID)
-
-	// Even though there's an old log, the most recent log is not old
-	// enough — so nothing should be purged.
-	n, err := st.PurgeExpiredDonationLogs(now.Unix())
-	if err != nil {
-		t.Fatalf("PurgeExpiredDonationLogs: %v", err)
+	if err := st.AddRequestLogDonation(u.ID, "recent", "general", recent, recent.Add(time.Second), "success", "", d.ID); err != nil {
+		t.Fatal(err)
 	}
-	if n != 0 {
-		t.Errorf("purged %d rows, want 0 (gate requires LATEST log to be old)", n)
-	}
-}
-
-func TestPurgeExpiredDonationLogs_CascadeDeletesAlerts(t *testing.T) {
-	st, _ := openTemp(t)
-	now := time.Now()
-	oldCutoff := now.Add(-RequestLogRetention - 1*time.Hour)
-
-	u, _ := st.CreateUser("444", "tester4", "")
-	d := &Donation{
-		Service:     "general",
-		Model:       "cascade",
-		DifyBaseURL: "https://x.example.com",
-		Deadline:    now.Add(7 * 24 * time.Hour).Unix(),
-		TotalCount:  5,
-	}
-	created, _ := st.CreateDonation(d, "k")
-
-	// Insert an old donation-bound log and an alert bound to it.
-	started := time.Unix(oldCutoff.Unix(), 0)
-	st.AddRequestLogFull(u.ID, "[公益][general]cascade", "general", started, started.Add(30*time.Second), "error", "upstream_error", 502, "test error", created.ID, 0, "")
-
-	// Find the log id to construct the alert.
 	logs, _ := st.ListRequestLogs(u.ID, 10)
-	if len(logs) == 0 {
-		t.Fatal("no logs found")
+	var oldID, recentID int64
+	for _, entry := range logs {
+		switch entry.Model {
+		case "old":
+			oldID = entry.ID
+		case "recent":
+			recentID = entry.ID
+		}
 	}
-	logID := logs[0].ID
-
-	if err := st.AddAdminAlert(&AdminAlert{
-		Type:         AlertBlockingFailed200,
-		Message:      "test",
-		RequestLogID: &logID,
-	}); err != nil {
-		t.Fatalf("AddAdminAlert: %v", err)
+	for _, alert := range []*AdminAlert{
+		{Type: AlertBlockingFailed200, Message: "old-bound", RequestLogID: &oldID},
+		{Type: AlertBlockingFailed200, Message: "recent-bound", RequestLogID: &recentID},
+		{Type: AlertBlockingFailed200, Message: "unbound"},
+	} {
+		if err := st.AddAdminAlert(alert); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	n, err := st.PurgeExpiredDonationLogs(now.Unix())
+	logsDeleted, alertsDeleted, err := st.PurgeExpiredRequestLogs(now.Unix())
 	if err != nil {
-		t.Fatalf("PurgeExpiredDonationLogs: %v", err)
+		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Errorf("purged %d log rows, want 1", n)
+	if logsDeleted != 1 || alertsDeleted != 1 {
+		t.Fatalf("deleted logs=%d alerts=%d, want 1/1", logsDeleted, alertsDeleted)
 	}
-
-	// The alert bound to that log should also be gone.
 	alerts, total, err := st.ListAdminAlerts(10, 0)
 	if err != nil {
-		t.Fatalf("ListAdminAlerts: %v", err)
+		t.Fatal(err)
 	}
-	if total != 0 || len(alerts) != 0 {
-		t.Errorf("alerts total=%d len=%d, want 0/0 (cascade-deleted)", total, len(alerts))
+	if total != 2 || len(alerts) != 2 {
+		t.Fatalf("remaining alerts total=%d len=%d, want 2/2", total, len(alerts))
 	}
-}
-
-func TestPurgeExpiredDonationLogs_ExpiredDonation(t *testing.T) {
-	st, _ := openTemp(t)
-	now := time.Now()
-	oldCutoff := now.Add(-RequestLogRetention - 1*time.Hour).Unix()
-
-	u, _ := st.CreateUser("exp1", "tester_exp", "")
-	d := &Donation{
-		Service:     "general",
-		Model:       "expired",
-		DifyBaseURL: "https://x.example.com",
-		Deadline:    now.Add(-7 * 24 * time.Hour).Unix(), // past
-		TotalCount:  5,
-	}
-	created, _ := st.CreateDonation(d, "k")
-	// Manually set this donation to expired via RawExec.
-	st.RawExec(`UPDATE donations SET status='expired', remaining_count=0 WHERE id=?`, created.ID)
-
-	// Add an old log bound to this expired donation.
-	oldTime := time.Unix(oldCutoff, 0)
-	st.AddRequestLogFull(u.ID, "[公益][general]expired", "general", oldTime, oldTime.Add(30*time.Second), "success", "", 200, "", created.ID, 0, "")
-
-	// Should still clean logs even though donation is expired.
-	n, err := st.PurgeExpiredDonationLogs(now.Unix())
-	if err != nil {
-		t.Fatalf("PurgeExpiredDonationLogs: %v", err)
-	}
-	if n != 1 {
-		t.Errorf("purged %d rows, want 1 (expired donation logs should be cleaned)", n)
+	for _, alert := range alerts {
+		if alert.Message == "old-bound" {
+			t.Fatal("alert bound to expired donation log survived")
+		}
 	}
 }
 
-func TestPurgeExpiredDonationLogs_NoOrphans(t *testing.T) {
-	// Ensure no rows are purged when there are no old donation-bound logs.
+func TestPurgeExpiredRequestLogs_NoExpiredRows(t *testing.T) {
 	st, _ := openTemp(t)
-	now := time.Now()
-
-	// Only a recent donation-bound log.
-	u, _ := st.CreateUser("555", "tester5", "")
-	d := &Donation{
-		Service:     "general",
-		Model:       "recent",
-		DifyBaseURL: "https://x.example.com",
-		Deadline:    now.Add(7 * 24 * time.Hour).Unix(),
-		TotalCount:  5,
+	now := time.Now().Truncate(time.Second)
+	u, _ := st.CreateUser("retention-recent", "retention-recent", "")
+	if err := st.AddRequestLog(u.ID, "recent", "general", now.Add(-time.Hour), now, "success", ""); err != nil {
+		t.Fatal(err)
 	}
-	created, _ := st.CreateDonation(d, "k")
-	st.AddRequestLogDonation(u.ID, "[公益][general]recent", "general", now.Add(-1*time.Hour), now.Add(-30*time.Minute), "success", "", created.ID)
-
-	n, err := st.PurgeExpiredDonationLogs(now.Unix())
+	logs, alerts, err := st.PurgeExpiredRequestLogs(now.Unix())
 	if err != nil {
-		t.Fatalf("PurgeExpiredDonationLogs: %v", err)
+		t.Fatal(err)
 	}
-	if n != 0 {
-		t.Errorf("purged %d rows, want 0", n)
+	if logs != 0 || alerts != 0 {
+		t.Fatalf("deleted logs=%d alerts=%d, want 0/0", logs, alerts)
 	}
 }

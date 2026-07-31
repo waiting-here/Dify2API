@@ -88,17 +88,15 @@ func (s *Store) ListAdminAlerts(limit, offset int) ([]*AdminAlert, int, error) {
 	return out, total, rows.Err()
 }
 
-// PurgeAlertsForExpiredLogs deletes alerts whose bound request_log is older
-// than the retention window AND has no donation_id (regular logs cleaned by
-// PurgeOldRequestLogs).  Alerts with request_log_id IS NULL (unbound alerts)
-// are intentionally NOT cleaned — per the third-round ruling they require
-// manual deletion.
+// PurgeAlertsForExpiredLogs is the legacy alert-only cleanup API. It deletes
+// alerts bound to any expired request log, including donation logs. Unbound
+// alerts are intentionally retained for manual review.
+// Deprecated: use PurgeExpiredRequestLogs for atomic alert and log cleanup.
 func (s *Store) PurgeAlertsForExpiredLogs(now int64) (int64, error) {
 	cutoff := now - int64(RequestLogRetention.Seconds())
 	res, err := s.db.Exec(
-		`DELETE FROM admin_alerts WHERE request_log_id IS NOT NULL
-		 AND request_log_id IN (
-			SELECT id FROM request_logs WHERE started_at <= ? AND donation_id IS NULL
+		`DELETE FROM admin_alerts WHERE request_log_id IN (
+			SELECT id FROM request_logs WHERE started_at < ?
 		)`,
 		cutoff,
 	)

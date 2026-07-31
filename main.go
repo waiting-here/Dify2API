@@ -110,37 +110,26 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	// Background cleanup: purge old request logs (>30d) and expired sessions.
-	// Run once at startup then every 24h — because during development the
-	// process may never run for 30 days straight.
-	//
-	// Donation-bound logs use a per-donation gate (latest request >30d);
-	// regular logs (no donation_id) use the simple age cutoff.  Alerts
-	// bound to cleaned logs are cascaded.
+	// Background cleanup: enforce rolling 30-day retention for every request
+	// log and settled charity accounting record, and remove expired sessions.
+	// Run once at startup and then every 24 hours.
 	go func() {
 		runCleanup := func() {
 			now := time.Now().Unix()
-			n1, err1 := store.PurgeExpiredDonationLogs(now)
-			if err1 != nil {
-				log.Printf("[CLEANUP] donation-bound logs: %v", err1)
+			logsDeleted, alertsDeleted, logErr := store.PurgeExpiredRequestLogs(now)
+			if logErr != nil {
+				log.Printf("[CLEANUP] request logs: %v", logErr)
 			}
-			n2, err2 := store.PurgeAlertsForExpiredLogs(now)
-			if err2 != nil {
-				log.Printf("[CLEANUP] stale alerts: %v", err2)
+			sessionsDeleted, sessionErr := store.PurgeExpiredSessions()
+			if sessionErr != nil {
+				log.Printf("[CLEANUP] sessions: %v", sessionErr)
 			}
-			n3, err3 := store.PurgeOldRequestLogs()
-			if err3 != nil {
-				log.Printf("[CLEANUP] request logs: %v", err3)
+			reservationsDeleted, reservationErr := store.PurgeSettledCharityReservations(now - int64((30 * 24 * time.Hour).Seconds()))
+			if reservationErr != nil {
+				log.Printf("[CLEANUP] charity reservations: %v", reservationErr)
 			}
-			n4, err4 := store.PurgeExpiredSessions()
-			if err4 != nil {
-				log.Printf("[CLEANUP] sessions: %v", err4)
-			}
-			n5, err5 := store.PurgeSettledCharityReservations(time.Now().Add(-30 * 24 * time.Hour).Unix())
-			if err5 != nil {
-				log.Printf("[CLEANUP] charity reservations: %v", err5)
-			}
-			log.Printf("[CLEANUP] purged %d donation-bound logs, %d stale alerts, %d regular logs, %d sessions, %d charity reservations", n1, n2, n3, n4, n5)
+			log.Printf("[CLEANUP] purged %d request logs, %d bound alerts, %d sessions, %d charity reservations",
+				logsDeleted, alertsDeleted, sessionsDeleted, reservationsDeleted)
 		}
 		runCleanup()
 		ticker := time.NewTicker(24 * time.Hour)

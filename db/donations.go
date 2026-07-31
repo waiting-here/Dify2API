@@ -195,9 +195,9 @@ func (s *Store) SetDonationStatus(id int64, status string) error {
 	return err
 }
 
-// DeleteDonation removes a donation entry. Related request_logs and
-// admin_alerts rows are intentionally left intact (orphan retention policy
-// §8.4#1 — the foreign donation_id becomes dangling).
+// DeleteDonation removes a donation entry. Related request_logs and alerts
+// remain available until the same per-row 30-day retention cutoff as all
+// other request metadata; donation_id may therefore become temporarily orphaned.
 func (s *Store) DeleteDonation(id int64) error {
 	var active int
 	if err := s.db.QueryRow(

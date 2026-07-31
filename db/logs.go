@@ -223,7 +223,7 @@ func (s *Store) ListAllRequestLogs(f LogFilter, limit, offset int) ([]*AdminRequ
 
 // LogDayStat is one day's aggregated log counts.
 type LogDayStat struct {
-	Date    string `json:"date"`    // YYYY-MM-DD
+	Date    string `json:"date"` // YYYY-MM-DD
 	Total   int    `json:"total"`
 	Success int    `json:"success"`
 	Error   int    `json:"error"`
@@ -316,76 +316,58 @@ func (s *Store) LogStats(days int, since, until int64) ([]LogDayStat, []LogServi
 	return days_, svcs, rows2.Err()
 }
 
-// PurgeOldRequestLogs deletes logs older than the retention window that are
-// NOT bound to a donation (donation_id IS NULL). Donation-bound logs are
-// cleaned by PurgeExpiredDonationLogs which uses a per-donation gate.
-func (s *Store) PurgeOldRequestLogs() (int64, error) {
-	cutoff := time.Now().Add(-RequestLogRetention).Unix()
-	res, err := s.db.Exec(`DELETE FROM request_logs WHERE started_at < ? AND donation_id IS NULL`, cutoff)
+// PurgeExpiredRequestLogs deletes every request log older than the rolling
+// retention cutoff, independent of donation state. Alerts bound to those logs
+// are deleted first in the same transaction. This covers active donations and
+// orphan donation_id values as well as ordinary requests.
+func (s *Store) PurgeExpiredRequestLogs(now int64) (logsDeleted, alertsDeleted int64, err error) {
+	cutoff := now - int64(RequestLogRetention.Seconds())
+	tx, err := s.db.Begin()
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	return res.RowsAffected()
+	defer tx.Rollback()
+
+	alertResult, err := tx.Exec(
+		`DELETE FROM admin_alerts WHERE request_log_id IN (
+			SELECT id FROM request_logs WHERE started_at < ?
+		)`, cutoff,
+	)
+	if err != nil {
+		return 0, 0, err
+	}
+	alertsDeleted, err = alertResult.RowsAffected()
+	if err != nil {
+		return 0, 0, err
+	}
+
+	logResult, err := tx.Exec(`DELETE FROM request_logs WHERE started_at < ?`, cutoff)
+	if err != nil {
+		return 0, 0, err
+	}
+	logsDeleted, err = logResult.RowsAffected()
+	if err != nil {
+		return 0, 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, 0, err
+	}
+	return logsDeleted, alertsDeleted, nil
 }
 
-// PurgeExpiredDonationLogs deletes ALL request_logs bound to a donation when
-// that donation's most recent request is older than the retention window.
-// Only non-expired donations are considered (expired ones have their own
-// cleanup path). Returns the total number of deleted rows.
+// PurgeOldRequestLogs is the legacy one-count cleanup API.
+// Deprecated: use PurgeExpiredRequestLogs so alert cleanup is observable.
+func (s *Store) PurgeOldRequestLogs() (int64, error) {
+	logs, _, err := s.PurgeExpiredRequestLogs(time.Now().Unix())
+	return logs, err
+}
+
+// PurgeExpiredDonationLogs is retained for source compatibility. Retention is
+// now per log, not per donation, so this cleans every expired request log.
+// Deprecated: use PurgeExpiredRequestLogs.
 func (s *Store) PurgeExpiredDonationLogs(now int64) (int64, error) {
-	cutoff := now - int64(RequestLogRetention.Seconds())
-
-	// Step 1: find donation ids whose latest request_log is old enough.
-	rows, err := s.db.Query(
-		`SELECT d.id FROM donations d
-		 WHERE (SELECT MAX(rl.started_at) FROM request_logs rl
-		        WHERE rl.donation_id = d.id) <= ?`, cutoff,
-	)
-	if err != nil {
-		return 0, err
-	}
-	var ids []interface{}
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return 0, err
-		}
-		ids = append(ids, id)
-	}
-	rows.Close()
-
-	if len(ids) == 0 {
-		return 0, nil
-	}
-
-	// Step 2: delete logs and cascade-delete alerts bound to those logs.
-	// Build a parameterized IN clause for the donation ids.
-	placeholders := make([]string, len(ids))
-	for i := range placeholders {
-		placeholders[i] = "?"
-	}
-	inClause := strings.Join(placeholders, ",")
-
-	// Cascade: delete alerts whose request_log_id points to a log we're about to delete.
-	_, err = s.db.Exec(
-		`DELETE FROM admin_alerts WHERE request_log_id IN (
-			SELECT id FROM request_logs WHERE donation_id IN (`+inClause+`)
-		)`, ids...,
-	)
-	if err != nil {
-		return 0, err
-	}
-
-	// Delete the logs.
-	res, err := s.db.Exec(
-		`DELETE FROM request_logs WHERE donation_id IN (`+inClause+`) AND started_at <= ?`,
-		append(ids, cutoff)...,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
+	logs, _, err := s.PurgeExpiredRequestLogs(now)
+	return logs, err
 }
 
 // RawExec exposes the underlying sql.DB Exec for tests (e.g. manipulating
