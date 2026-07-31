@@ -389,6 +389,14 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 
 	service := translator.ServiceOfModel(req.Model)
+	// Charity names have two prefixes: [公益][service]backend. Use the
+	// actual service for every request log while leaving ServiceOfModel's
+	// general one-prefix contract unchanged.
+	if IsCharityModel(req.Model) {
+		if charityService, _ := ParseCharityModel(req.Model); charityService != "" {
+			service = charityService
+		}
+	}
 
 	// 1b. Anti-abuse check — after auth, before RPM.
 	if errResp := g.checkAntiAbuse(req.Messages, req.Model, user.ID, service, startedAt); errResp != nil {
