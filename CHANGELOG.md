@@ -15,10 +15,14 @@ Dify2API 的所有重要变更均记录在此文件中。
 - **出站与代理安全配置**：新增 `TRUSTED_PROXY_CIDRS`、`DIFY_EGRESS_ALLOWLIST`、
   `REMOTE_CONTENT_ORIGIN_ALLOWLIST`、`DIFY_MAX_RESPONSE_MB`、`DIFY_PROBE_IN_FLIGHT` 和 `MAX_WEB_REQUEST_BODY_KB`
 - **第三方许可清单**：新增 `THIRD_PARTY_NOTICES.md`，记录 Chart.js、`@kurkle/color` 与 Pico CSS 的 MIT notice
+- **用户自助 Debug 资源与秘密边界**：请求/inputs/响应捕获前截断（64 KiB/64 KiB/256 KiB）并带截断标记；事件 Header 只回传安全白名单（不含认证/Cookie）；通道容量与每 session 累计字节设硬上限，溢出丢弃最旧事件并推送 `dropped` 通知；未连接 SSE 10 秒自动关闭、空闲 5 分钟、最长生命周期 1 小时
+- **App 兼容性探测加固**：单次总 deadline 15 秒（覆盖排队与上游）、每用户滑动窗口限流（默认 5 次/分钟，管理端可调 `probe_limit_per_user`）、无变化更新自动跳过探测；限流/超时不误报不兼容
+- **告警中心联动**：`blocking_failed_200` 告警绑定关联请求日志并带出所属用户，「查看关联请求」一键跳转日志页并按用户过滤、高亮目标行（随日志 30 天留存同事务清理）
 
 ### 变更
 
 - **Dify 出站默认拒绝私网**：阻断 loopback、私网、link-local、metadata、DNS rebinding、跨 origin 重定向和环境代理；私有 Dify 必须由部署者显式允许
+- **出站 allowlist 收窄为精确 origin**：`DIFY_EGRESS_ALLOWLIST` 只接受 `http(s)://host[:port]`（拒绝 CIDR、裸 IP、通配符与路径）；网关自身的 `SITE_BASE_URL`/`ADMIN_HOST` 以及 loopback 监听地址即使出现在 allowlist 中也永久拒绝（拨号阶段返回与真实不可区分的 connection refused）
 - **远程内容默认禁用**：`website-summary` URL 与远程图片只有精确 origin 位于允许列表时才会交给 Dify 抓取；参考 Website Summary DSL 同步缩短网络超时和重试
 - **请求生命周期与资源上限**：所有 Dify 请求绑定下游 context；客户端断开会取消上游并使用独立短 context 尝试 Stop；限制解压后 JSON、累计 SSE 和 App 探测并发
 - **公益结算事务化**：捐赠次数、消费者积分和 reservation 在同一 SQLite 事务内预留；明确前置/上游失败原子退款，已 dispatched 的不确定结果保守结算；捐赠者贡献和奖励幂等提交
@@ -26,6 +30,7 @@ Dify2API 的所有重要变更均记录在此文件中。
 - **日志严格逐条留存 30 天**：普通、公益、活跃 donation 和 orphan 日志均按自身 `started_at` 清理；绑定告警同事务删除，未绑定告警保留人工处理
 - **OAuth state 无状态化**：改为 HMAC 认证、时限约束且绑定 cookie 的 token，不再维护可被匿名请求放大的内存 map
 - **SSE 默认内存降低**：`SSE_BUFFER_MB` 默认值由 10 MiB 降至 1 MiB；单行上限 10 MiB，单次累计响应默认 32 MiB
+- **Debug 开关语义统一**：「发送到 Dify」开关现在直接表示是否真实转发（默认关闭 = 演习模式），与提示文案一致，避免普通用户误解
 
 ### 修复
 
@@ -35,6 +40,12 @@ Dify2API 的所有重要变更均记录在此文件中。
 - 修复签到更新可能以旧快照覆盖并发积分扣减的问题
 - 修复用户 Debug session 的状态读写、channel send/close、替换与延迟清理竞争；重连不再被旧 timer 关闭
 - 修复 anti-abuse 配置刷新与请求/admin 读取之间的 map 竞争
+- 修复管理员日志 CSV/JSON 导出被分页钳制静默截断为 100 条的问题（导出改为无上限查询，列表分页不受影响）
+- 修复 egress self-guard 在 `LISTEN_ADDR=localhost` 时未登记 loopback 地址、误将网关自身 loopback origin 加入 allowlist 即可绕过自拨阻断的缺口
+- 修复管理员登录用户名未限长导致的登录节流内存膨胀风险（throttle key 截断至 128 字节）
+- 修复管理端下调捐赠 `total_count` 可能使 `remaining_count` 为负的问题（钳制到 0）
+- 修复告警中心「查看关联请求」不切换到日志页导致点击无反应的问题
+- 修复页脚「隐私政策 · 服务协议」链接文案不跟随语言切换的问题
 
 ### 安全加固
 
@@ -42,6 +53,7 @@ Dify2API 的所有重要变更均记录在此文件中。
 - 状态变更类 Web API 增加统一 256 KiB 请求体上限；chat 继续使用独立 10 MiB 上限
 - Dify 响应体、SSE 背压发送和 connectivity probe 均增加硬上限或并发门禁
 - nginx 示例改为覆盖 XFF，并同步 Host、body 上限和流式代理安全设置
+- 自拨阻断无侧信道：指向网关自身的拨号在 dial 阶段返回伪造 ECONNREFUSED 并附加 150–350ms 随机抖动，与探测任意死公网 IP 不可区分；保存阶段不区分自站与非自站
 
 ### 升级提示
 
