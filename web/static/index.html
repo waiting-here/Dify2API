@@ -31,6 +31,7 @@
   .row-actions button, .row-actions a[role=button] { padding: .4rem .6rem; font-size: .85rem; margin: 0; white-space: nowrap; width: auto; }
   td .row-actions { flex-wrap: nowrap; }
   .muted { color: var(--pico-muted-color); }
+  .sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
   .note { padding: .6rem .9rem; border-radius: .4rem; margin: .5rem 0; }
   .note.ok { background: #e6f6e6; }
   .note.warn { background: #fdf3d8; }
@@ -81,6 +82,9 @@
   #admin-logs-filter .afl-until  { grid-column: 2; grid-row: 3; }
   #admin-logs-filter .afl-actions { grid-column: 3; grid-row: 1 / 4; align-self: center; display: flex; flex-direction: column; gap: .5rem; }
   #admin-logs-filter .afl-actions button { width: auto; margin: 0; }
+  .admin-log-chart { position: relative; height: 18rem; padding: .5rem; border: 1px solid var(--pico-muted-border-color); border-radius: 4px; }
+  .admin-log-chart + .admin-log-chart { margin-top: .75rem; }
+  #alf-service-chart-wrap { height: var(--admin-service-chart-height, 14rem); }
   @media (max-width: 800px) {
     #admin-logs-filter { grid-template-columns: 1fr; }
     #admin-logs-filter .afl-actions { grid-column: 1; grid-row: auto; flex-direction: row; }
@@ -90,6 +94,7 @@
      Wide-screen behavior is untouched — all rules are inside @media. */
   @media (max-width: 768px) {
     main.container { width: 100%; padding: .5rem; }
+    .admin-log-chart { height: 16rem; padding: .25rem; }
     .card { padding: .75rem; }
     body > nav { flex-wrap: wrap; gap: .5rem; padding: .5rem; }
     .tab-nav .admin-tab, .tab-nav .user-tab { min-width: 4.5rem; padding: .35rem .6rem; font-size: .8rem; }
@@ -101,6 +106,7 @@
     #toast { max-width: 90vw; white-space: normal; text-align: center; }
   }
   @media (max-width: 480px) {
+    .admin-log-chart { height: 14rem; }
     .tab-nav .admin-tab, .tab-nav .user-tab { min-width: auto; padding: .25rem .4rem; font-size: .75rem; }
     body > nav .logo { font-size: .95rem; }
     table td, table th { font-size: .85rem; padding: .4rem .5rem; }

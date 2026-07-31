@@ -78,6 +78,7 @@ function cycleTheme() {
   }
   applyTheme(next);
   updateThemeButton();
+  if (typeof onThemeChanged === "function") onThemeChanged();
 }
 
 function themeIcon(theme) {

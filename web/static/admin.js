@@ -1,7 +1,82 @@
 "use strict";
 
+/* ---------------- admin log charts (lazy Chart.js lifecycle) ---------------- */
+let _chartJSLoadPromise = null;
+let _adminLogCharts = [];
+let _adminLogStats = null;
+let _adminLogChartGeneration = 0;
+
+function loadChartJS() {
+  if (typeof window.Chart === "function") return Promise.resolve(window.Chart);
+  if (_chartJSLoadPromise) return _chartJSLoadPromise;
+
+  _chartJSLoadPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "/static/chart.min.js";
+    script.async = true;
+    script.dataset.d2aChartjs = "4.5.1";
+    script.onload = () => {
+      if (typeof window.Chart === "function") {
+        resolve(window.Chart);
+        return;
+      }
+      script.remove();
+      _chartJSLoadPromise = null;
+      reject(new Error("Chart.js did not initialize"));
+    };
+    script.onerror = () => {
+      script.remove();
+      _chartJSLoadPromise = null;
+      reject(new Error("Chart.js failed to load"));
+    };
+    document.head.appendChild(script);
+  });
+  return _chartJSLoadPromise;
+}
+
+function destroyAdminLogCharts() {
+  _adminLogChartGeneration++;
+  for (const chart of _adminLogCharts) {
+    try { chart.destroy(); } catch (_) { /* already detached */ }
+  }
+  _adminLogCharts = [];
+}
+
+function hideAdminLogCharts() {
+  destroyAdminLogCharts();
+  const area = $("#alf-chart-area");
+  if (area) area.style.display = "none";
+}
+
+function adminLogsTabVisible() {
+  const tab = $("#tab-logs");
+  return !!tab && tab.style.display !== "none";
+}
+
+function resizeAdminLogCharts() {
+  if (_adminLogCharts.length === 0) return;
+  requestAnimationFrame(() => {
+    for (const chart of _adminLogCharts) chart.resize();
+  });
+}
+
+function reportAdminLogChartFailure() {
+  hideAdminLogCharts();
+  toast(T('adminLogsChartLoadFailed'), 3500);
+}
+
+// Called by common.js after a manual theme switch. Recreate rather than
+// mutating instances so every computed CSS colour is refreshed consistently.
+function onThemeChanged() {
+  if (_adminLogStats && adminLogsTabVisible()) {
+    renderAdminLogCharts(_adminLogStats).catch(reportAdminLogChartFailure);
+  }
+}
+
 /* ---------------- admin site: login ---------------- */
 function renderAdminLogin() {
+  destroyAdminLogCharts();
+  _adminLogStats = null;
   $("#nav-user").textContent = "";
   $("#app").innerHTML = `
     <article class="card" style="max-width:24rem;margin:4rem auto">
@@ -50,7 +125,7 @@ function switchAdminTab(tab) {
   if (btn) btn.classList.add("active");
   const content = $(`#tab-${tab}`);
   if (content) content.style.display = "";
-  // Lazy load on first activation
+  // Lazy load on first activation.
   if (!_adminTabLoaded[tab]) {
     _adminTabLoaded[tab] = true;
     switch (tab) {
@@ -61,6 +136,10 @@ function switchAdminTab(tab) {
       case "bulletins": initAdminBulletinsTab(); break;
       case "antiabuse": initAdminAntiAbuseTab(); break;
     }
+  } else if (tab === "logs") {
+    // A chart hidden by another tab can have a stale zero-sized layout.
+    if (_adminLogCharts.length > 0) resizeAdminLogCharts();
+    else if (_adminLogStats) renderAdminLogCharts(_adminLogStats).catch(reportAdminLogChartFailure);
   }
 }
 
@@ -133,6 +212,8 @@ function initAdminBulletinsTab() {
 
 /* ---------------- admin site: dashboard ---------------- */
 async function renderAdminDashboard() {
+  destroyAdminLogCharts();
+  _adminLogStats = null;
   $("#nav-user").innerHTML = `${esc(state.me.username)} · <a href="#" id="logout">${T('logout')}</a>`;
   bindLogout("#logout");
 
@@ -279,7 +360,15 @@ async function renderAdminDashboard() {
             <button id="alf-export" class="secondary outline">${T('adminLogsExport')}</button>
           </div>
         </div>
-        <canvas id="alf-chart" width="600" height="160" style="display:none;width:100%;max-width:100%;margin-bottom:.8rem;border:1px solid var(--pico-muted-border-color);border-radius:4px"></canvas>
+        <div id="alf-chart-area" style="display:none;margin-bottom:.8rem">
+          <div class="admin-log-chart" id="alf-day-chart-wrap">
+            <canvas id="alf-day-chart" role="img" aria-label="${esc(T('adminLogsDailyChartAria'))}" aria-describedby="alf-chart-summary">${esc(T('adminLogsDailyChartAria'))}</canvas>
+          </div>
+          <div class="admin-log-chart" id="alf-service-chart-wrap">
+            <canvas id="alf-service-chart" role="img" aria-label="${esc(T('adminLogsServiceChartAria'))}" aria-describedby="alf-chart-summary">${esc(T('adminLogsServiceChartAria'))}</canvas>
+          </div>
+          <p id="alf-chart-summary" class="sr-only" aria-live="polite"></p>
+        </div>
         <div class="table-wrap"><table><thead><tr><th>${T('thTime')}</th><th>${T('thUser')}</th><th>${T('thModel')}</th><th>${T('thService')}</th><th>${T('thDuration')}</th><th>${T('thStatus')}</th><th>${T('thHTTPStatus')}</th><th>${T('thErrorCode')}</th><th>${T('thErrorDetail')}</th><th>${T('thCreditsConsumed')}</th><th>${T('thAntiAbuse')}</th><th>${T('thDonationSource')}</th></tr></thead><tbody id="alf-rows"></tbody></table></div>
         <div class="row-actions" id="alf-pager" style="margin-top:.5rem"></div>
       </section>
@@ -845,103 +934,122 @@ async function onExportLogs() {
 }
 
 async function loadAdminLogStats() {
-  const canvas = $("#alf-chart");
-  if (!canvas) return;
+  if (!$("#alf-chart-area")) return;
+  let data;
   try {
-    const data = await api("/api/admin/logs/stats?days=7");
-    if (!data.by_day || data.by_day.length === 0) {
-      canvas.style.display = "none";
-      return;
-    }
-    canvas.style.display = "";
-    drawLogChart(canvas, data.by_day, data.by_service || []);
+    data = await api("/api/admin/logs/stats?days=7");
   } catch {
-    canvas.style.display = "none";
+    _adminLogStats = null;
+    hideAdminLogCharts();
+    return;
+  }
+
+  _adminLogStats = {
+    by_day: Array.isArray(data.by_day) ? data.by_day : [],
+    by_service: Array.isArray(data.by_service) ? data.by_service : [],
+  };
+  if (_adminLogStats.by_day.length === 0) {
+    hideAdminLogCharts();
+    return;
+  }
+  try {
+    await renderAdminLogCharts(_adminLogStats);
+  } catch {
+    reportAdminLogChartFailure();
   }
 }
 
-function drawLogChart(canvas, byDay, byService) {
-  const dpr = window.devicePixelRatio || 1;
-  const style = getComputedStyle(document.documentElement);
-  const mutedColor = style.getPropertyValue("--pico-muted-color").trim() || "#666";
-  const borderColor = style.getPropertyValue("--pico-muted-border-color").trim() || "#ccc";
-  const bgColor = style.getPropertyValue("--pico-card-background-color").trim() || "#fff";
+function buildAdminLogChartSummary(byDay, byService) {
+  const daily = byDay.map((d) =>
+    `${d.date}: ${T('adminLogsSuccess')} ${Number(d.success) || 0}, ${T('adminLogsError')} ${Number(d.error) || 0}`
+  ).join("; ");
+  const services = byService.map((s) =>
+    `${s.service}: ${Number(s.count) || 0}`
+  ).join("; ");
+  return `${T('adminLogsChartSummary')}: ${daily}. ${T('adminLogsByService')}: ${services || T('empty')}.`;
+}
 
-  const w = canvas.clientWidth;
-  // Height: bar chart (140px) + legend area (40px) + service bars if any
-  const svcH = byService.length > 0 ? 30 + byService.length * 16 : 0;
-  const h = 140 + svcH + 40;
-  canvas.width = w * dpr;
-  canvas.height = h * dpr;
-  canvas.style.height = h + "px";
-  const ctx = canvas.getContext("2d");
-  ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, w, h);
+async function renderAdminLogCharts(stats) {
+  destroyAdminLogCharts();
+  const generation = _adminLogChartGeneration;
+  const ChartJS = await loadChartJS();
 
-  const maxVal = Math.max(1, ...byDay.map(d => d.total));
-  const barW = Math.max(8, Math.min(30, (w - 80) / byDay.length - 4));
-  const chartL = 60, chartR = w - 10, chartT = 15, chartB = 140;
-  const chartH = chartB - chartT;
+  const area = $("#alf-chart-area");
+  const dayCanvas = $("#alf-day-chart");
+  const serviceCanvas = $("#alf-service-chart");
+  const serviceWrap = $("#alf-service-chart-wrap");
+  const summary = $("#alf-chart-summary");
+  if (generation !== _adminLogChartGeneration || !area || !dayCanvas || !serviceCanvas || !adminLogsTabVisible()) return;
 
-  // Axes.
-  ctx.strokeStyle = borderColor;
-  ctx.fillStyle = mutedColor;
-  ctx.font = "10px sans-serif";
-  ctx.textAlign = "right";
-  ctx.beginPath(); ctx.moveTo(chartL, chartT); ctx.lineTo(chartL, chartB); ctx.lineTo(chartR, chartB); ctx.stroke();
-
-  // Y-axis labels.
-  for (let i = 0; i <= 4; i++) {
-    const y = chartB - (chartH * i / 4);
-    const val = Math.round(maxVal * i / 4);
-    ctx.fillText(String(val), chartL - 6, y + 4);
-    ctx.beginPath(); ctx.moveTo(chartL, y); ctx.lineTo(chartR, y);
-    ctx.strokeStyle = "#eee"; ctx.stroke();
-    ctx.strokeStyle = borderColor;
+  const byDay = stats.by_day || [];
+  const byService = stats.by_service || [];
+  if (byDay.length === 0) {
+    area.style.display = "none";
+    return;
   }
 
-  // Bars (green = success, red = error).
-  const green = "#1a7f1a", red = "#b02020";
-  ctx.textAlign = "center";
-  byDay.forEach((d, i) => {
-    const x = chartL + i * ((chartR - chartL) / byDay.length) + 2;
-    const totalH = (d.total / maxVal) * chartH;
-    const errH = (d.error / maxVal) * chartH;
-    if (totalH > 0) {
-      ctx.fillStyle = green;
-      ctx.fillRect(x, chartB - totalH, barW, totalH - errH);
-      if (errH > 0) { ctx.fillStyle = red; ctx.fillRect(x, chartB - errH, barW, errH); }
-    }
-    const label = d.date.length >= 10 ? d.date.substring(5) : d.date;
-    ctx.fillStyle = mutedColor;
-    ctx.font = "9px sans-serif";
-    ctx.fillText(label, x + barW / 2, chartB + 12);
+  const rootStyle = getComputedStyle(document.documentElement);
+  const textColor = rootStyle.getPropertyValue("--pico-muted-color").trim() || "#666";
+  const gridColor = rootStyle.getPropertyValue("--pico-muted-border-color").trim() || "#ccc";
+  const tickSize = window.innerWidth <= 480 ? 10 : 12;
+  const tickStyle = { color: textColor, font: { size: tickSize } };
+  const gridStyle = { color: gridColor };
+
+  dayCanvas.setAttribute("aria-label", T('adminLogsDailyChartAria'));
+  serviceCanvas.setAttribute("aria-label", T('adminLogsServiceChartAria'));
+  summary.textContent = buildAdminLogChartSummary(byDay, byService);
+  area.style.display = "";
+  serviceWrap.style.display = byService.length > 0 ? "" : "none";
+  serviceWrap.style.setProperty("--admin-service-chart-height", `${Math.min(30, Math.max(12, 5 + byService.length * 2))}rem`);
+
+  const dayChart = new ChartJS(dayCanvas, {
+    type: "bar",
+    data: {
+      labels: byDay.map((d) => d.date && d.date.length >= 10 ? d.date.substring(5) : d.date),
+      datasets: [
+        { label: T('adminLogsSuccess'), data: byDay.map((d) => Number(d.success) || 0), backgroundColor: "#1a7f1a" },
+        { label: T('adminLogsError'), data: byDay.map((d) => Number(d.error) || 0), backgroundColor: "#b02020" },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      scales: {
+        x: { stacked: true, ticks: tickStyle, grid: { display: false } },
+        y: { stacked: true, beginAtZero: true, ticks: { ...tickStyle, precision: 0 }, grid: gridStyle, title: { display: true, text: T('adminLogsRequests'), color: textColor } },
+      },
+      plugins: {
+        tooltip: { mode: "index", intersect: false },
+        legend: { position: "bottom", labels: { color: textColor } },
+      },
+    },
   });
+  _adminLogCharts.push(dayChart);
 
-  // Legend.
-  const lx = chartL, ly = chartB + 28;
-  ctx.fillStyle = green; ctx.fillRect(lx, ly, 10, 10);
-  ctx.fillStyle = mutedColor; ctx.textAlign = "left"; ctx.font = "10px sans-serif";
-  ctx.fillText(T('adminLogsSuccess'), lx + 14, ly + 9);
-  ctx.fillStyle = red; ctx.fillRect(lx + 80, ly, 10, 10);
-  ctx.fillText(T('adminLogsError'), lx + 94, ly + 9);
-
-  // Per-service horizontal bars.
   if (byService.length > 0) {
-    const sy = ly + 22;
-    ctx.fillStyle = mutedColor; ctx.textAlign = "left";
-    ctx.fillText(T('adminLogsByService') + ":", lx, sy + 9);
-    const sMax = Math.max(1, ...byService.map(s => s.count));
-    byService.forEach((s, i) => {
-      const y = sy + 16 + i * 16;
-      ctx.fillStyle = mutedColor; ctx.textAlign = "right"; ctx.font = "10px sans-serif";
-      ctx.fillText(s.service, chartL - 6, y + 9);
-      const bw = Math.max(4, (s.count / sMax) * (chartR - chartL - 20));
-      ctx.fillStyle = "#4a7ddb";
-      ctx.fillRect(chartL + 4, y, bw, 11);
-      ctx.fillStyle = mutedColor; ctx.textAlign = "left";
-      ctx.fillText(String(s.count), chartL + bw + 8, y + 10);
+    const serviceChart = new ChartJS(serviceCanvas, {
+      type: "bar",
+      data: {
+        labels: byService.map((s) => s.service),
+        datasets: [{ label: T('adminLogsRequests'), data: byService.map((s) => Number(s.count) || 0), backgroundColor: "#4a7ddb" }],
+      },
+      options: {
+        indexAxis: "y",
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "nearest", intersect: false },
+        scales: {
+          x: { beginAtZero: true, ticks: { ...tickStyle, precision: 0 }, grid: gridStyle, title: { display: true, text: T('adminLogsRequests'), color: textColor } },
+          y: { ticks: tickStyle, grid: { display: false } },
+        },
+        plugins: {
+          tooltip: { intersect: false },
+          legend: { display: false },
+        },
+      },
     });
+    _adminLogCharts.push(serviceChart);
   }
 }
 
