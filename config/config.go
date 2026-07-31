@@ -426,7 +426,7 @@ func getCheckinTZOffset(envFile map[string]string) int {
 func getSMTPTLS(envFile map[string]string) string {
 	raw, ok := os.LookupEnv("SMTP_TLS")
 	if !ok {
-		raw, ok = envFile["SMTP_TLS"]
+		raw = envFile["SMTP_TLS"]
 	}
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

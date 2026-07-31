@@ -386,9 +386,7 @@ func (g *Gateway) handleListBulletins(w http.ResponseWriter, r *http.Request) {
 		lang = u.Lang
 	}
 	sysBulletins := g.buildSystemBulletins(now, lang)
-	for _, sb := range sysBulletins {
-		out = append(out, sb)
-	}
+	out = append(out, sysBulletins...)
 
 	// 2. DB bulletins (admin-created, active).
 	// Render Markdown content to HTML before sending to user clients.

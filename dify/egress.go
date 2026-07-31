@@ -69,11 +69,11 @@ func (p *EgressPolicy) ValidateBaseURL(raw string) (string, error) {
 	hostname := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
 	if hostname == "localhost" || strings.HasSuffix(hostname, ".localhost") || strings.HasSuffix(hostname, ".local") {
 		if !originAllowed {
-			return "", fmt.Errorf("Dify origin uses a local hostname that is not allowlisted")
+			return "", fmt.Errorf("dify origin uses a local hostname that is not allowlisted")
 		}
 	}
 	if addr, err := netip.ParseAddr(u.Hostname()); err == nil && p.blocked(addr) && !p.addressAllowed(addr) && !originAllowed {
-		return "", fmt.Errorf("Dify origin resolves to a non-public IP that is not allowlisted")
+		return "", fmt.Errorf("dify origin resolves to a non-public IP that is not allowlisted")
 	}
 	return origin, nil
 }
@@ -95,7 +95,7 @@ func normalizeHTTPOrigin(raw string) (string, *url.URL, error) {
 	}
 	path := strings.TrimRight(u.EscapedPath(), "/")
 	if path != "" && path != "/v1" {
-		return "", nil, fmt.Errorf("Dify base URL must be an origin with optional /v1 suffix")
+		return "", nil, fmt.Errorf("dify base URL must be an origin with optional /v1 suffix")
 	}
 	if strings.ContainsAny(u.Hostname(), "\x00\r\n\t /\\@") {
 		return "", nil, fmt.Errorf("invalid URL hostname")
@@ -137,7 +137,7 @@ func (p *EgressPolicy) newHTTPClient(origin string, timeout time.Duration) *http
 		Timeout:   timeout,
 		Transport: transport,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-			return fmt.Errorf("Dify redirects are disabled; configure the final API origin")
+			return fmt.Errorf("dify redirects are disabled; configure the final API origin")
 		},
 	}
 }
@@ -156,10 +156,10 @@ func (p *EgressPolicy) dialContext(expectedHost, expectedPort string, originAllo
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(address)
 		if err != nil {
-			return nil, fmt.Errorf("invalid Dify dial address: %w", err)
+			return nil, fmt.Errorf("invalid dify dial address: %w", err)
 		}
 		if !strings.EqualFold(strings.TrimSuffix(host, "."), strings.TrimSuffix(expectedHost, ".")) || port != expectedPort {
-			return nil, fmt.Errorf("unexpected Dify dial target %q", address)
+			return nil, fmt.Errorf("unexpected dify dial target %q", address)
 		}
 
 		var addresses []netip.Addr
@@ -172,7 +172,7 @@ func (p *EgressPolicy) dialContext(expectedHost, expectedPort string, originAllo
 			}
 		}
 		if len(addresses) == 0 {
-			return nil, fmt.Errorf("Dify host %q resolved to no addresses", host)
+			return nil, fmt.Errorf("dify host %q resolved to no addresses", host)
 		}
 
 		// Reject the complete DNS answer when any address is unsafe. Selecting
@@ -180,7 +180,7 @@ func (p *EgressPolicy) dialContext(expectedHost, expectedPort string, originAllo
 		for _, addr := range addresses {
 			addr = addr.WithZone("").Unmap()
 			if p.blocked(addr) && !originAllowed && !p.addressAllowed(addr) {
-				return nil, fmt.Errorf("Dify host %q resolved to blocked address %s", host, addr)
+				return nil, fmt.Errorf("dify host %q resolved to blocked address %s", host, addr)
 			}
 		}
 

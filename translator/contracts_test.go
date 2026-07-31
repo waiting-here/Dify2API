@@ -176,14 +176,14 @@ func TestTranslateForService_ShujukuFilling(t *testing.T) {
 
 	// Violations.
 	bad := [][]openai.Message{
-		msgs([2]string{"user", "U"}),                                                     // no system
-		msgs([2]string{"system", "S"}),                                                   // system only
-		msgs([2]string{"assistant", "A"}),                                                // no system
-		msgs([2]string{"system", "S"}, [2]string{"user", "U"}),                        // user_0 without rest
-		msgs([2]string{"system", "S"}, [2]string{"assistant", "A"}),                   // too few alternation slots
-		msgs([2]string{"system", "S"}, [2]string{"assistant", "A"}, [2]string{"assistant", "A"}, [2]string{"user", "U"}, [2]string{"assistant", "A"}, [2]string{"user", "U"}, [2]string{"assistant", "A"}, [2]string{"user", "U"}), // wrong alternation
-		msgs([2]string{"system", "S"}, [2]string{"assistant", " "}, [2]string{"user", "U"}, [2]string{"assistant", "A"}, [2]string{"user", "U"}, [2]string{"assistant", "A"}, [2]string{"user", "U"}, [2]string{"assistant", "P"}), // empty content
-		msgs([2]string{"system", " "}, [2]string{"assistant", "A"}, [2]string{"user", "U"}, [2]string{"assistant", "A"}, [2]string{"user", "U"}, [2]string{"assistant", "A"}, [2]string{"user", "U"}, [2]string{"assistant", "P"}), // empty system
+		msgs([2]string{"user", "U"}),                                // no system
+		msgs([2]string{"system", "S"}),                              // system only
+		msgs([2]string{"assistant", "A"}),                           // no system
+		msgs([2]string{"system", "S"}, [2]string{"user", "U"}),      // user_0 without rest
+		msgs([2]string{"system", "S"}, [2]string{"assistant", "A"}), // too few alternation slots
+		msgs([2]string{"system", "S"}, [2]string{"assistant", "A"}, [2]string{"assistant", "A"}, [2]string{"user", "U"}, [2]string{"assistant", "A"}, [2]string{"user", "U"}, [2]string{"assistant", "A"}, [2]string{"user", "U"}),                         // wrong alternation
+		msgs([2]string{"system", "S"}, [2]string{"assistant", " "}, [2]string{"user", "U"}, [2]string{"assistant", "A"}, [2]string{"user", "U"}, [2]string{"assistant", "A"}, [2]string{"user", "U"}, [2]string{"assistant", "P"}),                         // empty content
+		msgs([2]string{"system", " "}, [2]string{"assistant", "A"}, [2]string{"user", "U"}, [2]string{"assistant", "A"}, [2]string{"user", "U"}, [2]string{"assistant", "A"}, [2]string{"user", "U"}, [2]string{"assistant", "P"}),                         // empty system
 		msgs([2]string{"system", "S"}, [2]string{"assistant", "A"}, [2]string{"user", "U"}, [2]string{"assistant", "A"}, [2]string{"user", "U"}, [2]string{"assistant", "A"}, [2]string{"user", "U"}, [2]string{"assistant", "P"}, [2]string{"user", "X"}), // too many
 	}
 	for i, c := range bad {

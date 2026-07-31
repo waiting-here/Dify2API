@@ -22,7 +22,7 @@ type Message struct {
 	Content MessageContent `json:"content"` // text content (string or text parts)
 	// Images holds image references from OpenAI multimodal content parts:
 	// either "data:image/...;base64,..." data URIs or http(s) URLs.
-	Images  []string       `json:"-"`
+	Images []string `json:"-"`
 }
 
 // UnmarshalJSON parses content as either a plain string or an array of parts

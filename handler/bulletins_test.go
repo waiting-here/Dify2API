@@ -370,7 +370,7 @@ func TestBulletinUpdate_ContentTypeAndLang(t *testing.T) {
 	defer gw.Store.DeleteBulletin(id)
 
 	// Update content_type and lang.
-	updateBody := fmt.Sprintf(`{"title":"Updated","content":"# MD","type":"info","content_type":"markdown","lang":"en"}`)
+	updateBody := `{"title":"Updated","content":"# MD","type":"info","content_type":"markdown","lang":"en"}`
 	updateReq := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/admin/bulletins/%d", id), strings.NewReader(updateBody))
 	updateReq.AddCookie(adminCookie)
 	updateReq.Header.Set("Content-Type", "application/json")

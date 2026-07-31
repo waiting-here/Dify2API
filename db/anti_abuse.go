@@ -8,13 +8,13 @@ import (
 
 // AntiAbuseConfig holds the per-service anti-abuse configuration.
 type AntiAbuseConfig struct {
-	Service             string
-	Mode                int // 0=off, 1=charity-only, 2=global
-	MinChars            int
+	Service              string
+	Mode                 int // 0=off, 1=charity-only, 2=global
+	MinChars             int
 	PenaltyDeductCredits int
-	PenaltyBanHours     int
-	CreatedAt           int64
-	UpdatedAt           int64
+	PenaltyBanHours      int
+	CreatedAt            int64
+	UpdatedAt            int64
 }
 
 func scanAntiAbuse(row interface{ Scan(...interface{}) error }) (*AntiAbuseConfig, error) {
@@ -60,13 +60,13 @@ func (s *Store) GetAntiAbuseConfigs(services []string) (map[string]*AntiAbuseCon
 				return nil, fmt.Errorf("seed anti_abuse for %q: %w", svc, err)
 			}
 			configs[svc] = &AntiAbuseConfig{
-				Service:             svc,
-				Mode:                2,
-				MinChars:            20,
+				Service:              svc,
+				Mode:                 2,
+				MinChars:             20,
 				PenaltyDeductCredits: 0,
-				PenaltyBanHours:     0,
-				CreatedAt:           now,
-				UpdatedAt:           now,
+				PenaltyBanHours:      0,
+				CreatedAt:            now,
+				UpdatedAt:            now,
 			}
 		}
 	}
