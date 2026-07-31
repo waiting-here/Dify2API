@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -211,6 +213,51 @@ func TestEgressPolicy_SelfOriginAllowlistCannotOverride(t *testing.T) {
 	dial := policy.dialContext("http", "127.0.0.1", "9000", 5)
 	if _, err := dial(context.Background(), "tcp", "127.0.0.1:9000"); err == nil || !strings.Contains(err.Error(), "connection refused") {
 		t.Fatalf("allowlisted self origin must still be refused, got %v", err)
+	}
+}
+
+func TestEgressPolicy_SelfLoopbackAllowedListedWithNonLiteralListenAddr(t *testing.T) {
+	// Regression: with the common default LISTEN_ADDR=localhost:port (a
+	// non-literal host), an allowlisted origin pointing at the gateway's own
+	// loopback listener must still be refused by the self guard. Before the
+	// fix the loopback addresses were only registered when LISTEN_ADDR was a
+	// literal IP or SITE/ADMIN hosts were loopback, so this dial succeeded.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	port := ln.Addr().(*net.TCPAddr).Port
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+
+	allowlisted := fmt.Sprintf("http://127.0.0.1:%d", port)
+	policy, err := NewEgressPolicy([]string{allowlisted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// SITE/ADMIN are public hostnames; LISTEN_ADDR uses the non-literal
+	// "localhost" host — the exact configuration that used to leave the gap.
+	policy.AddSelfOrigins("https://gw.example.com", "admin.example.com", "localhost:"+strconv.Itoa(port))
+
+	// The listener really accepts connections, so a refusal can only come
+	// from the policy guard, not from the network.
+	if conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), time.Second); err != nil {
+		t.Fatalf("control dial to listener failed: %v", err)
+	} else {
+		conn.Close()
+	}
+
+	dial := policy.dialContext("http", "127.0.0.1", strconv.Itoa(port), 7)
+	if _, err := dial(context.Background(), "tcp", fmt.Sprintf("127.0.0.1:%d", port)); err == nil || !strings.Contains(err.Error(), "connection refused") {
+		t.Fatalf("allowlisted self loopback origin must be refused, got %v", err)
 	}
 }
 

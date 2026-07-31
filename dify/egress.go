@@ -105,6 +105,16 @@ func (p *EgressPolicy) AddSelfOrigins(siteBaseURL, adminHost, listenAddr string)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	// The gateway's own listener is bound to loopback in the common default
+	// (LISTEN_ADDR=localhost:port), but "localhost" is not a literal IP, so
+	// register the loopback addresses unconditionally. Combined with
+	// selfPorts (the gateway's own listener ports only), this refuses any
+	// allowlisted dial that would land on the gateway itself while leaving
+	// a loopback Dify App on a different port reachable when explicitly
+	// allowlisted.
+	p.selfIPs[netip.MustParseAddr("127.0.0.1")] = struct{}{}
+	p.selfIPs[netip.MustParseAddr("::1")] = struct{}{}
+
 	if host, _, err := net.SplitHostPort(listenAddr); err == nil {
 		if addr, err := netip.ParseAddr(host); err == nil {
 			p.selfIPs[addr.Unmap()] = struct{}{}
@@ -149,11 +159,9 @@ func (p *EgressPolicy) addSelfHost(ctx context.Context, raw string, isSite bool)
 	}
 
 	if isLoopbackHost(hostname) {
-		// Loopback-family hosts are already refused by blocked() unless
-		// explicitly allowlisted; register the loopback addresses so even
-		// an allowlisted self-origin cannot dial the gateway itself.
-		p.selfIPs[netip.MustParseAddr("127.0.0.1")] = struct{}{}
-		p.selfIPs[netip.MustParseAddr("::1")] = struct{}{}
+		// Loopback-family hosts need no DNS and their addresses are already
+		// registered unconditionally in AddSelfOrigins; the hostname-based
+		// origin rule below still applies.
 	} else if addr, err := netip.ParseAddr(hostname); err == nil {
 		p.selfIPs[addr.Unmap()] = struct{}{}
 	} else {
