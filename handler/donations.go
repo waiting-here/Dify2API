@@ -559,7 +559,9 @@ func (g *Gateway) handlePatchDonation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.TotalCount > 0 && req.TotalCount != d.TotalCount {
-		sets = append(sets, "total_count=?, remaining_count=remaining_count + (? - ?)")
+		// Lowering total_count must never drive remaining_count below zero
+		// (a negative value would be unroutable and confusing in the UI).
+		sets = append(sets, "total_count=?, remaining_count=MAX(0, remaining_count + (? - ?))")
 		args = append(args, req.TotalCount, req.TotalCount, d.TotalCount)
 	}
 

@@ -1913,3 +1913,54 @@ func TestAdminHost_ApplicationsAllowed(t *testing.T) {
 		t.Errorf("admin-host /api/admin/donations/applications: status = %d, want 200; body: %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestDonationPatch_TotalCountNeverNegativeRemaining(t *testing.T) {
+	// Regression: lowering total_count used `remaining_count + (new - old)`
+	// without a lower bound, so shrinking the total below the already-used
+	// count drove remaining_count negative (unroutable, confusing UI).
+	gw, store := setupAuthGateway(t, "x")
+	admin := adminCookie(t, gw)
+
+	u, _ := store.CreateUser("neg-rem", "neg-rem", "")
+	d := &db.Donation{
+		Service:         "general",
+		Model:           "neg-test",
+		DifyBaseURL:     "https://dify.example.com/v1",
+		SourceUserID:    sql.NullInt64{Int64: u.ID, Valid: true},
+		SourceDiscordID: u.DiscordID,
+		SourceUsername:  u.Username,
+		Deadline:        time.Now().Add(24 * time.Hour).Unix(),
+		TotalCount:      10,
+		Status:          db.DonationActive,
+	}
+	created, err := store.CreateDonation(d, "app-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate 8 uses consumed: remaining 2 of total 10.
+	if _, err := store.Exec(`UPDATE donations SET remaining_count=2 WHERE id=?`, created.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Shrink the total below the used count: remaining must clamp at 0.
+	rec := donationRequest(gw, admin, "PATCH", fmt.Sprintf("/api/admin/donations/%d", created.ID),
+		map[string]interface{}{"total_count": 1})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch: status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	updated, _ := store.GetDonation(created.ID)
+	if updated.RemainingCount != 0 {
+		t.Fatalf("remaining_count = %d, want 0 (clamped, not negative)", updated.RemainingCount)
+	}
+
+	// Growing the total again still adds to remaining as before.
+	rec2 := donationRequest(gw, admin, "PATCH", fmt.Sprintf("/api/admin/donations/%d", created.ID),
+		map[string]interface{}{"total_count": 3})
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("patch up: status = %d, body: %s", rec2.Code, rec2.Body.String())
+	}
+	updated2, _ := store.GetDonation(created.ID)
+	if updated2.RemainingCount != 2 {
+		t.Fatalf("remaining_count = %d, want 2 after top-up", updated2.RemainingCount)
+	}
+}
