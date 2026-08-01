@@ -101,7 +101,7 @@ function updateThemeButton() {
   btn.title = themeTitle(theme);
 }
 
-(async function init() {
+async function init() {
   try {
     state.site = await api("/api/site-info");
   } catch {
@@ -134,7 +134,23 @@ function updateThemeButton() {
   }
   applyFooterLang();
   route();
-})();
+}
+
+// common.js is loaded before user.js/admin.js. Wait until all parser-blocking
+// scripts have executed before the async bootstrap can call their renderers;
+// otherwise a fast cached /api response can make route() win the load race.
+function bootApp() {
+  init().catch((err) => {
+    console.error("Dify2API frontend initialization failed", err);
+    const app = $("#app");
+    if (app) app.textContent = "页面加载失败，请刷新重试。";
+  });
+}
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", bootApp, { once: true });
+} else {
+  bootApp();
+}
 
 // Footer legal links are plain HTML shared by both sites (index.html);
 // update their labels to follow the current UI language.

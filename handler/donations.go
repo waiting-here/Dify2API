@@ -294,6 +294,15 @@ func (g *Gateway) handleListDonations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Keep the persisted status in sync even if the background sweep has not
+	// reached a deadline yet (or the process was just started). Routing also
+	// checks deadline in SQL, but the admin table must show expired rather than
+	// leaving an overdue row as active/inactive.
+	if _, err := g.Store.ExpireOverdueDonations(time.Now().Unix()); err != nil {
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+
 	list, err := g.Store.ListDonations()
 	if err != nil {
 		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
@@ -828,6 +837,8 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 		}
 		if err != nil {
 			g.charityFailAccounting(userID, donation, reservation, err)
+			g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_error",
+				difyErrorStatus(err), err.Error(), donation.ID, 0, "")
 			g.writeDifyError(w, err)
 			return
 		}
@@ -852,6 +863,8 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 			}
 			if err != nil {
 				g.charityFailAccounting(userID, donation, reservation, err)
+				g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_error",
+					difyErrorStatus(err), err.Error(), donation.ID, 0, "")
 				g.writeDifyError(w, err)
 				return
 			}
@@ -861,14 +874,23 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 
 	if ctx.Err() != nil {
 		g.charitySuccessAccounting(reservation)
+		if firstEvt != nil {
+			// We observed an upstream event before the downstream canceled;
+			// this is still a class-B success.
+			g.limiter.record(rpmClassB, userID, time.Now())
+		}
 		g.logRequestDonation(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest,
 			ctx.Err().Error(), donation.ID, reservation.Price, "")
 		return
 	}
 
-	// Stream started (Dify HTTP 200): atomically settle the reservation.
+	// Stream started (Dify HTTP 200): this is a successful charity call per
+	// the contract. Commit the reservation and record class-B RPM immediately;
+	// a later truncation must not turn this consumed call into a donation
+	// failure or trigger auto-inactivation.
 	donationID := donation.ID
 	g.charitySuccessAccounting(reservation)
+	g.limiter.record(rpmClassB, userID, time.Now())
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -952,16 +974,15 @@ loop:
 		// recorded when the stream started, and workflow failure
 		// does not indicate Dify-endpoint unavailability.
 	case streamErr != nil:
-		// Transport-level failure mid-stream (connection reset,
-		// timeout, …).  Per the sixth-round ruling this IS a
-		// "Dify 端不可用" failure and counts toward the 10-strike
-		// auto-inactivate rule.
+		// The stream had already started, so the reservation was committed and
+		// class B was recorded above. A transport truncation still fails the
+		// user's transfer, but it is not a donation-endpoint failure: do not
+		// refund, increment failure_count, or auto-inactivate the donation.
 		log.Printf("[ERROR] dify charity stream (user %d): %v", userID, streamErr)
 		fmt.Fprint(w, translator.FormatSSEErrorFrame("[Dify] "+streamErr.Error()))
 		flusher.Flush()
 		status, code = "error", "upstream_error"
 		detail = streamErr.Error()
-		g.charityPostCommitFailure(userID, donation, streamErr)
 	default:
 		for _, msg := range conv.Finalize() {
 			fmt.Fprint(w, msg.Data)
@@ -1016,9 +1037,11 @@ func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wf
 				t(lang, "上游 Dify 服务响应超时：请求可能因 Cloudflare 100 秒限制被截断。建议使用流式传输（stream: true）或拆分任务后重试。", "Upstream Dify service timeout: the request may have been truncated by Cloudflare's 100-second limit. Consider using streaming (stream: true) or splitting the task."))
 			return
 		}
-		// Real upstream failure — donation failure
+		// Real upstream failure — donation failure. Keep the selected donation
+		// ID on the request log so the admin view can resolve its source.
 		g.charityFailAccounting(userID, donation, reservation, err)
-		g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error(), "")
+		g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_error",
+			difyErrorStatus(err), err.Error(), donationID, 0, "")
 		g.writeDifyError(w, err)
 		return
 	}
@@ -1069,18 +1092,6 @@ func (g *Gateway) charityFailAccounting(userID int64, donation *db.Donation, res
 	consecutive, recErr := g.Store.ReleaseCharityReservation(ctx, reservation.ID, true)
 	if recErr != nil {
 		log.Printf("[ERROR] release charity reservation %s: %v", reservation.ID, recErr)
-		return
-	}
-	g.maybeInactivateDonation(donation, consecutive)
-}
-
-// charityPostCommitFailure records a transport failure that happened after an
-// HTTP 200 already committed the reservation. It must not refund consumption.
-func (g *Gateway) charityPostCommitFailure(userID int64, donation *db.Donation, err error) {
-	log.Printf("[DONATION] donation %d post-commit failure (user %d): %v", donation.ID, userID, err)
-	consecutive, recErr := g.Store.RecordDonationFailure(donation.ID)
-	if recErr != nil {
-		log.Printf("[ERROR] record donation failure (donation %d): %v", donation.ID, recErr)
 		return
 	}
 	g.maybeInactivateDonation(donation, consecutive)

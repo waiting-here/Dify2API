@@ -732,8 +732,8 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 			g.releaseCharitySetup(reservation)
 			releaseRPM()
 			log.Printf("[ERROR] decrypt donation key (donation %d): %v", picked.ID, decryptErr)
-			g.logRequest(user.ID, logModel, service, startedAt, "error", "internal",
-				http.StatusInternalServerError, "credential decryption error", "")
+			g.logRequestDonation(user.ID, logModel, service, startedAt, "error", "internal",
+				http.StatusInternalServerError, "credential decryption error", picked.ID, 0, "")
 			g.writeError(charityWriter, http.StatusInternalServerError, "internal", "credential error")
 			return
 		}
@@ -741,8 +741,8 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 		if err != nil {
 			g.releaseCharitySetup(reservation)
 			releaseRPM()
-			g.logRequest(user.ID, logModel, service, startedAt, "error", "upstream_blocked",
-				http.StatusBadGateway, err.Error(), "")
+			g.logRequestDonation(user.ID, logModel, service, startedAt, "error", "upstream_blocked",
+				http.StatusBadGateway, err.Error(), picked.ID, 0, "")
 			g.writeError(charityWriter, http.StatusBadGateway, "upstream_blocked", "configured Dify origin is blocked by the egress policy")
 			return
 		}
@@ -768,8 +768,12 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 		g.releaseCharitySetup(reservation)
 		releaseRPM()
 		if errors.Is(err, context.Canceled) {
+			g.logRequestDonation(user.ID, logModel, service, startedAt, "error", "client_canceled",
+				statusClientClosedRequest, "client disconnected before charity dispatch", picked.ID, 0, "")
 			return
 		}
+		g.logRequestDonation(user.ID, logModel, service, startedAt, "error", "internal",
+			http.StatusInternalServerError, "failed to dispatch charity reservation", picked.ID, 0, "")
 		g.writeError(charityWriter, http.StatusInternalServerError, "internal", "failed to dispatch charity reservation")
 		return
 	}
@@ -786,8 +790,8 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 			}
 			log.Printf("[ERROR] charity image files (user %d): %v", user.ID, err)
 			g.charityFailAccounting(user.ID, picked, reservation, err)
-			g.logRequest(user.ID, logModel, service, startedAt, "error", "image_upload_failed",
-				difyErrorStatus(err), err.Error(), "")
+			g.logRequestDonation(user.ID, logModel, service, startedAt, "error", "image_upload_failed",
+				difyErrorStatus(err), err.Error(), picked.ID, 0, "")
 			g.writeDifyError(charityWriter, err)
 			return
 		}

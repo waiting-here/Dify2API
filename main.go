@@ -111,11 +111,16 @@ func main() {
 	}
 
 	// Background cleanup: enforce rolling 30-day retention for every request
-	// log and settled charity accounting record, and remove expired sessions.
-	// Run once at startup and then every 24 hours.
+	// log and settled charity accounting record, remove expired sessions, and
+	// materialize overdue donations as expired. Retention cleanup runs once at
+	// startup and then every 24 hours; the expiry sweep below runs every minute.
 	go func() {
 		runCleanup := func() {
 			now := time.Now().Unix()
+			donationsExpired, donationErr := store.ExpireOverdueDonations(now)
+			if donationErr != nil {
+				log.Printf("[CLEANUP] donations: %v", donationErr)
+			}
 			logsDeleted, alertsDeleted, logErr := store.PurgeExpiredRequestLogs(now)
 			if logErr != nil {
 				log.Printf("[CLEANUP] request logs: %v", logErr)
@@ -128,14 +133,26 @@ func main() {
 			if reservationErr != nil {
 				log.Printf("[CLEANUP] charity reservations: %v", reservationErr)
 			}
-			log.Printf("[CLEANUP] purged %d request logs, %d bound alerts, %d sessions, %d charity reservations",
-				logsDeleted, alertsDeleted, sessionsDeleted, reservationsDeleted)
+			log.Printf("[CLEANUP] expired %d donations; purged %d request logs, %d bound alerts, %d sessions, %d charity reservations",
+				donationsExpired, logsDeleted, alertsDeleted, sessionsDeleted, reservationsDeleted)
 		}
 		runCleanup()
-		ticker := time.NewTicker(24 * time.Hour)
-		defer ticker.Stop()
-		for range ticker.C {
-			runCleanup()
+		cleanupTicker := time.NewTicker(24 * time.Hour)
+		expiryTicker := time.NewTicker(time.Minute)
+		defer cleanupTicker.Stop()
+		defer expiryTicker.Stop()
+		for {
+			select {
+			case <-cleanupTicker.C:
+				runCleanup()
+			case <-expiryTicker.C:
+				expired, err := store.ExpireOverdueDonations(time.Now().Unix())
+				if err != nil {
+					log.Printf("[CLEANUP] donations: %v", err)
+				} else if expired > 0 {
+					log.Printf("[CLEANUP] expired %d overdue donations", expired)
+				}
+			}
 		}
 	}()
 

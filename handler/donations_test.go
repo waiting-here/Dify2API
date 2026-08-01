@@ -250,6 +250,57 @@ func TestListDonations(t *testing.T) {
 	}
 }
 
+// TestListDonations_MaterializesDeadlineExpiry verifies that the admin list
+// does not expose an overdue entry as merely inactive/active when the periodic
+// sweep has not run yet.
+func TestListDonations_MaterializesDeadlineExpiry(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	admin := adminCookie(t, gw)
+
+	d, err := store.CreateDonation(&db.Donation{
+		Service:     "general",
+		Model:       "overdue-list-test",
+		DifyBaseURL: "https://dify.example.com/v1",
+		Deadline:    time.Now().Add(-time.Hour).Unix(),
+		TotalCount:  5,
+		Status:      db.DonationInactive,
+	}, "app-secret")
+	if err != nil {
+		t.Fatalf("create overdue donation: %v", err)
+	}
+
+	rec := donationRequest(gw, admin, "GET", "/api/admin/donations", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Donations []map[string]interface{} `json:"donations"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	var listed map[string]interface{}
+	for _, item := range resp.Donations {
+		if int64(item["id"].(float64)) == d.ID {
+			listed = item
+			break
+		}
+	}
+	if listed == nil {
+		t.Fatalf("overdue donation %d not found in list", d.ID)
+	}
+	if listed["status"] != db.DonationExpired {
+		t.Errorf("listed status = %v, want expired", listed["status"])
+	}
+	stored, err := store.GetDonation(d.ID)
+	if err != nil {
+		t.Fatalf("get expired donation: %v", err)
+	}
+	if stored.Status != db.DonationExpired {
+		t.Errorf("stored status = %q, want expired", stored.Status)
+	}
+}
+
 // TestDonationStatusToggle tests active↔inactive switching.
 func TestDonationStatusToggle(t *testing.T) {
 	gw, store := setupAuthGateway(t, "x")
@@ -564,6 +615,185 @@ func TestCharityRouting_Success(t *testing.T) {
 	callerUpdated, _ := store.GetUserByID(u.ID)
 	if callerUpdated.Credits != 10 {
 		t.Errorf("caller credits = %d, want 10", callerUpdated.Credits)
+	}
+}
+
+// TestCharityStreaming_PostStartTransportErrorCountsAsSuccess verifies the
+// contract boundary: once Dify has started the SSE stream, the donation use
+// is successful even if the stream later fails to parse/transport completely.
+func TestCharityStreaming_PostStartTransportErrorCountsAsSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/workflows/run" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("test response writer does not support flushing")
+		}
+		fmt.Fprint(w, "data: {\"event\":\"text_chunk\",\"task_id\":\"t\",\"data\":{\"text\":\"partial\"}}\n\n")
+		flusher.Flush()
+		// The first event has started the stream. A malformed subsequent SSE
+		// frame exercises the same post-start transport-error accounting path
+		// as a connection reset, without relying on platform-specific TCP RST
+		// behavior in the test.
+		fmt.Fprint(w, "data: {\n\n")
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	gw, store := setupAuthGateway(t, "x")
+	allowDifyTestOrigin(t, gw, srv.URL)
+	u, err := store.CreateUser("510", "charity_stream_truncated", "")
+	if err != nil {
+		t.Fatalf("create caller: %v", err)
+	}
+	key, err := store.SetCallerKey(u.ID)
+	if err != nil {
+		t.Fatalf("set caller key: %v", err)
+	}
+	store.SetUserCharityEnabled(u.ID, true)
+	store.SetUserCredits(u.ID, 20)
+	store.SetSetting(db.SettingCharityEnabled, "true")
+
+	donor, err := store.CreateUser("511", "charity_stream_donor", "")
+	if err != nil {
+		t.Fatalf("create donor: %v", err)
+	}
+	donation, err := store.CreateDonation(&db.Donation{
+		Service:      "general",
+		Model:        "stream-truncated",
+		DifyBaseURL:  srv.URL,
+		SourceUserID: sql.NullInt64{Int64: donor.ID, Valid: true},
+		Deadline:     time.Now().Add(time.Hour).Unix(),
+		TotalCount:   10,
+		Status:       db.DonationActive,
+	}, "app-secret")
+	if err != nil {
+		t.Fatalf("create donation: %v", err)
+	}
+	if _, err := store.UpsertPricing("general", "stream-truncated", 10, ptr(5)); err != nil {
+		t.Fatalf("create pricing: %v", err)
+	}
+	store.SetPricingEnabled("general", "stream-truncated", true)
+
+	rec := chatRequest(gw, key, `{"model":"[公益][general]stream-truncated","messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"error"`) || strings.Contains(rec.Body.String(), "data: [DONE]") {
+		t.Fatalf("post-start stream error should be an error frame without DONE: %s", rec.Body.String())
+	}
+
+	updated, err := store.GetDonation(donation.ID)
+	if err != nil {
+		t.Fatalf("get donation: %v", err)
+	}
+	if updated.SuccessCount != 1 || updated.RemainingCount != 9 {
+		t.Errorf("donation success accounting = success %d remaining %d, want 1/9", updated.SuccessCount, updated.RemainingCount)
+	}
+	if updated.FailureCount != 0 || updated.ConsecutiveFailures != 0 {
+		t.Errorf("post-start stream error counted as donation failure: failure %d consecutive %d", updated.FailureCount, updated.ConsecutiveFailures)
+	}
+	caller, _ := store.GetUserByID(u.ID)
+	if caller.Credits != 10 {
+		t.Errorf("caller credits = %d, want 10 after committed call", caller.Credits)
+	}
+	donorUpdated, _ := store.GetUserByID(donor.ID)
+	if donorUpdated.DonationCredit != 1 {
+		t.Errorf("donor donation_credit = %d, want 1", donorUpdated.DonationCredit)
+	}
+
+	gw.limiter.mu.Lock()
+	bHits := len(gw.limiter.hits[rpmClassB][u.ID])
+	gw.limiter.mu.Unlock()
+	if bHits != 1 {
+		t.Errorf("class-B hits = %d, want 1 after stream start", bHits)
+	}
+}
+
+// TestCharityBlockingFailureLogIncludesDonationSource verifies that a failure
+// after selecting a donation still links the request log to that donation, so
+// the admin log table can resolve source_display.
+func TestCharityBlockingFailureLogIncludesDonationSource(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/workflows/run" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprint(w, `{"code":"upstream_failed","message":"temporary failure"}`)
+	}))
+	defer srv.Close()
+
+	gw, store := setupAuthGateway(t, "x")
+	allowDifyTestOrigin(t, gw, srv.URL)
+	u, err := store.CreateUser("520", "charity_failure_caller", "")
+	if err != nil {
+		t.Fatalf("create caller: %v", err)
+	}
+	key, err := store.SetCallerKey(u.ID)
+	if err != nil {
+		t.Fatalf("set caller key: %v", err)
+	}
+	store.SetUserCharityEnabled(u.ID, true)
+	store.SetUserCredits(u.ID, 20)
+	store.SetSetting(db.SettingCharityEnabled, "true")
+
+	donor, err := store.CreateUser("521", "charity_failure_donor", "")
+	if err != nil {
+		t.Fatalf("create donor: %v", err)
+	}
+	donation, err := store.CreateDonation(&db.Donation{
+		Service:      "general",
+		Model:        "blocking-failure",
+		DifyBaseURL:  srv.URL,
+		SourceUserID: sql.NullInt64{Int64: donor.ID, Valid: true},
+		Deadline:     time.Now().Add(time.Hour).Unix(),
+		TotalCount:   10,
+		Status:       db.DonationActive,
+	}, "app-secret")
+	if err != nil {
+		t.Fatalf("create donation: %v", err)
+	}
+	if _, err := store.UpsertPricing("general", "blocking-failure", 10, ptr(5)); err != nil {
+		t.Fatalf("create pricing: %v", err)
+	}
+	store.SetPricingEnabled("general", "blocking-failure", true)
+
+	rec := chatRequest(gw, key, `{"model":"[公益][general]blocking-failure","messages":[{"role":"user","content":"hello"}]}`)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	adminRec := adminGet(gw, adminCookie(t, gw), "/api/admin/logs?status=error&limit=100")
+	if adminRec.Code != http.StatusOK {
+		t.Fatalf("admin logs status = %d, body: %s", adminRec.Code, adminRec.Body.String())
+	}
+	var resp struct {
+		Logs []struct {
+			DonationID    *int64 `json:"donation_id"`
+			ErrorCode     string `json:"error_code"`
+			SourceDisplay string `json:"source_display"`
+		} `json:"logs"`
+	}
+	if err := json.Unmarshal(adminRec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode admin logs: %v", err)
+	}
+	found := false
+	for _, entry := range resp.Logs {
+		if entry.ErrorCode != "upstream_error" || entry.DonationID == nil || *entry.DonationID != donation.ID {
+			continue
+		}
+		found = true
+		if entry.SourceDisplay != donor.Username {
+			t.Errorf("source_display = %q, want %q", entry.SourceDisplay, donor.Username)
+		}
+	}
+	if !found {
+		t.Fatalf("failed charity log for donation %d was not linked in admin response: %s", donation.ID, adminRec.Body.String())
 	}
 }
 
