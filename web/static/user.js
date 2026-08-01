@@ -113,6 +113,7 @@ async function renderUserDashboard() {
             <label>${T('thModel')}<input name="backend" placeholder="${T('fieldBackend')}${T('fieldBackendHint')}" required></label>
           </div>
           <label>${T('thBaseURL')}<input name="dify_base_url" placeholder="${T('fieldBaseURL')}" required></label>
+          <div id="cfg-base-url-warn"></div>
           <label>API Key<input name="dify_api_key" placeholder="${T('fieldAPIKey')}" required></label>
           <label>${T('thNote')}<input name="note" placeholder="${T('fieldNote')}"></label>
           <button type="submit" id="cfg-submit">${T('addConfig')}</button>
@@ -828,13 +829,13 @@ async function renderMyDonations() {
             note: f.note.value.trim(),
           },
         });
-        f.reset();
         if (resp.notice) {
-          // Keep the form visible so the user can fix the address.
+          // Keep the form (values intact) so the user can fix the address.
           msg.innerHTML = `<div class="note warn">⚠ ${esc(resp.notice)}</div>`;
           await renderMyDonations();
           return;
         }
+        f.reset();
         msg.textContent = "";
         toast(T('donationApplySubmitted'));
         form.style.display = "none";
@@ -1005,6 +1006,13 @@ async function showConfigEditDialog(c) {
   };
 }
 
+// Self-site hint state for the create form. Set when the create API answers
+// with a `notice` (base URL looks like this console). The config is already
+// saved; we keep the form values, pin a persistent warning next to the field,
+// and route the next submit to PUT so a corrected address updates the saved
+// row in place (re-POSTing the same model name would 409).
+let _cfgSelfSitePending = null; // {id: number} | null
+
 async function onConfigSubmit(e) {
   e.preventDefault();
   const f = e.target;
@@ -1015,10 +1023,13 @@ async function onConfigSubmit(e) {
     note: f.note.value,
   };
   const note = $("#check-note");
+  const warn = $("#cfg-base-url-warn");
   note.innerHTML = `<p class="muted">${T('loading')}</p>`;
+  const pending = _cfgSelfSitePending;
   try {
-    const resp = await api("/api/configs", { method: "POST", body });
-    f.reset();
+    const resp = pending
+      ? await api(`/api/configs/${pending.id}`, { method: "PUT", body })
+      : await api("/api/configs", { method: "POST", body });
     const c = resp.app_check || {};
     let cls = "ok", html = "";
     if (c.error) {
@@ -1039,10 +1050,39 @@ async function onConfigSubmit(e) {
     }
     note.innerHTML = `<div class="note ${cls}">${html}</div>`;
     if (resp.notice) {
-      note.innerHTML += `<div class="note warn" style="margin-top:.4rem">⚠ ${esc(resp.notice)}</div>`;
+      // Same stance as the edit dialog: the config is saved, but the base URL
+      // looks like this console. Keep the form (values intact) and pin a
+      // prominent warning next to the field — the user must fix the address
+      // or explicitly confirm before the flow completes.
+      _cfgSelfSitePending = { id: resp.config.id };
+      warn.innerHTML = `
+        <div class="note err">
+          <strong>⚠ ${esc(resp.notice)}</strong><br>
+          <span class="muted">${T('cfgSelfSiteFixHint')}</span><br>
+          <button type="button" class="secondary" id="cfg-selfsite-confirm" style="margin-top:.4rem">${T('cfgSelfSiteConfirm')}</button>
+        </div>`;
+      $("#cfg-selfsite-confirm").onclick = () => {
+        _cfgSelfSitePending = null;
+        warn.innerHTML = "";
+        note.innerHTML = "";
+        f.reset();
+        loadConfigs();
+      };
+      await loadConfigs();
+      return;
     }
+    _cfgSelfSitePending = null;
+    warn.innerHTML = "";
+    f.reset();
     await loadConfigs();
   } catch (err) {
+    if (pending && err.status === 404) {
+      // The row created in the previous attempt was deleted from the list
+      // while the form stayed open; the next submit creates it fresh again.
+      _cfgSelfSitePending = null;
+      note.innerHTML = `<div class="note err">${T('cfgSelfSiteGone')}</div>`;
+      return;
+    }
     note.innerHTML = `<div class="note err">${T('error').replace("{msg}", esc(err.message))}</div>`;
   }
 }
