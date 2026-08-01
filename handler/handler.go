@@ -572,7 +572,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if req.Stream {
 		g.handleStreaming(writer, client, wfReq, modelName, user.ID, service, startedAt, r.Context())
 	} else {
-		g.handleBlocking(writer, client, wfReq, modelName, user.ID, service, startedAt, r.Context())
+		g.handleBlocking(writer, client, wfReq, modelName, user.ID, userLang(user), service, startedAt, r.Context())
 	}
 }
 
@@ -804,7 +804,7 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 	if req.Stream {
 		g.charityStreaming(charityWriter, client, wfReq, logModel, user.ID, service, startedAt, picked, reservation, r.Context())
 	} else {
-		g.charityBlocking(charityWriter, client, wfReq, logModel, user.ID, service, startedAt, picked, reservation, r.Context())
+		g.charityBlocking(charityWriter, client, wfReq, logModel, user.ID, userLang(user), service, startedAt, picked, reservation, r.Context())
 	}
 }
 
@@ -974,7 +974,7 @@ loop:
 	g.logRequest(userID, modelName, service, startedAt, status, code, http.StatusOK, detail, "")
 }
 
-func (g *Gateway) handleBlocking(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time, ctx context.Context) {
+func (g *Gateway) handleBlocking(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, lang, service string, startedAt time.Time, ctx context.Context) {
 	wfReq.ResponseMode = "blocking"
 	text, err := client.BlockingWorkflowContext(ctx, wfReq)
 	if err != nil {
@@ -1002,7 +1002,7 @@ func (g *Gateway) handleBlocking(w http.ResponseWriter, client *dify.Client, wfR
 			log.Printf("[ERROR] dify blocking timeout (user %d): %v", userID, err)
 			g.logRequest(userID, modelName, service, startedAt, "error", "upstream_timeout", http.StatusGatewayTimeout, err.Error(), "")
 			g.writeError(w, http.StatusGatewayTimeout, "upstream_timeout",
-				t("zh", "上游 Dify 服务响应超时：请求可能因 Cloudflare 100 秒限制被截断。建议使用流式传输（stream: true）或拆分任务后重试。", "Upstream Dify service timeout: the request may have been truncated by Cloudflare's 100-second limit. Consider using streaming (stream: true) or splitting the task."))
+				t(lang, "上游 Dify 服务响应超时：请求可能因 Cloudflare 100 秒限制被截断。建议使用流式传输（stream: true）或拆分任务后重试。", "Upstream Dify service timeout: the request may have been truncated by Cloudflare's 100-second limit. Consider using streaming (stream: true) or splitting the task."))
 			return
 		}
 		log.Printf("[ERROR] dify blocking (user %d): %v", userID, err)

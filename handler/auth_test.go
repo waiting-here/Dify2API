@@ -52,6 +52,7 @@ func setupAuthGateway(t *testing.T, adminPassword string) (*Gateway, *db.Store) 
 			SiteHost:            "localhost",
 			SiteURLHost:         "localhost:10086",
 			AdminHost:           "admin.localhost",
+			SourceURL:           gwSourceURL,
 		},
 	}
 	gw := NewGateway(cfg, store)

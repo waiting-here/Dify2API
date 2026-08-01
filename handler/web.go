@@ -95,6 +95,7 @@ func (g *Gateway) registerWebRoutes(mux *http.ServeMux) {
 		body := strings.ReplaceAll(string(data), "__SITE_NAME__", g.Config.Admin.SiteName)
 		body = strings.ReplaceAll(body, "__REPORT_EMAIL__", g.Config.Admin.ReportEmail)
 		body = strings.ReplaceAll(body, "__SITE_BASE_URL__", g.Config.Admin.SiteBaseURL)
+		body = strings.ReplaceAll(body, "__SOURCE_URL__", g.Config.Admin.SourceURL)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", maxAge))
 		w.Write([]byte(body))

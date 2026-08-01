@@ -19,6 +19,32 @@ func openTemp(t *testing.T) (*Store, string) {
 	return st, dir
 }
 
+func TestIsUniqueViolation(t *testing.T) {
+	st, _ := openTemp(t)
+	u, err := st.CreateUser("d1", "alice", "")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if _, err := st.CreateAppConfig(u.ID, "[general]m", "https://api.dify.ai/v1", "app-x", ""); err != nil {
+		t.Fatalf("CreateAppConfig: %v", err)
+	}
+	// Same (user_id, model) violates the UNIQUE constraint; the wrapped
+	// driver error must be classified without matching error text.
+	_, err = st.CreateAppConfig(u.ID, "[general]m", "https://api.dify.ai/v1", "app-x", "")
+	if err == nil {
+		t.Fatal("duplicate CreateAppConfig: expected error")
+	}
+	if !IsUniqueViolation(err) {
+		t.Errorf("IsUniqueViolation(%v) = false, want true", err)
+	}
+	if IsUniqueViolation(nil) {
+		t.Error("IsUniqueViolation(nil) = true, want false")
+	}
+	if IsUniqueViolation(os.ErrNotExist) {
+		t.Error("IsUniqueViolation(unrelated error) = true, want false")
+	}
+}
+
 func TestOpen_CreatesTables(t *testing.T) {
 	st, _ := openTemp(t)
 	for _, table := range []string{"users", "sessions", "app_configs", "caller_keys", "request_logs"} {

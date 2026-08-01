@@ -40,6 +40,7 @@ func testConfig() *config.Config {
 			SiteHost:    "example.com",
 			SiteURLHost: "example.com",
 			AdminHost:   "admin.example.com",
+			SourceURL:   gwSourceURL,
 		},
 	}
 }

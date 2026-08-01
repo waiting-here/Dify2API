@@ -11,13 +11,15 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
-	_ "modernc.org/sqlite"
+	sqlite "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // schema is applied idempotently on every Open.
@@ -251,6 +253,19 @@ func Open(path, keyPath string) (*Store, error) {
 
 // Close closes the database handle.
 func (s *Store) Close() error { return s.db.Close() }
+
+// IsUniqueViolation reports whether err (or any error it wraps) is a SQLite
+// UNIQUE-constraint violation. Callers must use this instead of matching the
+// driver's error text, which is not part of its API contract.
+func IsUniqueViolation(err error) bool {
+	var se *sqlite.Error
+	if !errors.As(err, &se) {
+		return false
+	}
+	code := se.Code()
+	return code == sqlite3.SQLITE_CONSTRAINT_UNIQUE ||
+		code == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY
+}
 
 // Exec executes a raw SQL statement with args. Use with care — prefer
 // typed methods when available.

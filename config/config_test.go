@@ -53,6 +53,9 @@ func TestLoadStartup_Defaults(t *testing.T) {
 	if a.SiteBaseURL != "https://dify2api.example.com" || a.SiteHost != "dify2api.example.com" || a.SiteURLHost != "dify2api.example.com" || a.AdminHost != "admin.dify2api.example.com" {
 		t.Errorf("site hosts = %q / %q / %q / %q", a.SiteBaseURL, a.SiteHost, a.SiteURLHost, a.AdminHost)
 	}
+	if a.SourceURL != "https://github.com/waiting-here/Dify2API" {
+		t.Errorf("SourceURL default = %q", a.SourceURL)
+	}
 }
 
 func TestLoadStartup_CustomValues(t *testing.T) {
@@ -69,6 +72,7 @@ REMOTE_CONTENT_ORIGIN_ALLOWLIST=https://example.com,http://images.example.com:80
 SSE_BUFFER_MB=2
 LOGIN_LOCK_MIN=120
 ADMIN_HOST=manage.example.com
+SOURCE_URL=https://git.example.com/me/fork
 `)
 	cfg, err := LoadStartup(p)
 	if err != nil {
@@ -89,6 +93,9 @@ ADMIN_HOST=manage.example.com
 	}
 	if cfg.Admin.AdminHost != "manage.example.com" {
 		t.Errorf("AdminHost override = %q", cfg.Admin.AdminHost)
+	}
+	if cfg.Admin.SourceURL != "https://git.example.com/me/fork" {
+		t.Errorf("SourceURL override = %q", cfg.Admin.SourceURL)
 	}
 }
 

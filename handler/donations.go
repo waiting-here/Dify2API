@@ -976,7 +976,7 @@ loop:
 }
 
 // charityBlocking handles blocking charity calls with donation accounting.
-func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time, donation *db.Donation, reservation *db.CharityReservation, ctx context.Context) {
+func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, lang, service string, startedAt time.Time, donation *db.Donation, reservation *db.CharityReservation, ctx context.Context) {
 	wfReq.ResponseMode = "blocking"
 	text, err := client.BlockingWorkflowContext(ctx, wfReq)
 	donationID := donation.ID
@@ -1013,7 +1013,7 @@ func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wf
 			g.charitySuccessAccounting(reservation)
 			g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_timeout", http.StatusGatewayTimeout, err.Error(), donationID, reservation.Price, "")
 			g.writeError(w, http.StatusGatewayTimeout, "upstream_timeout",
-				"上游 Dify 服务响应超时：请求可能因 Cloudflare 100 秒限制被截断。建议使用流式传输（stream: true）或拆分任务后重试。")
+				t(lang, "上游 Dify 服务响应超时：请求可能因 Cloudflare 100 秒限制被截断。建议使用流式传输（stream: true）或拆分任务后重试。", "Upstream Dify service timeout: the request may have been truncated by Cloudflare's 100-second limit. Consider using streaming (stream: true) or splitting the task."))
 			return
 		}
 		// Real upstream failure — donation failure

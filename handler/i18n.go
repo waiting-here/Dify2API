@@ -1,6 +1,10 @@
 package handler
 
-import "net/http"
+import (
+	"net/http"
+
+	"dify2api/db"
+)
 
 // resolveLang determines the user's preferred language for a request.
 // Priority: ?lang query param → logged-in user's Lang field → default "zh".
@@ -11,6 +15,16 @@ func (g *Gateway) resolveLang(r *http.Request) string {
 		return q
 	}
 	if u := g.currentUser(r); u != nil && u.Lang == "en" {
+		return "en"
+	}
+	return "zh"
+}
+
+// userLang returns the preferred language of an API caller resolved from a
+// caller key. /v1 requests carry no session cookie, so resolveLang cannot see
+// the user; the caller-key user record is the authoritative source there.
+func userLang(u *db.User) string {
+	if u != nil && u.Lang == "en" {
 		return "en"
 	}
 	return "zh"

@@ -243,6 +243,10 @@ function switchUserTab(tab) {
 }
 
 async function initUserConfigsTab() {
+  // A stale pending id from a previous render must not survive: the rebuilt
+  // form is empty and a leftover id would silently route a brand-new config
+  // submit to PUT, overwriting the old row (see onConfigSubmit).
+  _cfgSelfSitePending = null;
   $("#cfg-form").onsubmit = onConfigSubmit;
   const { services } = await api("/api/services");
   $("#cfg-service").innerHTML = services

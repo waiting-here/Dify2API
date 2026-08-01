@@ -150,6 +150,11 @@ type AdminConfig struct {
 	// CSAM reports (shown in the Terms of Service and Privacy Policy).
 	// Default "report@example.com".  Set to a monitored address before deploying.
 	ReportEmail string
+	// SourceURL is where users can obtain the Corresponding Source of this
+	// deployment (AGPL-3.0 §13). It is linked from the Terms of Service page.
+	// Deployers running a modified version MUST point this at their own
+	// published source. Default: the upstream repository.
+	SourceURL string
 }
 
 // LoadStartup reads the single startup file (path required) and builds the
@@ -223,6 +228,7 @@ func LoadStartup(path string) (*Config, error) {
 	}
 	a.SiteName = "Dify2API"
 	a.ReportEmail = getOr(envMap, "REPORT_EMAIL", "report@example.com")
+	a.SourceURL = getOr(envMap, "SOURCE_URL", "https://github.com/waiting-here/Dify2API")
 
 	// Load optional i18n dictionary for config values that need per-language versions.
 	cfg.I18NDict = loadI18NDict(getOr(envMap, "I18N_FILE", ""))

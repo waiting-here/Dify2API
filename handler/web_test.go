@@ -197,6 +197,9 @@ func TestSiteInfoAndStatic(t *testing.T) {
 	}
 }
 
+// gwSourceURL is the SourceURL used by testConfig; legal pages must link it.
+const gwSourceURL = "https://git.example.com/source/repo"
+
 func TestLegalPages_LangRouting(t *testing.T) {
 	gw, store := setupAuthGateway(t, "x")
 	mux := http.NewServeMux()
@@ -237,6 +240,16 @@ func TestLegalPages_LangRouting(t *testing.T) {
 	enTerms := getPage("/terms?lang=en")
 	if !strings.Contains(enTerms, "Terms of Service") {
 		t.Error("/terms?lang=en: should contain Terms of Service")
+	}
+	// AGPL §13: both terms variants must link the Corresponding Source; the
+	// __SOURCE_URL__ placeholder must be substituted server-side.
+	for page, body := range map[string]string{"/terms": getPage("/terms"), "/terms?lang=en": enTerms} {
+		if strings.Contains(body, "__SOURCE_URL__") {
+			t.Errorf("%s: __SOURCE_URL__ placeholder not substituted", page)
+		}
+		if !strings.Contains(body, gwSourceURL) {
+			t.Errorf("%s: should link the corresponding source repository", page)
+		}
 	}
 	if !strings.Contains(enTerms, "shall prevail") || !strings.Contains(enTerms, "以中文版本为准") {
 		t.Error("/terms?lang=en: should contain bilingual governing-language clause")
