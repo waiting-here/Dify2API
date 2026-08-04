@@ -10,10 +10,10 @@ dependencies:
 - current_identifier: null
   type: marketplace
   value:
-    marketplace_plugin_unique_identifier: langgenius/gemini:0.9.2@d7070abc8d521d41489fdbc4760887774fbd4a521f03d191b7af4b146f16ba6f
+    marketplace_plugin_unique_identifier: langgenius/gemini:0.9.3@f34e3e2c5f1dea8bae213af7c1aa553849366f78c65040d75bd5a1d20caeeba9
     version: null
 kind: app
-version: 0.6.0
+version: 0.7.0
 workflow:
   conversation_variables: []
   environment_variables: []

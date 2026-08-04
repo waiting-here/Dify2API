@@ -1,16 +1,16 @@
 app:
-  description: Sample Dify App (shujuku-filling-default) for Dify2API
-  icon: 📝
-  icon_background: '#FEF7C3'
+  description: Sample Dify App (general_and_custom) for Dify2API
+  icon: 🙋
+  icon_background: '#D3F8DF'
   icon_type: emoji
   mode: workflow
-  name: shujuku-filling-default (gemini-3-flash-preview)
+  name: general_and_custom (gpt-5.6-sol)
   use_icon_as_answer_icon: false
 dependencies:
 - current_identifier: null
   type: marketplace
   value:
-    marketplace_plugin_unique_identifier: langgenius/gemini:0.9.3@f34e3e2c5f1dea8bae213af7c1aa553849366f78c65040d75bd5a1d20caeeba9
+    marketplace_plugin_unique_identifier: langgenius/openai:1.0.3@cc37544750d72ca3782bdaa81ab0e2facbf5bb74105a169a7ff974a27c6a5f29
     version: null
 kind: app
 version: 0.7.0
@@ -93,7 +93,7 @@ workflow:
       zIndex: 0
     nodes:
     - data:
-        desc: 前序信息与用户本轮输入
+        desc: 系统提示词与与提问内容
         selected: false
         title: User Input
         type: start
@@ -103,74 +103,18 @@ workflow:
           label: 系统提示词
           options: []
           placeholder: ''
-          required: true
+          required: false
           type: paragraph
           variable: system_prompt
         - default: ''
           hint: ''
-          label: 用户0
+          label: 提问
           options: []
           placeholder: ''
-          required: false
-          type: text-input
+          required: true
+          type: paragraph
           variable: user_0
-        - default: ''
-          hint: ''
-          label: 助手0
-          options: []
-          placeholder: ''
-          required: true
-          type: paragraph
-          variable: assistant_0
-        - default: ''
-          hint: ''
-          label: 用户1
-          options: []
-          placeholder: ''
-          required: true
-          type: paragraph
-          variable: user_1
-        - default: ''
-          hint: ''
-          label: 助手1
-          options: []
-          placeholder: ''
-          required: true
-          type: paragraph
-          variable: assistant_1
-        - default: ''
-          hint: ''
-          label: 用户2
-          options: []
-          placeholder: ''
-          required: true
-          type: paragraph
-          variable: user_2
-        - default: ''
-          hint: ''
-          label: 助手2
-          options: []
-          placeholder: ''
-          required: true
-          type: paragraph
-          variable: assistant_2
-        - default: ''
-          hint: ''
-          label: 用户3
-          options: []
-          placeholder: ''
-          required: true
-          type: paragraph
-          variable: user_3
-        - default: ''
-          hint: ''
-          label: 预填充
-          options: []
-          placeholder: ''
-          required: true
-          type: paragraph
-          variable: assistant_prefill
-      height: 344
+      height: 162
       id: '1784230714832'
       position:
         x: 80
@@ -190,41 +134,19 @@ workflow:
         desc: 汇总并调用模型生成
         model:
           completion_params:
-            include_thoughts: true
-            temperature: 0.8
+            max_tokens: 128000
           mode: chat
-          name: gemini-3-flash-preview
-          provider: langgenius/gemini/google
+          name: gpt-5.6-sol
+          provider: langgenius/openai/openai
         prompt_template:
         - id: 73ebc186-85a4-41e7-bc6e-35936b7e8907
           role: system
           text: '{{#1784230714832.system_prompt#}}'
-        - id: 7cb8f559-6f75-4d15-9cf8-28a8f585fb82
+        - id: d74d4c7f-48d4-4a59-bc58-25736a1c023f
           role: user
           text: '{{#1784230714832.user_0#}}'
-        - id: d74d4c7f-48d4-4a59-bc58-25736a1c023f
-          role: assistant
-          text: '{{#1784230714832.assistant_0#}}'
-        - id: be444e2d-5879-4aae-97f0-0073b8e79e44
-          role: user
-          text: '{{#1784230714832.user_1#}}'
-        - id: 476cebf8-74bc-4048-9fcd-8402045f7220
-          role: assistant
-          text: '{{#1784230714832.assistant_1#}}'
-        - id: 9e51b761-a414-46ec-848f-fb2f30010ad7
-          role: user
-          text: '{{#1784230714832.user_2#}}'
-        - id: 93165616-c958-4309-8541-4a69ed2c2111
-          role: assistant
-          text: '{{#1784230714832.assistant_2#}}'
-        - id: c3e69ca2-dc5e-4f71-96e7-eb89487c1cc8
-          role: user
-          text: '{{#1784230714832.user_3#}}'
-        - id: 6692c9d4-942b-4746-b4db-e3501914d195
-          role: assistant
-          text: '{{#1784230714832.assistant_prefill#}}'
         reasoning_format: tagged
-        selected: true
+        selected: false
         title: LLM
         type: llm
         vision:
@@ -237,7 +159,7 @@ workflow:
       positionAbsolute:
         x: 381
         y: 282
-      selected: true
+      selected: false
       sourcePosition: right
       targetPosition: left
       type: custom
@@ -267,7 +189,7 @@ workflow:
       type: custom
       width: 241
     viewport:
-      x: 684.5
-      y: 215
+      x: 552.5
+      y: 221
       zoom: 1
   rag_pipeline_variables: []

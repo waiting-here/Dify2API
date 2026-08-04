@@ -1,19 +1,19 @@
 app:
-  description: Sample Dify App (AIRP-200) for Dify2API
+  description: Sample Dify App (sillytavern-main-200) for Dify2API
   icon: 🔗
   icon_background: '#D3F8DF'
   icon_type: emoji
   mode: workflow
-  name: AIRP-200 (gpt-5.6-sol)
+  name: sillytavern-main-200 (gpt-5.6-sol)
   use_icon_as_answer_icon: false
 dependencies:
 - current_identifier: null
   type: marketplace
   value:
-    marketplace_plugin_unique_identifier: langgenius/openai:1.0.1@b513bf843af4619450bdc15f32e995f90ebdeee143b1cccef442a867099b3397
+    marketplace_plugin_unique_identifier: langgenius/openai:1.0.3@cc37544750d72ca3782bdaa81ab0e2facbf5bb74105a169a7ff974a27c6a5f29
     version: null
 kind: app
-version: 0.6.0
+version: 0.7.0
 workflow:
   conversation_variables: []
   environment_variables: []

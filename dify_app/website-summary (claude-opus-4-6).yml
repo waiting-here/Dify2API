@@ -1,19 +1,19 @@
 app:
-  description: Sample Dify App (Web Summary) for Dify2API
+  description: Sample Dify App (website-summary) for Dify2API
   icon: 💬
   icon_background: '#FCE7F6'
   icon_type: emoji
   mode: workflow
-  name: Web Summary (claude-opus-4-6)
+  name: website-summary (claude-opus-4-6)
   use_icon_as_answer_icon: false
 dependencies:
 - current_identifier: null
   type: marketplace
   value:
-    marketplace_plugin_unique_identifier: langgenius/anthropic:0.3.24@c5e50da8c13c7ac75348df5ac75b9418c79736eb506064669dd7ca06cbd83537
+    marketplace_plugin_unique_identifier: langgenius/anthropic:0.3.26@e4580f78789aec59eabdafcd85ca75358ae4895134de28dbae5e38e9b307eb70
     version: null
 kind: app
-version: 0.6.0
+version: 0.7.0
 workflow:
   conversation_variables: []
   environment_variables: []
