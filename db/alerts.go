@@ -9,12 +9,11 @@ import (
 
 // Admin alert type constants.
 const (
-	AlertBlockingFailed200     = "blocking_failed_200"
-	AlertDonationExhaustedRace = "donation_exhausted_race"
+	AlertBlockingFailed200 = "blocking_failed_200"
 )
 
 // AdminAlert records an operational event that requires administrator
-// attention (F6: admin alert centre).
+// attention (F6: admin alert center).
 type AdminAlert struct {
 	ID           int64  `json:"id"`
 	Type         string `json:"type"`
@@ -46,8 +45,13 @@ func scanAdminAlert(row interface{ Scan(...interface{}) error }) (*AdminAlert, e
 	return &a, nil
 }
 
-// AddAdminAlert inserts a new alert row.
+// AddAdminAlert inserts a new alert row. When the alert type has a pref row
+// with show_in_center=0, the record is skipped entirely (the category is
+// turned off in the alert center). Unknown types default to recorded.
 func (s *Store) AddAdminAlert(a *AdminAlert) error {
+	if !s.IsAlertShownInCenter(a.Type) {
+		return nil
+	}
 	var reqLogID, donationID interface{}
 	if a.RequestLogID != nil {
 		reqLogID = *a.RequestLogID
@@ -61,6 +65,100 @@ func (s *Store) AddAdminAlert(a *AdminAlert) error {
 		a.Type, a.Message, reqLogID, donationID, now,
 	)
 	return err
+}
+
+// AlertPref is a per-category switch controlling whether events of the type
+// are recorded in the alert center and whether they trigger email alerts.
+type AlertPref struct {
+	EventType    string `json:"event_type"`
+	ShowInCenter bool   `json:"show_in_center"`
+	EmailEnabled bool   `json:"email_enabled"`
+	UpdatedAt    int64  `json:"updated_at"`
+}
+
+// EnsureAlertPrefs seeds pref rows for the given event types with default
+// values (both switches on) and leaves existing rows untouched.
+func (s *Store) EnsureAlertPrefs(types []string) error {
+	now := time.Now().Unix()
+	for _, et := range types {
+		if _, err := s.db.Exec(
+			`INSERT OR IGNORE INTO alert_prefs (event_type, show_in_center, email_enabled, updated_at)
+			 VALUES (?, 1, 1, ?)`,
+			et, now,
+		); err != nil {
+			return fmt.Errorf("seed alert_prefs %q: %w", et, err)
+		}
+	}
+	return nil
+}
+
+// SetAlertPref updates both switches of one category.
+func (s *Store) SetAlertPref(eventType string, showInCenter, emailEnabled bool) error {
+	sc, ec := 0, 0
+	if showInCenter {
+		sc = 1
+	}
+	if emailEnabled {
+		ec = 1
+	}
+	res, err := s.db.Exec(
+		`UPDATE alert_prefs SET show_in_center=?, email_enabled=?, updated_at=? WHERE event_type=?`,
+		sc, ec, time.Now().Unix(), eventType,
+	)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("unknown alert event type %q", eventType)
+	}
+	return nil
+}
+
+// IsAlertShownInCenter reports whether events of the type are recorded in the
+// alert center. Missing rows default to true.
+func (s *Store) IsAlertShownInCenter(eventType string) bool {
+	return s.alertPrefFlag(eventType, "show_in_center", true)
+}
+
+// IsAlertEmailEnabled reports whether events of the type trigger emails.
+// Missing rows default to true.
+func (s *Store) IsAlertEmailEnabled(eventType string) bool {
+	return s.alertPrefFlag(eventType, "email_enabled", true)
+}
+
+func (s *Store) alertPrefFlag(eventType, column string, def bool) bool {
+	var v int
+	err := s.db.QueryRow(
+		`SELECT `+column+` FROM alert_prefs WHERE event_type=?`,
+		eventType,
+	).Scan(&v)
+	if err != nil {
+		return def
+	}
+	return v != 0
+}
+
+// ListAlertPrefs returns all pref rows (empty when nothing was seeded yet).
+func (s *Store) ListAlertPrefs() ([]*AlertPref, error) {
+	rows, err := s.db.Query(
+		`SELECT event_type, show_in_center, email_enabled, updated_at FROM alert_prefs ORDER BY event_type`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*AlertPref
+	for rows.Next() {
+		var p AlertPref
+		var sc, ec int
+		if err := rows.Scan(&p.EventType, &sc, &ec, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		p.ShowInCenter = sc != 0
+		p.EmailEnabled = ec != 0
+		out = append(out, &p)
+	}
+	return out, rows.Err()
 }
 
 // ListAdminAlerts returns alerts newest-first with offset-based pagination.

@@ -149,6 +149,13 @@ CREATE TABLE IF NOT EXISTS admin_alerts (
 );
 CREATE INDEX IF NOT EXISTS idx_admin_alerts_created ON admin_alerts(created_at);
 
+CREATE TABLE IF NOT EXISTS alert_prefs (
+	event_type     TEXT PRIMARY KEY,
+	show_in_center INTEGER NOT NULL DEFAULT 1,
+	email_enabled  INTEGER NOT NULL DEFAULT 1,
+	updated_at     INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS bulletins (
 	id          INTEGER PRIMARY KEY AUTOINCREMENT,
 	title       TEXT NOT NULL DEFAULT '',
@@ -199,6 +206,7 @@ CREATE TABLE IF NOT EXISTS service_anti_abuse (
     min_chars              INTEGER NOT NULL DEFAULT 20,
     penalty_deduct_credits INTEGER NOT NULL DEFAULT 0,
     penalty_ban_hours      INTEGER NOT NULL DEFAULT 0,
+    donation_selectable    INTEGER NOT NULL DEFAULT 1,
     created_at             INTEGER NOT NULL DEFAULT 0,
     updated_at             INTEGER NOT NULL DEFAULT 0
 );
@@ -245,6 +253,12 @@ func Open(path, keyPath string) (*Store, error) {
 		if !strings.Contains(err.Error(), "duplicate column") {
 			sqldb.Close()
 			return nil, fmt.Errorf("migrate bulletins.content_type: %w", err)
+		}
+	}
+	if _, err := sqldb.Exec(`ALTER TABLE service_anti_abuse ADD COLUMN donation_selectable INTEGER NOT NULL DEFAULT 1`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			sqldb.Close()
+			return nil, fmt.Errorf("migrate service_anti_abuse.donation_selectable: %w", err)
 		}
 	}
 

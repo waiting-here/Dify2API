@@ -59,7 +59,7 @@ func TestAntiAbuse_UpsertAndGet(t *testing.T) {
 	}
 
 	// Upsert: update mode and penalties.
-	c, err := st.UpsertAntiAbuseConfig(svc, 1, 15, 10, 24)
+	c, err := st.UpsertAntiAbuseConfig(svc, 1, 15, 10, 24, 1)
 	if err != nil {
 		t.Fatalf("UpsertAntiAbuseConfig: %v", err)
 	}
@@ -102,30 +102,66 @@ func TestAntiAbuse_UpsertValidation(t *testing.T) {
 	}
 
 	// Invalid mode.
-	_, err = st.UpsertAntiAbuseConfig(svc, 3, 20, 0, 0)
+	_, err = st.UpsertAntiAbuseConfig(svc, 3, 20, 0, 0, 1)
 	if err == nil {
 		t.Error("expected error for mode=3")
 	}
 
 	// Negative min_chars.
-	_, err = st.UpsertAntiAbuseConfig(svc, 2, -1, 0, 0)
+	_, err = st.UpsertAntiAbuseConfig(svc, 2, -1, 0, 0, 1)
 	if err == nil {
 		t.Error("expected error for min_chars=-1")
 	}
 
 	// Negative penalty.
-	_, err = st.UpsertAntiAbuseConfig(svc, 2, 20, -5, 0)
+	_, err = st.UpsertAntiAbuseConfig(svc, 2, 20, -5, 0, 1)
 	if err == nil {
 		t.Error("expected error for penalty_deduct_credits=-5")
 	}
 
 	// Valid mode=0 (off).
-	c, err := st.UpsertAntiAbuseConfig(svc, 0, 20, 0, 0)
+	c, err := st.UpsertAntiAbuseConfig(svc, 0, 20, 0, 0, 1)
 	if err != nil {
 		t.Fatalf("UpsertAntiAbuseConfig mode=0: %v", err)
 	}
 	if c.Mode != 0 {
 		t.Errorf("mode: expected 0, got %d", c.Mode)
+	}
+
+	// Invalid donation_selectable.
+	if _, err := st.UpsertAntiAbuseConfig(svc, 2, 20, 0, 0, 2); err == nil {
+		t.Error("expected error for donation_selectable=2")
+	}
+
+	// donation_selectable round-trip: off then back on.
+	if _, err := st.UpsertAntiAbuseConfig(svc, 2, 20, 0, 0, 0); err != nil {
+		t.Fatalf("disable selectable: %v", err)
+	}
+	if st.IsServiceDonationSelectable(svc) {
+		t.Error("expected donation_selectable=0 to disable selectability")
+	}
+	if !st.IsServiceDonationSelectable("never-seen-service") {
+		t.Error("expected missing row to default to selectable")
+	}
+}
+
+func TestAntiAbuse_DonationSelectableRoundTrip(t *testing.T) {
+	st, _ := openTemp(t)
+
+	if !st.IsServiceDonationSelectable("general") {
+		t.Fatal("missing row must default to selectable")
+	}
+	if _, err := st.UpsertAntiAbuseConfig("general", 2, 20, 0, 0, 0); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if st.IsServiceDonationSelectable("general") {
+		t.Fatal("expected general to be non-selectable after disable")
+	}
+	if _, err := st.UpsertAntiAbuseConfig("general", 2, 20, 0, 0, 1); err != nil {
+		t.Fatalf("re-enable: %v", err)
+	}
+	if !st.IsServiceDonationSelectable("general") {
+		t.Fatal("expected general selectable again after re-enable")
 	}
 }
 

@@ -13,13 +13,14 @@ type AntiAbuseConfig struct {
 	MinChars             int
 	PenaltyDeductCredits int
 	PenaltyBanHours      int
+	DonationSelectable   int // 1 = selectable in self-service donation form
 	CreatedAt            int64
 	UpdatedAt            int64
 }
 
 func scanAntiAbuse(row interface{ Scan(...interface{}) error }) (*AntiAbuseConfig, error) {
 	var c AntiAbuseConfig
-	if err := row.Scan(&c.Service, &c.Mode, &c.MinChars, &c.PenaltyDeductCredits, &c.PenaltyBanHours, &c.CreatedAt, &c.UpdatedAt); err != nil {
+	if err := row.Scan(&c.Service, &c.Mode, &c.MinChars, &c.PenaltyDeductCredits, &c.PenaltyBanHours, &c.DonationSelectable, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return &c, nil
@@ -29,7 +30,7 @@ func scanAntiAbuse(row interface{ Scan(...interface{}) error }) (*AntiAbuseConfi
 // Services not present in the database are automatically seeded with
 // default values (mode=2, min_chars=20, penalties=0).
 func (s *Store) GetAntiAbuseConfigs(services []string) (map[string]*AntiAbuseConfig, error) {
-	rows, err := s.db.Query(`SELECT service, mode, min_chars, penalty_deduct_credits, penalty_ban_hours, created_at, updated_at FROM service_anti_abuse`)
+	rows, err := s.db.Query(`SELECT service, mode, min_chars, penalty_deduct_credits, penalty_ban_hours, donation_selectable, created_at, updated_at FROM service_anti_abuse`)
 	if err != nil {
 		return nil, fmt.Errorf("query anti_abuse: %w", err)
 	}
@@ -52,8 +53,8 @@ func (s *Store) GetAntiAbuseConfigs(services []string) (map[string]*AntiAbuseCon
 	for _, svc := range services {
 		if _, ok := configs[svc]; !ok {
 			_, err := s.db.Exec(
-				`INSERT INTO service_anti_abuse (service, mode, min_chars, penalty_deduct_credits, penalty_ban_hours, created_at, updated_at)
-				 VALUES (?, 2, 20, 0, 0, ?, ?)`,
+				`INSERT INTO service_anti_abuse (service, mode, min_chars, penalty_deduct_credits, penalty_ban_hours, donation_selectable, created_at, updated_at)
+				 VALUES (?, 2, 20, 0, 0, 1, ?, ?)`,
 				svc, now, now,
 			)
 			if err != nil {
@@ -65,6 +66,7 @@ func (s *Store) GetAntiAbuseConfigs(services []string) (map[string]*AntiAbuseCon
 				MinChars:             20,
 				PenaltyDeductCredits: 0,
 				PenaltyBanHours:      0,
+				DonationSelectable:   1,
 				CreatedAt:            now,
 				UpdatedAt:            now,
 			}
@@ -77,7 +79,7 @@ func (s *Store) GetAntiAbuseConfigs(services []string) (map[string]*AntiAbuseCon
 // GetAntiAbuseConfig returns a single service's config, or nil when no row exists.
 func (s *Store) GetAntiAbuseConfig(service string) (*AntiAbuseConfig, error) {
 	c, err := scanAntiAbuse(s.db.QueryRow(
-		`SELECT service, mode, min_chars, penalty_deduct_credits, penalty_ban_hours, created_at, updated_at
+		`SELECT service, mode, min_chars, penalty_deduct_credits, penalty_ban_hours, donation_selectable, created_at, updated_at
 		 FROM service_anti_abuse WHERE service=?`,
 		service,
 	))
@@ -87,8 +89,24 @@ func (s *Store) GetAntiAbuseConfig(service string) (*AntiAbuseConfig, error) {
 	return c, err
 }
 
+// IsServiceDonationSelectable reports whether regular users may pick the
+// service in the self-service donation application form. Missing rows default
+// to selectable (1), matching the pre-switch behavior where every registered
+// service was offered.
+func (s *Store) IsServiceDonationSelectable(service string) bool {
+	var v int
+	err := s.db.QueryRow(
+		`SELECT donation_selectable FROM service_anti_abuse WHERE service=?`,
+		service,
+	).Scan(&v)
+	if err != nil {
+		return true
+	}
+	return v != 0
+}
+
 // UpsertAntiAbuseConfig inserts or updates an anti-abuse config row.
-func (s *Store) UpsertAntiAbuseConfig(service string, mode, minChars, penaltyDeductCredits, penaltyBanHours int) (*AntiAbuseConfig, error) {
+func (s *Store) UpsertAntiAbuseConfig(service string, mode, minChars, penaltyDeductCredits, penaltyBanHours, donationSelectable int) (*AntiAbuseConfig, error) {
 	if mode < 0 || mode > 2 {
 		return nil, fmt.Errorf("mode must be 0, 1, or 2, got %d", mode)
 	}
@@ -101,18 +119,22 @@ func (s *Store) UpsertAntiAbuseConfig(service string, mode, minChars, penaltyDed
 	if penaltyBanHours < 0 {
 		return nil, fmt.Errorf("penalty_ban_hours must be >= 0, got %d", penaltyBanHours)
 	}
+	if donationSelectable != 0 && donationSelectable != 1 {
+		return nil, fmt.Errorf("donation_selectable must be 0 or 1, got %d", donationSelectable)
+	}
 
 	now := time.Now().Unix()
 	_, err := s.db.Exec(
-		`INSERT INTO service_anti_abuse (service, mode, min_chars, penalty_deduct_credits, penalty_ban_hours, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO service_anti_abuse (service, mode, min_chars, penalty_deduct_credits, penalty_ban_hours, donation_selectable, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(service) DO UPDATE SET
 		     mode=excluded.mode,
 		     min_chars=excluded.min_chars,
 		     penalty_deduct_credits=excluded.penalty_deduct_credits,
 		     penalty_ban_hours=excluded.penalty_ban_hours,
+		     donation_selectable=excluded.donation_selectable,
 		     updated_at=excluded.updated_at`,
-		service, mode, minChars, penaltyDeductCredits, penaltyBanHours, now, now,
+		service, mode, minChars, penaltyDeductCredits, penaltyBanHours, donationSelectable, now, now,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("upsert anti_abuse: %w", err)

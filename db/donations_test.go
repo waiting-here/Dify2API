@@ -357,11 +357,12 @@ func TestApplyUserCheckin_AntiReplayAndCap(t *testing.T) {
 		t.Fatalf("duplicate check-in: status=%s credits=%d err=%v", status, credits, err)
 	}
 
-	// The next award is incremental and clamped instead of overwriting a
-	// balance that may have changed through charity accounting.
+	// The next award is incremental and NOT clamped: a check-in may push the
+	// balance above the cap (499 + 150 with cap 500 → 649). The cap only
+	// refuses check-in initiation when the balance is already at/above it.
 	status, awarded, credits, err = st.ApplyUserCheckin(u.ID, "2026-07-25", 12, 25)
-	if err != nil || status != CheckinApplied || awarded != 10 || credits != 25 {
-		t.Fatalf("capped check-in: status=%s awarded=%d credits=%d err=%v", status, awarded, credits, err)
+	if err != nil || status != CheckinApplied || awarded != 12 || credits != 27 {
+		t.Fatalf("over-cap check-in: status=%s awarded=%d credits=%d err=%v", status, awarded, credits, err)
 	}
 	status, _, _, err = st.ApplyUserCheckin(u.ID, "2026-07-26", 1, 25)
 	if err != nil || status != CheckinCapped {

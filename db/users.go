@@ -209,8 +209,12 @@ const (
 	CheckinCapped  = "capped"
 )
 
-// ApplyUserCheckin serializes the day check and an incremental, capped credit
+// ApplyUserCheckin serializes the day check and an incremental credit
 // award in one transaction. It cannot overwrite a concurrent charity debit.
+// The award is NOT clamped to the cap: a check-in may push the balance
+// above credits_cap (e.g. 499 + 150 with cap 500). The cap only gates
+// check-in initiation: when credits >= cap the check-in is refused
+// (CheckinCapped) and no day is consumed.
 func (s *Store) ApplyUserCheckin(userID int64, day string, bonus, cap int) (status string, awarded, credits int, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -228,10 +232,7 @@ func (s *Store) ApplyUserCheckin(userID int64, day string, bonus, cap int) (stat
 		return CheckinCapped, 0, credits, nil
 	}
 	newCredits := credits + bonus
-	if newCredits > cap {
-		newCredits = cap
-	}
-	awarded = newCredits - credits
+	awarded = bonus
 	if _, err := tx.Exec(
 		`UPDATE users SET last_checkin_day=?, credits=?, updated_at=? WHERE id=?`,
 		day, newCredits, time.Now().Unix(), userID,
