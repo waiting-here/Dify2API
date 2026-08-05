@@ -32,3 +32,15 @@ func eventSubject(et EventType, count int) string {
 	}
 	return fmt.Sprintf("【Dify2API】%s（%d 起）", label, count)
 }
+
+// AllEventTypes returns every known email event category. The gateway seeds
+// alert_prefs rows from this list so each category gets its own switches.
+func AllEventTypes() []EventType {
+	return []EventType{
+		EventUserAutoBanned,
+		EventDonationInactive,
+		EventAdminLoginLocked,
+		EventPricingMissing,
+		EventDebugAbuse,
+	}
+}

@@ -288,7 +288,7 @@ func TestDebug_InvalidLayoutStillDumped(t *testing.T) {
 func disableAntiAbuseForTest(t *testing.T, gw *Gateway) {
 	t.Helper()
 	for _, svc := range translator.SupportedServices() {
-		if _, err := gw.Store.UpsertAntiAbuseConfig(svc.Name, 0, 0, 0, 0); err != nil {
+		if _, err := gw.Store.UpsertAntiAbuseConfig(svc.Name, 0, 0, 0, 0, 1); err != nil {
 			t.Fatalf("disable anti-abuse for %q: %v", svc.Name, err)
 		}
 	}

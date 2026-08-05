@@ -154,7 +154,7 @@ func TestBlocking_UpstreamError_PassesThrough4xx(t *testing.T) {
 func TestBlocking_Failed200_WritesLinkedAlert(t *testing.T) {
 	// A blocking call that returns HTTP 200 with workflow status "failed"
 	// must write an admin alert LINKED to the request log row, so the alert
-	// centre's "view linked request" action has something to jump to.
+	// center's "view linked request" action has something to jump to.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

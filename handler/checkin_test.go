@@ -275,6 +275,39 @@ func TestCheckinStatus_NotCheckedIn(t *testing.T) {
 	}
 }
 
+func TestCheckinStatus_Capped(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	gw.Config.CheckinTZOffset = 8
+
+	u, _ := store.CreateUser("42", "tester", "")
+	store.SetUserCredits(u.ID, db.DefaultCreditsCap) // at the cap
+	sess, _, _ := store.CreateSession(u.ID)
+	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: sess}
+
+	// Status must report capped=true so the client can disable the button.
+	rec := checkinStatusGet(gw, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: code %d, body %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		CheckedInToday bool `json:"checked_in_today"`
+		Capped         bool `json:"capped"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.CheckedInToday {
+		t.Error("expected checked_in_today=false for fresh user")
+	}
+	if !resp.Capped {
+		t.Error("expected capped=true when credits >= cap")
+	}
+
+	// The POST must still refuse while at the cap (unchanged behavior).
+	rec = checkinPost(gw, cookie)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "credits_capped") {
+		t.Fatalf("checkin at cap: status %d, body %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestCheckinStatus_CheckedIn(t *testing.T) {
 	gw, store := setupAuthGateway(t, "s3cret")
 	gw.Config.CheckinTZOffset = 8

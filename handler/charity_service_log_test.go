@@ -66,7 +66,7 @@ func TestCharityRequestLogsUseActualService(t *testing.T) {
 
 	t.Run("content too short", func(t *testing.T) {
 		gw, key, userID := newServiceLogCaller(t)
-		if _, err := gw.Store.UpsertAntiAbuseConfig("general", 1, 20, 0, 0); err != nil {
+		if _, err := gw.Store.UpsertAntiAbuseConfig("general", 1, 20, 0, 0, 1); err != nil {
 			t.Fatalf("UpsertAntiAbuseConfig: %v", err)
 		}
 		gw.refreshAntiAbuseCache()

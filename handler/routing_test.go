@@ -282,7 +282,7 @@ func TestRouting_AntiAbuseInfo(t *testing.T) {
 			if err := gw.Store.SetUserCredits(uid, 10); err != nil {
 				t.Fatalf("SetUserCredits: %v", err)
 			}
-			if _, err := gw.Store.UpsertAntiAbuseConfig("general", 2, 20, tt.deductCredits, tt.banHours); err != nil {
+			if _, err := gw.Store.UpsertAntiAbuseConfig("general", 2, 20, tt.deductCredits, tt.banHours, 1); err != nil {
 				t.Fatalf("UpsertAntiAbuseConfig: %v", err)
 			}
 			gw.refreshAntiAbuseCache()

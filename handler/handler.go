@@ -86,20 +86,41 @@ func NewGateway(cfg *config.Config, store *db.Store) *Gateway {
 		}
 	}
 	gw := &Gateway{
-		Config:               cfg,
-		Store:                store,
-		limiter:              newRateLimiter(cfg.RPMWindowSec),
-		chatSem:              make(chan struct{}, cfg.MaxChatInFlight),
-		loginThrottle:        newLoginThrottle(cfg),
-		webThrottle:          newIPThrottle(cfg.WebRPMPerIP, cfg.WebThrottleSec, cfg.IPThrottleWindowSec),
-		authFailThrottle:     newIPThrottle(cfg.AuthFailRPMPerIP, 60, cfg.IPThrottleWindowSec),
-		mailer:               mailer.New(cfg.SMTP, db.DefaultMailerCoolMinutes),
+		Config:           cfg,
+		Store:            store,
+		limiter:          newRateLimiter(cfg.RPMWindowSec),
+		chatSem:          make(chan struct{}, cfg.MaxChatInFlight),
+		loginThrottle:    newLoginThrottle(cfg),
+		webThrottle:      newIPThrottle(cfg.WebRPMPerIP, cfg.WebThrottleSec, cfg.IPThrottleWindowSec),
+		authFailThrottle: newIPThrottle(cfg.AuthFailRPMPerIP, 60, cfg.IPThrottleWindowSec),
+		mailer: mailer.New(cfg.SMTP, mailer.Options{
+			// Read the aggregation window live so admin settings changes
+			// apply without a restart.
+			CoolMinutes: func() int {
+				return store.GetSettingInt(db.SettingMailerCoolMinutes, db.DefaultMailerCoolMinutes)
+			},
+			// Per-category email switch (alert center prefs).
+			EmailEnabled: func(et mailer.EventType) bool {
+				return store.IsAlertEmailEnabled(string(et))
+			},
+			// Mirror every queued event into the alert center; the store's
+			// show_in_center gate decides whether a record is written.
+			Record: func(et mailer.EventType, summary string) {
+				if err := store.AddAdminAlert(&db.AdminAlert{Type: string(et), Message: summary}); err != nil {
+					log.Printf("[ERROR] record mailer alert %s: %v", et, err)
+				}
+			},
+		}),
 		userDebug:            newUserDebugHub(),
 		donationLimiter:      newDonationRateLimiter(),
 		difyPolicy:           difyPolicy,
 		difyProbeSem:         make(chan struct{}, probeLimit),
 		probeLimiter:         newProbeLimiter(),
 		remoteContentOrigins: remoteOrigins,
+	}
+	// Seed alert-center preference rows (defaults on) for every category.
+	if err := store.EnsureAlertPrefs(alertPrefEventTypes()); err != nil {
+		log.Printf("[WARN] seed alert prefs: %v", err)
 	}
 	if err := gw.loadAntiAbuseCache(); err != nil {
 		log.Printf("[WARN] load anti-abuse cache: %v", err)
@@ -139,9 +160,11 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/settings", g.handleAdminGetSettings)
 	mux.HandleFunc("PUT /api/admin/settings", g.handleAdminPutSettings)
 
-	// Alert centre (admin)
+	// Alert center (admin)
 	mux.HandleFunc("GET /api/admin/alerts", g.handleListAlerts)
 	mux.HandleFunc("DELETE /api/admin/alerts", g.handleDeleteAlerts)
+	mux.HandleFunc("GET /api/admin/alert-prefs", g.handleListAlertPrefs)
+	mux.HandleFunc("PUT /api/admin/alert-prefs", g.handlePutAlertPrefs)
 
 	// Charity / donation admin endpoints
 	mux.HandleFunc("POST /api/admin/donations", g.handleCreateDonation)
@@ -992,7 +1015,7 @@ func (g *Gateway) handleBlocking(w http.ResponseWriter, client *dify.Client, wfR
 		}
 		// Per the §1.2 definition, an upstream HTTP 200 counts as a
 		// "success" for class B even when the workflow status is "failed"
-		// (rare; surfaced to the admin alert centre in S3).
+		// (rare; surfaced to the admin alert center in S3).
 		var de *dify.DifyError
 		failed200 := errors.As(err, &de) && de.Status == http.StatusOK
 		if failed200 {
@@ -1012,7 +1035,7 @@ func (g *Gateway) handleBlocking(w http.ResponseWriter, client *dify.Client, wfR
 		log.Printf("[ERROR] dify blocking (user %d): %v", userID, err)
 		logID := g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error(), "")
 		if failed200 {
-			// Write the admin alert after the log row so the alert centre's
+			// Write the admin alert after the log row so the alert center's
 			// "view linked request" action can jump to this request.
 			g.maybeRecordBlockingFailedAlert(userID, modelName, service, de, nil, logID)
 		}

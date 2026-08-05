@@ -180,14 +180,26 @@ func (req *configRequest) validate(g *Gateway) string {
 
 // --- GET /api/services ---
 // Lists the services registered in code (drives the dashboard dropdown).
+// With ?donation=1 only services the admin allows in the self-service
+// donation form (donation_selectable) are returned.
 func (g *Gateway) handleListServices(w http.ResponseWriter, r *http.Request) {
 	u := g.currentUser(r)
 	if u == nil {
 		g.writeError(w, http.StatusUnauthorized, "unauthorized", "not logged in")
 		return
 	}
+	all := translator.SupportedServices()
+	if r.URL.Query().Get("donation") == "1" {
+		filtered := all[:0]
+		for _, s := range all {
+			if g.Store.IsServiceDonationSelectable(s.Name) {
+				filtered = append(filtered, s)
+			}
+		}
+		all = filtered
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"services": translator.SupportedServices()})
+	json.NewEncoder(w).Encode(map[string]interface{}{"services": all})
 }
 
 // selfSiteNotice returns a localized hint when a Dify base URL points at the

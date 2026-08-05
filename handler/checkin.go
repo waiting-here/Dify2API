@@ -39,10 +39,16 @@ func (g *Gateway) handleCheckinStatus(w http.ResponseWriter, r *http.Request) {
 
 	checkedIn := u.LastCheckinDay == today
 
+	// Capped: check-in would be refused at POST time (credits >= cap). Expose
+	// it so the client can disable the button proactively instead of only
+	// failing on click.
+	capped := !checkedIn && u.Credits >= creditsCap
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"checked_in_today": checkedIn,
 		"next_checkin_at":  nextMidnight.Unix(),
+		"capped":           capped,
 	})
 }
 

@@ -23,14 +23,14 @@ type coolerItem struct {
 type cooler struct {
 	mu          sync.Mutex
 	eventType   EventType
-	coolMinutes int
+	coolMinutes func() int
 	items       []coolerItem
 	timer       *time.Timer
 	cfg         config.SMTPConfig
 	sendFunc    func(config.SMTPConfig, string, string) error
 }
 
-func newCooler(et EventType, coolMinutes int, cfg config.SMTPConfig, sendFn func(config.SMTPConfig, string, string) error) *cooler {
+func newCooler(et EventType, coolMinutes func() int, cfg config.SMTPConfig, sendFn func(config.SMTPConfig, string, string) error) *cooler {
 	return &cooler{
 		eventType:   et,
 		coolMinutes: coolMinutes,
@@ -48,8 +48,10 @@ func (c *cooler) add(summary string) {
 
 	if c.timer == nil {
 		win := coolWindow
-		if c.coolMinutes > 0 {
-			win = time.Duration(c.coolMinutes) * time.Minute
+		if c.coolMinutes != nil {
+			if cm := c.coolMinutes(); cm > 0 {
+				win = time.Duration(cm) * time.Minute
+			}
 		}
 		c.timer = time.AfterFunc(win, func() {
 			c.flush()

@@ -16,16 +16,30 @@ import (
 
 // Mailer buffers and sends email alerts. Nil means disabled (SMTP not configured).
 type Mailer struct {
-	cfg         config.SMTPConfig
-	enabled     bool
-	coolMinutes int
-	mu          sync.Mutex
-	coolers     map[EventType]*cooler
-	sendFunc    func(config.SMTPConfig, string, string) error // injectable for tests
+	cfg          config.SMTPConfig
+	enabled      bool
+	coolMinutes  func() int // dynamic getter for the aggregation window
+	emailEnabled func(EventType) bool
+	record       func(EventType, string) // optional alert-center sink
+	mu           sync.Mutex
+	coolers      map[EventType]*cooler
+	sendFunc     func(config.SMTPConfig, string, string) error // injectable for tests
+}
+
+// Options wires the mailer to live settings. All fields are optional; nil
+// callbacks keep the previous behavior (defaults on, static window).
+type Options struct {
+	// CoolMinutes returns the aggregation window in minutes (admin setting).
+	CoolMinutes func() int
+	// EmailEnabled reports whether the category may send email.
+	EmailEnabled func(EventType) bool
+	// Record, when set, is invoked for every queued event so the gateway can
+	// write an alert-center record (subject to its own show_in_center gate).
+	Record func(EventType, string)
 }
 
 // New creates a Mailer or returns nil when SMTP_HOST is empty.
-func New(cfg config.SMTPConfig, coolMinutes int) *Mailer {
+func New(cfg config.SMTPConfig, opts Options) *Mailer {
 	if strings.TrimSpace(cfg.Host) == "" {
 		log.Printf("[MAILER] disabled (SMTP_HOST not set)")
 		return nil
@@ -37,12 +51,18 @@ func New(cfg config.SMTPConfig, coolMinutes int) *Mailer {
 	}
 	log.Printf("[MAILER] enabled: %s:%d → %s (TLS=%s)", cfg.Host, cfg.Port, cfg.To, tlsMode)
 
+	coolMinutes := opts.CoolMinutes
+	if coolMinutes == nil {
+		coolMinutes = func() int { return 10 }
+	}
 	m := &Mailer{
-		cfg:         cfg,
-		enabled:     true,
-		coolers:     make(map[EventType]*cooler),
-		sendFunc:    sendSMTP,
-		coolMinutes: coolMinutes,
+		cfg:          cfg,
+		enabled:      true,
+		coolMinutes:  coolMinutes,
+		emailEnabled: opts.EmailEnabled,
+		record:       opts.Record,
+		coolers:      make(map[EventType]*cooler),
+		sendFunc:     sendSMTP,
 	}
 	return m
 }
@@ -113,6 +133,15 @@ func (m *Mailer) AdminLoginLocked(ip string, lockUntil time.Time) {
 }
 
 func (m *Mailer) queue(et EventType, summary string) {
+	// Per-category email switch (admin alert prefs). Off categories are
+	// dropped entirely: no email, no record.
+	if m.emailEnabled != nil && !m.emailEnabled(et) {
+		return
+	}
+	// Alert-center record (its own show_in_center gate lives in the store).
+	if m.record != nil {
+		m.record(et, summary)
+	}
 	m.mu.Lock()
 	c, ok := m.coolers[et]
 	if !ok {

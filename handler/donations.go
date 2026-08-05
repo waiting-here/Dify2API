@@ -765,10 +765,16 @@ func (g *Gateway) handleGetCharity(w http.ResponseWriter, r *http.Request) {
 		for _, p := range pricings {
 			has, _ := g.Store.HasDonationsForPair(p.Service, p.Model)
 			if has {
+				// available = at least one routable donation right now
+				// (status active + deadline in the future + remaining > 0).
+				// HasDonationsForPair alone counts any status, so a model whose
+				// donations are all expired/inactive would otherwise look usable.
+				routable, _ := g.Store.ListRoutableDonations(p.Service, p.Model)
 				pricingList = append(pricingList, map[string]interface{}{
-					"service": p.Service,
-					"model":   p.Model,
-					"price":   p.Price,
+					"service":   p.Service,
+					"model":     p.Model,
+					"price":     p.Price,
+					"available": len(routable) > 0,
 				})
 			}
 		}
@@ -961,7 +967,7 @@ loop:
 		// workflow ended with status=failed.  Per the sixth-round
 		// ruling this is NOT a donation failure (the endpoint was
 		// reachable — this is a logical workflow error surfaced to
-		// the admin alert centre in S5).
+		// the admin alert center in S5).
 		status, code = "error", "upstream_error"
 		detail = conv.FailMessage()
 		if streamErr != nil {
@@ -1122,7 +1128,7 @@ func (g *Gateway) releaseCharitySetup(reservation *db.CharityReservation) {
 
 // maybeRecordBlockingFailedAlert records an admin alert for a blocking call
 // that returned HTTP 200 but workflow status==failed. The alert is linked to
-// the request log row (when one was written) so the alert centre can jump to
+// the request log row (when one was written) so the alert center can jump to
 // the affected request; bound alerts are purged with the log's 30-day
 // retention.
 func (g *Gateway) maybeRecordBlockingFailedAlert(userID int64, modelName, service string, de *dify.DifyError, donationID *int64, requestLogID int64) {
@@ -1211,6 +1217,15 @@ func (g *Gateway) handleCreateDonationApp(w http.ResponseWriter, r *http.Request
 	if !translator.IsSupportedService(req.Service) {
 		g.writeError(w, http.StatusBadRequest, "invalid_request",
 			fmt.Sprintf("不支持的服务 %q", req.Service))
+		return
+	}
+
+	// The admin may disable a service for self-service donations
+	// (anti-abuse tab switch); the dropdown is filtered client-side, this
+	// check is defense in depth for direct API calls.
+	if !g.Store.IsServiceDonationSelectable(req.Service) {
+		g.writeError(w, http.StatusBadRequest, "invalid_request",
+			fmt.Sprintf("服务 %q 当前不接受自助捐赠申请", req.Service))
 		return
 	}
 

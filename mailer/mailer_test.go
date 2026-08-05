@@ -42,7 +42,7 @@ func (m *mockSender) send(cfg config.SMTPConfig, subject, body string) error {
 func TestNew_NilWhenHostEmpty(t *testing.T) {
 	cfg := testSMTPConfig()
 	cfg.Host = ""
-	m := New(cfg, 10)
+	m := New(cfg, Options{})
 	if m != nil {
 		t.Error("expected nil when SMTP_HOST is empty")
 	}
@@ -50,7 +50,7 @@ func TestNew_NilWhenHostEmpty(t *testing.T) {
 
 func TestNew_ReturnsMailerWhenHostSet(t *testing.T) {
 	cfg := testSMTPConfig()
-	m := New(cfg, 10)
+	m := New(cfg, Options{})
 	if m == nil {
 		t.Fatal("expected non-nil when SMTP_HOST is set")
 	}
@@ -61,7 +61,7 @@ func TestNew_ReturnsMailerWhenHostSet(t *testing.T) {
 
 func TestStart_NoOp(t *testing.T) {
 	cfg := testSMTPConfig()
-	m := New(cfg, 10)
+	m := New(cfg, Options{})
 	if m == nil {
 		t.Fatal("expected non-nil mailer")
 	}
@@ -312,4 +312,98 @@ func TestMailer_DisabledAfterNestedNilCheck(t *testing.T) {
 	//
 	// No code here — this is a compilation/documentation guard that the
 	// handler wiring must guard with a nil check before calling.
+}
+
+func TestEmailEnabledGate_DropsDisabledCategory(t *testing.T) {
+	ms := &mockSender{}
+	cfg := testSMTPConfig()
+	disabled := false
+	m := New(cfg, Options{
+		EmailEnabled: func(et EventType) bool { return !disabled },
+		// 0 falls back to the global coolWindow so the test can shorten it.
+		CoolMinutes: func() int { return 0 },
+	})
+	if m == nil {
+		t.Fatal("expected non-nil mailer")
+	}
+	origCoolWindow := coolWindow
+	coolWindow = 50 * time.Millisecond
+	defer func() { coolWindow = origCoolWindow }()
+	m.sendFunc = ms.send
+
+	// Enabled category: event is queued and flushed.
+	m.UserAutoBanned("alice", 1, time.Now().Add(time.Hour), 1, 1)
+	time.Sleep(120 * time.Millisecond)
+	ms.mu.Lock()
+	n := len(ms.mails)
+	ms.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("enabled category: want 1 mail, got %d", n)
+	}
+
+	// Disabled category: nothing queued, nothing sent.
+	disabled = true
+	m.DonationInactive("general", "gpt-5.6-sol", 42, 3)
+	time.Sleep(120 * time.Millisecond)
+	ms.mu.Lock()
+	n = len(ms.mails)
+	ms.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("disabled category: want still 1 mail, got %d", n)
+	}
+}
+
+func TestRecordCallback_InvokedPerQueuedEvent(t *testing.T) {
+	ms := &mockSender{}
+	cfg := testSMTPConfig()
+	var recorded []string
+	var recMu sync.Mutex
+	m := New(cfg, Options{
+		Record: func(et EventType, summary string) {
+			recMu.Lock()
+			recorded = append(recorded, string(et)+"|"+summary)
+			recMu.Unlock()
+		},
+	})
+	if m == nil {
+		t.Fatal("expected non-nil mailer")
+	}
+	m.sendFunc = ms.send
+
+	m.UserAutoBanned("bob", 2, time.Now().Add(time.Hour), 2, 3)
+
+	recMu.Lock()
+	defer recMu.Unlock()
+	if len(recorded) != 1 {
+		t.Fatalf("want 1 record, got %d", len(recorded))
+	}
+	if !strings.Contains(recorded[0], "user_auto_banned|") {
+		t.Errorf("record = %q, want user_auto_banned prefix", recorded[0])
+	}
+}
+
+func TestCoolMinutesGetter_UsedForWindow(t *testing.T) {
+	cfg := testSMTPConfig()
+	minutes := 100
+	m := New(cfg, Options{CoolMinutes: func() int { return minutes }})
+	if m == nil {
+		t.Fatal("expected non-nil mailer")
+	}
+	m.queue(EventUserAutoBanned, "x")
+	m.mu.Lock()
+	c := m.coolers[EventUserAutoBanned]
+	m.mu.Unlock()
+	if c == nil {
+		t.Fatal("expected cooler to be created")
+	}
+	if c.timer == nil {
+		t.Fatal("expected timer to be armed")
+	}
+	// The window must be 100 minutes, not the 10-minute default.
+	if d := c.timer.Stop(); !d {
+		t.Error("expected armed timer")
+	}
+	if c.coolMinutes() != 100 {
+		t.Errorf("coolMinutes getter = %d, want 100", c.coolMinutes())
+	}
 }

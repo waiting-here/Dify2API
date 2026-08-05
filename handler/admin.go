@@ -799,6 +799,7 @@ func (g *Gateway) handlePutAntiAbuse(w http.ResponseWriter, r *http.Request) {
 			MinChars             int    `json:"min_chars"`
 			PenaltyDeductCredits int    `json:"penalty_deduct_credits"`
 			PenaltyBanHours      int    `json:"penalty_ban_hours"`
+			DonationSelectable   *int   `json:"donation_selectable"`
 		} `json:"configs"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -816,7 +817,11 @@ func (g *Gateway) handlePutAntiAbuse(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf("不支持的服务 %q", c.Service))
 			return
 		}
-		if _, err := g.Store.UpsertAntiAbuseConfig(c.Service, c.Mode, c.MinChars, c.PenaltyDeductCredits, c.PenaltyBanHours); err != nil {
+		donationSelectable := 1 // default: selectable (pre-switch behavior)
+		if c.DonationSelectable != nil {
+			donationSelectable = *c.DonationSelectable
+		}
+		if _, err := g.Store.UpsertAntiAbuseConfig(c.Service, c.Mode, c.MinChars, c.PenaltyDeductCredits, c.PenaltyBanHours, donationSelectable); err != nil {
 			g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
@@ -845,5 +850,6 @@ func antiAbuseJSON(c *db.AntiAbuseConfig) map[string]interface{} {
 		"min_chars":              c.MinChars,
 		"penalty_deduct_credits": c.PenaltyDeductCredits,
 		"penalty_ban_hours":      c.PenaltyBanHours,
+		"donation_selectable":    c.DonationSelectable == 1,
 	}
 }

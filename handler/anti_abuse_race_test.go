@@ -16,7 +16,7 @@ func TestAntiAbuseCache_ConcurrentRefreshAndRead(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < iterations; i++ {
-			if _, err := gw.Store.UpsertAntiAbuseConfig("general", i%3, 20+i%5, 0, 0); err != nil {
+			if _, err := gw.Store.UpsertAntiAbuseConfig("general", i%3, 20+i%5, 0, 0, 1); err != nil {
 				select {
 				case errCh <- err:
 				default:

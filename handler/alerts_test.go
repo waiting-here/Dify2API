@@ -256,6 +256,35 @@ func TestAlertList_HostSeparation_AdminHost(t *testing.T) {
 	}
 }
 
+func TestAlertPrefs_HostSeparation(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	wrapped := gw.Wrap(mux)
+
+	// Admin host: allowed.
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/alert-prefs", nil)
+	req.AddCookie(adminCookie)
+	req.Host = gw.Config.Admin.AdminHost
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("admin-host alert-prefs: status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// User host: must be hidden.
+	req = httptest.NewRequest(http.MethodGet, "/api/admin/alert-prefs", nil)
+	req.AddCookie(adminCookie)
+	req.Host = gw.Config.Admin.SiteHost
+	rec = httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("user-host alert-prefs: status = %d, want 404", rec.Code)
+	}
+}
+
 func TestAlertList_IncludeRequestLogID(t *testing.T) {
 	gw, store := setupAuthGateway(t, "s3cret")
 	adminCookie := loginCookie(t, gw, "root", "s3cret")
@@ -290,5 +319,89 @@ func TestAlertList_IncludeRequestLogID(t *testing.T) {
 	}
 	if resp.Alerts[0].RequestLogID == nil || *resp.Alerts[0].RequestLogID != logID {
 		t.Errorf("request_log_id = %v, want %d", resp.Alerts[0].RequestLogID, logID)
+	}
+}
+
+func TestAlertPrefsAPI(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	// Seeded at gateway construction: every category present with defaults on.
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/alert-prefs", nil)
+	req.AddCookie(adminCookie)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET prefs: status %d body %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Prefs []db.AlertPref `json:"prefs"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	seen := map[string]db.AlertPref{}
+	for _, p := range resp.Prefs {
+		seen[p.EventType] = p
+		if !p.ShowInCenter || !p.EmailEnabled {
+			t.Errorf("%s: seeded defaults should be on, got %+v", p.EventType, p)
+		}
+	}
+	if len(seen) != 6 {
+		t.Fatalf("want 6 categories, got %d: %v", len(seen), seen)
+	}
+	for _, et := range []string{"user_auto_banned", "donation_inactive", "admin_login_locked", "pricing_missing", "debug_abuse", "blocking_failed_200"} {
+		if _, ok := seen[et]; !ok {
+			t.Errorf("missing category %s", et)
+		}
+	}
+
+	// Turn off both switches for one category.
+	body := `{"prefs":[{"event_type":"user_auto_banned","show_in_center":false,"email_enabled":false}]}`
+	req = httptest.NewRequest(http.MethodPut, "/api/admin/alert-prefs", strings.NewReader(body))
+	req.AddCookie(adminCookie)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT prefs: status %d body %s", rec.Code, rec.Body.String())
+	}
+	if store.IsAlertShownInCenter("user_auto_banned") || store.IsAlertEmailEnabled("user_auto_banned") {
+		t.Error("expected show off, email off after PUT")
+	}
+	// Other categories untouched.
+	if !store.IsAlertEmailEnabled("donation_inactive") {
+		t.Error("donation_inactive must stay enabled")
+	}
+
+	// The gate takes effect: no record written for the disabled category.
+	if err := store.AddAdminAlert(&db.AdminAlert{Type: "user_auto_banned", Message: "x"}); err != nil {
+		t.Fatalf("AddAdminAlert: %v", err)
+	}
+	if _, total, _ := store.ListAdminAlerts(100, 0); total != 0 {
+		t.Fatalf("gated alert should not be recorded, total=%d", total)
+	}
+
+	// Unknown event type rejected.
+	body = `{"prefs":[{"event_type":"bogus","email_enabled":false}]}`
+	req = httptest.NewRequest(http.MethodPut, "/api/admin/alert-prefs", strings.NewReader(body))
+	req.AddCookie(adminCookie)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown type: status %d, want 400", rec.Code)
+	}
+
+	// Non-admin rejected.
+	u, _ := store.CreateUser("42", "tester", "")
+	token, _, _ := store.CreateSession(u.ID)
+	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: token}
+	req = httptest.NewRequest(http.MethodGet, "/api/admin/alert-prefs", nil)
+	req.AddCookie(cookie)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("non-admin: status = %d, want 403", rec.Code)
 	}
 }

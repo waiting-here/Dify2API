@@ -21,6 +21,66 @@ func adminCookie(t *testing.T, gw *Gateway) *http.Cookie {
 	return loginCookie(t, gw, "root", "x")
 }
 
+func TestGetCharityPricingAvailability(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+
+	u, _ := store.CreateUser("42", "tester", "")
+	sess, _, _ := store.CreateSession(u.ID)
+	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: sess}
+
+	now := time.Now().Unix()
+
+	// Pricing row 1: active donation with remaining capacity -> available.
+	if _, err := store.UpsertPricing("general", "gpt-5.6-sol", 100, nil); err != nil {
+		t.Fatalf("upsert pricing: %v", err)
+	}
+	store.SetPricingEnabled("general", "gpt-5.6-sol", true)
+	if _, err := store.CreateDonation(&db.Donation{
+		Service: "general", Model: "gpt-5.6-sol", DifyBaseURL: "https://api.dify.ai/v1",
+		Deadline: now + 86400, TotalCount: 100, RemainingCount: 50, Status: db.DonationActive,
+	}, "k1"); err != nil {
+		t.Fatalf("create donation: %v", err)
+	}
+
+	// Pricing row 2: only an expired donation -> must show unavailable even
+	// though HasDonationsForPair (any status) is true.
+	if _, err := store.UpsertPricing("image", "claude-sonnet-4-6", 200, nil); err != nil {
+		t.Fatalf("upsert pricing: %v", err)
+	}
+	store.SetPricingEnabled("image", "claude-sonnet-4-6", true)
+	if _, err := store.CreateDonation(&db.Donation{
+		Service: "image", Model: "claude-sonnet-4-6", DifyBaseURL: "https://api.dify.ai/v1",
+		Deadline: now - 3600, TotalCount: 100, RemainingCount: 50, Status: db.DonationActive,
+	}, "k2"); err != nil {
+		t.Fatalf("create donation: %v", err)
+	}
+
+	rec := donationRequest(gw, cookie, http.MethodGet, "/api/me/charity", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/me/charity: status %d body %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Pricing []struct {
+			Service   string `json:"service"`
+			Model     string `json:"model"`
+			Available bool   `json:"available"`
+		} `json:"pricing"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got := map[string]bool{}
+	for _, p := range resp.Pricing {
+		got[p.Service+"/"+p.Model] = p.Available
+	}
+	if !got["general/gpt-5.6-sol"] {
+		t.Errorf("general/gpt-5.6-sol: want available=true, got %v", got)
+	}
+	if got["image/claude-sonnet-4-6"] {
+		t.Errorf("image/claude-sonnet-4-6: want available=false, got %v", got)
+	}
+}
+
 func donationRequest(gw *Gateway, cookie *http.Cookie, method, path string, body interface{}) *httptest.ResponseRecorder {
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
@@ -1118,6 +1178,49 @@ func TestCreateDonationApplication_Submit(t *testing.T) {
 	}
 	if a["total_count"] != float64(100) {
 		t.Errorf("total_count = %v", a["total_count"])
+	}
+}
+
+// TestCreateDonationApplication_ServiceGate rejects a service the admin has
+// turned off for self-service donations, and verifies the services endpoint
+// hides it behind ?donation=1.
+func TestCreateDonationApplication_ServiceGate(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	store.SetSetting(db.SettingDonationEnabled, "true")
+	cookie := appUserCookie(t, gw, store)
+
+	// Disable "general" for self-service donations.
+	if _, err := store.UpsertAntiAbuseConfig("general", 2, 20, 0, 0, 0); err != nil {
+		t.Fatalf("disable service: %v", err)
+	}
+
+	// /api/services must still list it (config forms need all services) ...
+	rec := donationRequest(gw, cookie, http.MethodGet, "/api/services", nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"name":"general"`) {
+		t.Fatalf("/api/services: status %d body %s", rec.Code, rec.Body.String())
+	}
+	// ... but ?donation=1 must hide it.
+	rec = donationRequest(gw, cookie, http.MethodGet, "/api/services?donation=1", nil)
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), `"name":"general"`) {
+		t.Fatalf("/api/services?donation=1: status %d body %s", rec.Code, rec.Body.String())
+	}
+
+	// The application endpoint must reject the disabled service (defense in depth).
+	deadline := time.Now().Add(48 * time.Hour).Unix()
+	body := map[string]interface{}{
+		"service":       "general",
+		"model":         "claude-opus-4-6",
+		"dify_base_url": "https://dify.example.com/v1",
+		"dify_api_key":  "app-test-key-123",
+		"deadline":      deadline,
+		"total_count":   100,
+	}
+	rec = donationRequest(gw, cookie, "POST", "/api/me/donations", body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "不接受自助捐赠申请") {
+		t.Errorf("body should mention the service is not accepting self donations, got: %s", rec.Body.String())
 	}
 }
 
