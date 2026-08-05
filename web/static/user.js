@@ -594,6 +594,10 @@ async function renderCreditsCard() {
       btn.disabled = true;
       const waitMs = Math.max(0, (status.next_checkin_at - Math.floor(Date.now() / 1000)) * 1000);
       _checkinTimer = setTimeout(() => renderCreditsCard(), waitMs);
+    } else if (status.capped) {
+      // Balance already at/above the cap: check-in would be refused server-side.
+      btn.textContent = T('creditsCheckinCapped');
+      btn.disabled = true;
     } else {
       btn.textContent = T('creditsCheckin');
       btn.disabled = false;
@@ -665,9 +669,9 @@ async function renderCharityCard() {
     pricingTableHtml = `
       <h4 style="margin-top:1.25rem">${T('pricingTitle')}</h4>
       <div class="table-wrap"><table><thead><tr>
-        <th>${T('pricingThService')}</th><th>${T('pricingThModel')}</th><th>${T('pricingThPrice')}</th>
+        <th>${T('pricingThService')}</th><th>${T('pricingThModel')}</th><th>${T('pricingThPrice')}</th><th>${T('pricingThAvailable')}</th>
       </tr></thead><tbody>
-        ${pricingList.map((p) => `<tr><td>${esc(p.service)}</td><td class="mono">${esc(p.model)}</td><td class="mono">${esc(String(p.price))}</td></tr>`).join("")}
+        ${pricingList.map((p) => `<tr><td>${esc(p.service)}</td><td class="mono">${esc(p.model)}</td><td class="mono">${esc(String(p.price))}</td><td>${p.available ? `<span class="badge ok">${T('pricingAvailable')}</span>` : `<span class="badge off">${T('pricingUnavailable')}</span>`}</td></tr>`).join("")}
       </tbody></table></div>`;
   }
   card.innerHTML = `
@@ -805,9 +809,10 @@ async function renderMyDonations() {
   if (applyBtn && form && canSubmit) {
     applyBtn.onclick = () => { form.style.display = form.style.display === "none" ? "" : "none"; };
 
-    // Populate service dropdown.
+    // Populate service dropdown (only services the admin allows for
+    // self-service donations).
     try {
-      const { services } = await api("/api/services");
+      const { services } = await api("/api/services?donation=1");
       $("#don-apply-service").innerHTML = (services || []).map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("");
     } catch { /* silently ignore */ }
 
@@ -863,7 +868,7 @@ async function renderMyDonations() {
         // Populate service dropdown if not already populated.
         if (!$("#don-apply-service").children.length) {
           try {
-            const { services } = await api("/api/services");
+            const { services } = await api("/api/services?donation=1");
             $("#don-apply-service").innerHTML = (services || []).map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("");
           } catch { /* silently ignore */ }
         }

@@ -143,19 +143,21 @@ function switchAdminTab(tab) {
   }
 }
 
+// adminUserOption renders a datalist option value for a user, including the
+// numeric DB id so filters can be picked and searched by id too.
+function adminUserOption(u) {
+  return `${esc(u.username)}（${esc(u.discord_id)}） [${u.id}]`;
+}
+
 async function initAdminUsersTab() {
   await loadAdminCommonData();
-  $("#user-search-list").innerHTML = _adminCommonData.users
-    .map((u) => `<option value="${esc(u.username)}（${esc(u.discord_id)}）"></option>`)
-    .join("");
+  $("#user-search-list").innerHTML = _adminCommonData.users.map(adminUserOption).join("");
   await loadAdminUsers();
 }
 
 async function initAdminLogsTab() {
   const data = await loadAdminCommonData();
-  $("#alf-user-list").innerHTML = data.users
-    .map((u) => `<option value="${esc(u.username)}（${esc(u.discord_id)}）"></option>`)
-    .join("");
+  $("#alf-user-list").innerHTML = data.users.map(adminUserOption).join("");
   let svcOpts = `<option value="">${T('adminLogsAllServices')}</option>`;
   data.services.forEach((s) => { svcOpts += `<option value="${esc(s.name)}">${esc(s.name)}</option>`; });
   $("#alf-service").innerHTML = svcOpts;
@@ -170,15 +172,11 @@ async function initAdminDonationsTab() {
   $("#don-service").innerHTML = data.services
     .map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`)
     .join("");
-  $("#don-user-list").innerHTML = data.users
-    .map((u) => `<option value="${esc(u.username)}（${esc(u.discord_id)}）"></option>`)
-    .join("");
+  $("#don-user-list").innerHTML = data.users.map(adminUserOption).join("");
   // Populate application history filters.
   $("#dah-service").innerHTML = `<option value="">${T('donationAppStatusAll')}</option>` +
     data.services.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("");
-  $("#dah-user-list").innerHTML = data.users
-    .map((u) => `<option value="${esc(u.username)}（${esc(u.discord_id)}）"></option>`)
-    .join("");
+  $("#dah-user-list").innerHTML = data.users.map(adminUserOption).join("");
   $("#dah-query").onclick = () => { donAppHistoryPager.page = 1; loadDonationAppHistory(); };
   $("#donation-form").onsubmit = onDonationSubmit;
   $("#pricing-form").onsubmit = onPricingSubmit;
@@ -189,7 +187,7 @@ async function initAdminDonationsTab() {
 }
 
 async function initAdminAlertsTab() {
-  await loadAdminAlerts();
+  await Promise.all([loadAdminAlerts(), loadAlertPrefs()]);
   $("#alert-delete-btn").onclick = async () => {
     const chks = document.querySelectorAll(".alert-chk:checked");
     if (chks.length === 0) return;
@@ -308,7 +306,7 @@ async function renderAdminDashboard() {
           <th>${T('antiAbuseThMinChars')}</th>
           <th>${T('antiAbuseThPenaltyCredits')}</th>
           <th>${T('antiAbuseThPenaltyBan')}</th>
-          <th>${T('thActions')}</th>
+          <th>${T('antiAbuseThDonationSelect')}</th>
         </tr></thead><tbody id="antiabuse-rows"></tbody></table></div>
         <div class="row-actions" style="margin-top:.5rem">
           <button id="antiabuse-save-all">${T('antiAbuseSave')}</button>
@@ -337,7 +335,7 @@ async function renderAdminDashboard() {
           <input id="batch-amount" type="number" min="0" placeholder="${T('batchAmount')}" style="width:6rem;margin-bottom:0">
           <button id="batch-submit" class="secondary" style="width:auto;margin-bottom:0">${T('batchSubmit')}</button>
         </div>
-        <div class="table-wrap"><table><thead><tr><th><input type="checkbox" id="select-all" title="${T('selectAll')}"></th><th>${T('thUser')}</th><th>${T('thCredits')}</th><th>${T('thDonationCredit')}</th><th>${T('thRPM')}</th><th>${T('thCreated')}</th><th>${T('thStatus')}</th><th>${T('thActions')}</th></tr></thead><tbody id="user-rows"></tbody></table></div>
+        <div class="table-wrap"><table><thead><tr><th><input type="checkbox" id="select-all" title="${T('selectAll')}"></th><th>${T('thUserId')}</th><th>${T('thUser')}</th><th>${T('thCredits')}</th><th>${T('thDonationCredit')}</th><th>${T('thRPM')}</th><th>${T('thCreated')}</th><th>${T('thStatus')}</th><th>${T('thActions')}</th></tr></thead><tbody id="user-rows"></tbody></table></div>
         <div class="row-actions" id="user-pager" style="margin-top:.5rem"></div>
       </section>
     </div>
@@ -449,6 +447,12 @@ async function renderAdminDashboard() {
           <button class="secondary batch-don-deactivate" style="width:auto;margin:0">${T('batchDeactivate')}</button>
           <button class="contrast outline batch-don-delete" style="width:auto;margin:0">${T('batchDelete')}</button>
         </div>
+        <div id="don-filter" style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:.75rem">
+          <label style="margin-bottom:0">${T('charityThStatus')}<select id="don-filter-status" style="width:auto;margin-bottom:0"><option value="">${T('donationAppStatusAll')}</option><option value="active">${T('charityStatusActive')}</option><option value="inactive">${T('charityStatusInactive')}</option><option value="expired">${T('charityStatusExpired')}</option></select></label>
+          <label style="margin-bottom:0">${T('thService')}<select id="don-filter-service" style="width:auto;margin-bottom:0"><option value="">${T('adminLogsAllServices')}</option></select></label>
+          <label style="margin-bottom:0">${T('donFilterKeyword')}<input id="don-filter-q" placeholder="${T('donFilterKeywordPlaceholder')}" style="width:14rem;margin-bottom:0" autocomplete="off"></label>
+          <label style="margin-bottom:0">${T('thUser')}<input id="don-filter-user" list="don-filter-user-list" placeholder="${T('adminLogsUserSearch')}" style="margin-bottom:0" autocomplete="off"><datalist id="don-filter-user-list"></datalist></label>
+        </div>
         <div class="table-wrap"><table><thead><tr>
           <th><input type="checkbox" id="don-select-all" title="${T('batchSelectAll')}"></th>
           <th>${T('charityThService')}</th><th>${T('charityThModel')}</th><th>${T('charityThSource')}</th>
@@ -469,6 +473,14 @@ async function renderAdminDashboard() {
           <button id="alert-delete-btn" class="contrast outline">${T('alertDeleteSelected')}</button>
         </div>
         <div class="row-actions" id="alert-pager" style="margin-top:.5rem"></div>
+      </section>
+      <section class="card">
+        <h3>${T('alertPrefsTitle')}</h3>
+        <p class="muted" style="margin-bottom:.75rem">${T('alertPrefsHint')}</p>
+        <div class="table-wrap"><table><thead><tr>
+          <th>${T('alertPrefsThCategory')}</th><th>${T('alertPrefsThTrigger')}</th>
+          <th>${T('alertPrefsThCenter')}</th><th>${T('alertPrefsThEmail')}</th>
+        </tr></thead><tbody id="alert-prefs-rows"></tbody></table></div>
       </section>
     </div>
 
@@ -555,7 +567,7 @@ const adminLogPager = newPager(adminLogRow);
 const alertPager = newPager(alertRow);
 // Users fetched for the admin-log filter (username → id resolution).
 let adminLogUsers = [];
-// Jump target set by the alert centre's "view linked request" action:
+// Jump target set by the alert center's "view linked request" action:
 // { logId, userId } — consumed by loadAdminLogs/renderAdminLogs.
 let alertJump = null;
 
@@ -565,11 +577,12 @@ let alertJump = null;
 function resolveLogUserFilter(text) {
   const q = text.trim();
   if (!q) return { id: null };
-  // Exact datalist form: "username（discord_id）".
-  const m = q.match(/^(.*)（([^（）]*)）$/);
+  // Datalist form: "username（discord_id） [id]". The trailing [id] is
+  // optional so the older "username（discord_id）" format still parses.
+  const m = q.match(/^(.*)（([^（）]*)）(?: \[(\d+)\])?$/);
   if (m) {
     const hit = adminLogUsers.find((u) => u.username === m[1] && u.discord_id === m[2]);
-    if (hit) return { id: hit.id };
+    if (hit && (!m[3] || String(hit.id) === m[3])) return { id: hit.id };
   }
   // Fallbacks: exact username, exact discord id, numeric user id.
   const byName = adminLogUsers.filter((u) => u.username === q);
@@ -641,6 +654,7 @@ function userRow(u) {
   return `
     <tr data-id="${u.id}">
       <td><input type="checkbox" class="user-chk" data-id="${u.id}"></td>
+      <td class="mono muted">${u.id}</td>
       <td style="max-width:10rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${titleTxt}">${esc(u.username)} <span class="id-badge mono" data-copy-id="${esc(u.discord_id)}" title="${T('clickToCopy')}: ${esc(u.discord_id)}" style="cursor:pointer">(${esc(u.discord_id)})</span></td>
       <td class="mono">${u.credits != null ? String(u.credits) : "0"}</td>
       <td class="mono">${u.donation_credit != null ? String(u.donation_credit) : "0"}</td>
@@ -793,10 +807,19 @@ function bindUserRowActions() {
 function applyUserFilter() {
   const searchEl = $("#user-search");
   const q = searchEl ? searchEl.value.trim().toLowerCase() : "";
-  userPager.data = q ? _allAdminUsers.filter((u) =>
-    (u.username || "").toLowerCase().includes(q) ||
-    (u.discord_id || "").toLowerCase().includes(q)
-  ) : _allAdminUsers;
+  let list = _allAdminUsers;
+  if (q) {
+    if (/^\d+$/.test(q)) {
+      // Pure digits: exact numeric user id match.
+      list = _allAdminUsers.filter((u) => String(u.id) === q);
+    } else {
+      list = _allAdminUsers.filter((u) =>
+        (u.username || "").toLowerCase().includes(q) ||
+        (u.discord_id || "").toLowerCase().includes(q)
+      );
+    }
+  }
+  userPager.data = list;
   userPager.page = 1;
   userPager.afterRender = () => { bindUserRowActions(); bindIdBadgeClicks(); };
   renderPaged(userPager, "#user-rows", "#user-pager", 8);
@@ -1079,12 +1102,75 @@ async function renderAdminLogCharts(stats) {
   }
 }
 
-/* ---------------- admin site: alert centre ---------------- */
+/* ---------------- admin site: alert center ---------------- */
 function getAlertTypeLabels() {
   return {
     blocking_failed_200: T('alertTypeBlockingFailed200'),
-    donation_exhausted_race: T('alertTypeDonationExhausted'),
+    user_auto_banned: T('alertPrefsCatUserAutoBanned'),
+    donation_inactive: T('alertPrefsCatDonationInactive'),
+    admin_login_locked: T('alertPrefsCatAdminLoginLocked'),
+    pricing_missing: T('alertPrefsCatPricingMissing'),
+    debug_abuse: T('alertPrefsCatDebugAbuse'),
   };
+}
+
+// Per-category alert prefs: labels + trigger descriptions for the switch table.
+function alertPrefMeta() {
+  return {
+    user_auto_banned:    { label: T('alertPrefsCatUserAutoBanned'),    desc: T('alertPrefsDescUserAutoBanned') },
+    donation_inactive:   { label: T('alertPrefsCatDonationInactive'),   desc: T('alertPrefsDescDonationInactive') },
+    admin_login_locked:  { label: T('alertPrefsCatAdminLoginLocked'),  desc: T('alertPrefsDescAdminLoginLocked') },
+    pricing_missing:     { label: T('alertPrefsCatPricingMissing'),     desc: T('alertPrefsDescPricingMissing') },
+    debug_abuse:         { label: T('alertPrefsCatDebugAbuse'),         desc: T('alertPrefsDescDebugAbuse') },
+    blocking_failed_200: { label: T('alertPrefsCatBlockingFailed200'), desc: T('alertPrefsDescBlockingFailed200') },
+  };
+}
+
+async function loadAlertPrefs() {
+  try {
+    const data = await api("/api/admin/alert-prefs");
+    renderAlertPrefs(data.prefs || []);
+  } catch (err) {
+    $("#alert-prefs-rows").innerHTML = `<tr><td colspan="4" class="muted">${T('error').replace("{msg}", err.message)}</td></tr>`;
+  }
+}
+
+function renderAlertPrefs(prefs) {
+  const tbody = $("#alert-prefs-rows");
+  if (!tbody) return;
+  const meta = alertPrefMeta();
+  if (prefs.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="4" class="muted">${T('empty')}</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = prefs.map((p) => {
+    const m = meta[p.event_type] || { label: esc(p.event_type), desc: "" };
+    return `<tr data-type="${esc(p.event_type)}">
+      <td>${m.label}</td>
+      <td class="muted wrap" style="max-width:28rem">${m.desc}</td>
+      <td><input type="checkbox" role="switch" class="ap-center" ${p.show_in_center ? "checked" : ""} title="${T('alertPrefsThCenter')}"></td>
+      <td><input type="checkbox" role="switch" class="ap-email" ${p.email_enabled ? "checked" : ""} title="${T('alertPrefsThEmail')}"></td>
+    </tr>`;
+  }).join("");
+
+  tbody.querySelectorAll(".ap-center, .ap-email").forEach((tgl) => {
+    tgl.onchange = async () => {
+      const row = tgl.closest("tr");
+      const eventType = row.dataset.type;
+      const center = row.querySelector(".ap-center").checked;
+      const email = row.querySelector(".ap-email").checked;
+      try {
+        await api("/api/admin/alert-prefs", {
+          method: "PUT",
+          body: { prefs: [{ event_type: eventType, show_in_center: center, email_enabled: email }] },
+        });
+        toast(T('alertPrefsSaved'), 1800);
+      } catch (err) {
+        tgl.checked = !tgl.checked;
+        toast(T('error').replace("{msg}", err.message), 3000);
+      }
+    };
+  });
 }
 
 function alertRow(a) {
@@ -1227,7 +1313,7 @@ function renderAntiAbuseRows() {
       <td><input type="number" class="aa-min-chars" value="${c.min_chars}" min="0" style="width:5rem;margin-bottom:0"></td>
       <td><input type="number" class="aa-penalty-credits" value="${c.penalty_deduct_credits}" min="0" style="width:5rem;margin-bottom:0"></td>
       <td><input type="number" class="aa-penalty-ban" value="${c.penalty_ban_hours}" min="0" style="width:5rem;margin-bottom:0"></td>
-      <td></td>
+      <td><input type="checkbox" role="switch" class="aa-donation" ${c.donation_selectable ? "checked" : ""} title="${esc(T('antiAbuseDonationSelectHint'))}"></td>
     </tr>`;
   }).join("");
 
@@ -1241,7 +1327,8 @@ function renderAntiAbuseRows() {
         const minChars = parseInt(row.querySelector(".aa-min-chars").value, 10) || 0;
         const penaltyCredits = parseInt(row.querySelector(".aa-penalty-credits").value, 10) || 0;
         const penaltyBan = parseInt(row.querySelector(".aa-penalty-ban").value, 10) || 0;
-        configs.push({ service: svc, mode, min_chars: minChars, penalty_deduct_credits: penaltyCredits, penalty_ban_hours: penaltyBan });
+        const donationSelectable = row.querySelector(".aa-donation").checked ? 1 : 0;
+        configs.push({ service: svc, mode, min_chars: minChars, penalty_deduct_credits: penaltyCredits, penalty_ban_hours: penaltyBan, donation_selectable: donationSelectable });
       });
       try {
         const resp = await api("/api/admin/anti-abuse", { method: "PUT", body: { configs } });
@@ -1289,21 +1376,74 @@ function donationRow(d) {
   return `<tr><td><input type="checkbox" class="don-chk" data-id="${d.id}"></td><td>${esc(d.service)}</td><td class="mono">${esc(d.model)}</td><td>${sourceCell}</td><td>${keyCell}</td><td>${statusBadge}</td><td>${remaining}</td><td class="mono">${rpmDisplay}</td><td class="muted">${deadline}</td><td class="muted"><div class="wrap" style="max-width:50rem">${esc(d.note || "—")}</div></td><td class="muted"><div class="wrap" style="max-width:50rem">${esc(d.review_note || "—")}</div></td><td><div class="row-actions">${actions}</div></td></tr>`;
 }
 
+let _allDonations = [];
+let _donFilterBound = false;
+
 async function loadAdminDonations() {
   try {
     const data = await api("/api/admin/donations");
-    const list = data.donations || [];
-    donPager.data = list;
-    donPager.afterRender = () => {
-      clearBatchSelection("#don-select-all", ".don-chk", "don-batch-bar");
-      bindBatchSelectAll("#don-select-all", ".don-chk", () => refBatchBar("don-batch-bar", ".don-chk"));
-      bindIdBadgeClicks();
-    };
-    renderPaged(donPager, "#don-rows", "#don-pager", 12);
+    _allDonations = data.donations || [];
+    bindDonationFilters();
+    applyDonationFilters();
   } catch (err) {
     $("#don-rows").innerHTML = `<tr><td colspan="12" class="muted">${T('error').replace("{msg}", err.message)}</td></tr>`;
     $("#don-pager").innerHTML = "";
   }
+}
+
+function bindDonationFilters() {
+  if (_donFilterBound) return;
+  _donFilterBound = true;
+  const svcSet = new Set(_allDonations.map((d) => d.service));
+  $("#don-filter-service").innerHTML =
+    `<option value="">${T('adminLogsAllServices')}</option>` +
+    [...svcSet].map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join("");
+  if (_adminCommonData && _adminCommonData.users) {
+    $("#don-filter-user-list").innerHTML = _adminCommonData.users.map(adminUserOption).join("");
+  }
+  ["#don-filter-status", "#don-filter-service"].forEach((sel) => {
+    $(sel).onchange = applyDonationFilters;
+  });
+  $("#don-filter-q").oninput = applyDonationFilters;
+  $("#don-filter-user").oninput = applyDonationFilters;
+}
+
+// Client-side filter over the fully loaded donation list (same mechanism as
+// the users tab search). Status/service are exact; the keyword matches model,
+// source text/name and note; the user field resolves via resolveLogUserFilter
+// (username / discord id / numeric id) against source_user_id.
+function applyDonationFilters() {
+  const status = $("#don-filter-status").value;
+  const svc = $("#don-filter-service").value;
+  const q = ($("#don-filter-q").value || "").trim().toLowerCase();
+  const userText = $("#don-filter-user").value.trim();
+  let list = _allDonations;
+  if (status) list = list.filter((d) => d.status === status);
+  if (svc) list = list.filter((d) => d.service === svc);
+  if (q) {
+    list = list.filter((d) =>
+      (d.model || "").toLowerCase().includes(q) ||
+      (d.source_text || "").toLowerCase().includes(q) ||
+      (d.source_username || "").toLowerCase().includes(q) ||
+      (d.source_discord_id || "").toLowerCase().includes(q) ||
+      (d.note || "").toLowerCase().includes(q)
+    );
+  }
+  if (userText) {
+    const resolved = resolveLogUserFilter(userText);
+    if (!resolved.error && resolved.id !== null) {
+      const uid = resolved.id;
+      list = list.filter((d) => d.source_user_id === uid);
+    }
+  }
+  donPager.data = list;
+  donPager.page = 1;
+  donPager.afterRender = () => {
+    clearBatchSelection("#don-select-all", ".don-chk", "don-batch-bar");
+    bindBatchSelectAll("#don-select-all", ".don-chk", () => refBatchBar("don-batch-bar", ".don-chk"));
+    bindIdBadgeClicks();
+  };
+  renderPaged(donPager, "#don-rows", "#don-pager", 12);
 }
 
 async function loadPricing() {
