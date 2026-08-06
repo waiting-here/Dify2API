@@ -1,10 +1,13 @@
 package db
 
 import (
+	"bytes"
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -100,6 +103,107 @@ func TestMasterKey_InvalidFile(t *testing.T) {
 	os.WriteFile(keyPath, []byte("not-base64!!"), 0o600)
 	if _, err := Open(filepath.Join(dir, "a.db"), keyPath); err == nil {
 		t.Fatal("expected error for invalid key file")
+	}
+}
+
+func TestMasterKey_ConcurrentCreationPublishesOneCompleteKey(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "concurrent.key")
+	const starters = 24
+	keys := make([][]byte, starters)
+	errs := make([]error, starters)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range starters {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			keys[i], errs[i] = loadMasterKey(keyPath)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("starter %d: %v", i, err)
+		}
+		if len(keys[i]) != 32 {
+			t.Fatalf("starter %d key length = %d", i, len(keys[i]))
+		}
+		if !bytes.Equal(keys[0], keys[i]) {
+			t.Fatalf("starter %d observed a different key", i)
+		}
+	}
+	data, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(data)))
+	if err != nil || !bytes.Equal(decoded, keys[0]) {
+		t.Fatalf("published key is incomplete or differs: decoded=%d err=%v", len(decoded), err)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, ".concurrent.key.tmp-*"))
+	if err != nil || len(matches) != 0 {
+		t.Fatalf("temporary key files left behind: %v, err=%v", matches, err)
+	}
+}
+
+func TestMasterKey_ExistingFileIsNeverOverwritten(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "existing.key")
+	want := bytes.Repeat([]byte{0x5a}, 32)
+	wantFile := []byte(base64.StdEncoding.EncodeToString(want) + "\n")
+	if err := os.WriteFile(keyPath, wantFile, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		got, err := loadMasterKey(keyPath)
+		if err != nil {
+			t.Fatalf("load %d: %v", i, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("load %d changed key", i)
+		}
+	}
+	after, err := os.ReadFile(keyPath)
+	if err != nil || !bytes.Equal(after, wantFile) {
+		t.Fatalf("existing key file was overwritten: err=%v data=%q", err, after)
+	}
+}
+
+func TestMasterKey_RejectsWrongLengthAndPermissions(t *testing.T) {
+	dir := t.TempDir()
+	for name, data := range map[string][]byte{
+		"short.key": []byte(base64.StdEncoding.EncodeToString(make([]byte, 31)) + "\n"),
+		"long.key":  []byte(base64.StdEncoding.EncodeToString(make([]byte, 33)) + "\n"),
+	} {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadMasterKey(path); err == nil || !strings.Contains(err.Error(), "exactly 32 bytes") {
+			t.Errorf("%s error = %v, want explicit length failure", name, err)
+		} else if strings.Contains(err.Error(), strings.TrimSpace(string(data))) {
+			t.Errorf("%s error leaked key-file contents: %v", name, err)
+		}
+	}
+	directoryPath := filepath.Join(dir, "not-a-file.key")
+	if err := os.Mkdir(directoryPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadMasterKey(directoryPath); err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Errorf("directory key error = %v, want regular-file failure", err)
+	}
+	if runtime.GOOS != "windows" {
+		path := filepath.Join(dir, "open.key")
+		data := []byte(base64.StdEncoding.EncodeToString(make([]byte, 32)) + "\n")
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadMasterKey(path); err == nil || !strings.Contains(err.Error(), "permissions") {
+			t.Fatalf("insecure permissions error = %v", err)
+		}
 	}
 }
 

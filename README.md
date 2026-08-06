@@ -49,6 +49,8 @@ SITE_BASE_URL=https://dify2api.example.com
 ```
 
 完整配置、默认值与注释以 [`admin.env.example`](admin.env.example) 为唯一模板。
+首次启动会原子创建 `DIFY2API_MASTER_KEY_PATH`；Linux 上已有密钥若不是仅属主可读写
+（0600）、或内容不是严格的 32 字节 base64 key，启动会明确失败且绝不会覆盖原文件。
 以下项目最影响安全边界：
 
 | 配置 | 默认值 | 用途 |
@@ -62,6 +64,7 @@ SITE_BASE_URL=https://dify2api.example.com
 | `MAX_REQUEST_BODY_MB` | `10` | chat 请求体上限 |
 | `MAX_WEB_REQUEST_BODY_KB` | `256` | 状态变更 Web API 请求体上限 |
 | `SSE_BUFFER_MB` | `1` | 每条 SSE 的初始缓冲，按需增长（单行上限 10 MiB） |
+| `SHUTDOWN_TIMEOUT_SEC` | `30` | 退出时等待在途请求和后台任务的总时限，超时后强制关闭 |
 
 ### 2. 反向代理
 

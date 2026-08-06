@@ -4,6 +4,7 @@
 package mailer
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -23,7 +24,10 @@ type Mailer struct {
 	record       func(EventType, string) // optional alert-center sink
 	mu           sync.Mutex
 	coolers      map[EventType]*cooler
-	sendFunc     func(config.SMTPConfig, string, string) error // injectable for tests
+	sendFunc     func(context.Context, config.SMTPConfig, string, string) error // injectable for tests
+	sendCtx      context.Context
+	cancelSend   context.CancelFunc
+	stopped      bool
 }
 
 // Options wires the mailer to live settings. All fields are optional; nil
@@ -55,6 +59,7 @@ func New(cfg config.SMTPConfig, opts Options) *Mailer {
 	if coolMinutes == nil {
 		coolMinutes = func() int { return 10 }
 	}
+	sendCtx, cancelSend := context.WithCancel(context.Background())
 	m := &Mailer{
 		cfg:          cfg,
 		enabled:      true,
@@ -63,6 +68,8 @@ func New(cfg config.SMTPConfig, opts Options) *Mailer {
 		record:       opts.Record,
 		coolers:      make(map[EventType]*cooler),
 		sendFunc:     sendSMTP,
+		sendCtx:      sendCtx,
+		cancelSend:   cancelSend,
 	}
 	return m
 }
@@ -133,6 +140,11 @@ func (m *Mailer) AdminLoginLocked(ip string, lockUntil time.Time) {
 }
 
 func (m *Mailer) queue(et EventType, summary string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stopped {
+		return
+	}
 	// Alert-center record (its own show_in_center gate lives in the store).
 	if m.record != nil {
 		m.record(et, summary)
@@ -141,14 +153,51 @@ func (m *Mailer) queue(et EventType, summary string) {
 	if m.emailEnabled != nil && !m.emailEnabled(et) {
 		return
 	}
-	m.mu.Lock()
 	c, ok := m.coolers[et]
 	if !ok {
-		c = newCooler(et, m.coolMinutes, m.cfg, m.sendFunc)
+		sendCtx := m.sendCtx
+		if sendCtx == nil {
+			sendCtx = context.Background()
+		}
+		c = newCooler(et, m.coolMinutes, m.cfg, sendCtx, m.sendFunc)
 		m.coolers[et] = c
 	}
-	m.mu.Unlock()
 	c.add(summary)
+}
+
+// Shutdown prevents new events, flushes every pending aggregation window,
+// and waits for sends already in progress until ctx expires. It is idempotent.
+func (m *Mailer) Shutdown(ctx context.Context) error {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	m.stopped = true
+	coolers := make([]*cooler, 0, len(m.coolers))
+	for _, c := range m.coolers {
+		coolers = append(coolers, c)
+	}
+	m.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		for _, c := range coolers {
+			<-c.shutdown()
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+		if m.cancelSend != nil {
+			m.cancelSend()
+		}
+		return nil
+	case <-ctx.Done():
+		if m.cancelSend != nil {
+			m.cancelSend()
+		}
+		return ctx.Err()
+	}
 }
 
 // detectTLSMode returns a human-readable label for the auto-detected TLS

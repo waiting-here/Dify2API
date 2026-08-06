@@ -96,6 +96,7 @@ type userDebugSession struct {
 	idleTimer     *time.Timer
 	idleGen       uint64 // incremented on each idle timer reset, guards stale callbacks
 	maxLifeTimer  *time.Timer
+	graceTimer    *time.Timer
 }
 
 // userDebugHub manages all per-user debug sessions.
@@ -110,6 +111,21 @@ func newUserDebugHub() *userDebugHub {
 		sessions:   make(map[int64]*userDebugSession),
 		startTimes: make(map[int64][]time.Time),
 	}
+}
+
+// stopDebugTimersLocked stops every timer owned by a session. The caller must
+// hold the session lock; the hub lock must be acquired first when both are
+// needed, preserving the documented hub -> session lock order.
+func stopDebugTimersLocked(s *userDebugSession) {
+	for _, timer := range []*time.Timer{s.noAttachTimer, s.idleTimer, s.maxLifeTimer, s.graceTimer} {
+		if timer != nil {
+			timer.Stop()
+		}
+	}
+	s.noAttachTimer = nil
+	s.idleTimer = nil
+	s.maxLifeTimer = nil
+	s.graceTimer = nil
 }
 
 // ---- helpers: truncation & headers ----
@@ -196,19 +212,7 @@ func (h *userDebugHub) closeSessionOnTimeout(userID int64, expected *userDebugSe
 	}
 	cur.active = false
 	close(cur.ch)
-	// Stop any remaining timers.
-	if cur.noAttachTimer != nil {
-		cur.noAttachTimer.Stop()
-		cur.noAttachTimer = nil
-	}
-	if cur.idleTimer != nil {
-		cur.idleTimer.Stop()
-		cur.idleTimer = nil
-	}
-	if cur.maxLifeTimer != nil {
-		cur.maxLifeTimer.Stop()
-		cur.maxLifeTimer = nil
-	}
+	stopDebugTimersLocked(cur)
 	delete(h.sessions, userID)
 }
 
@@ -263,16 +267,7 @@ func (h *userDebugHub) start(userID int64, dryRun bool) (chan debugEvent, bool) 
 			old.active = false
 			close(old.ch)
 		}
-		// Stop old timers.
-		if old.noAttachTimer != nil {
-			old.noAttachTimer.Stop()
-		}
-		if old.idleTimer != nil {
-			old.idleTimer.Stop()
-		}
-		if old.maxLifeTimer != nil {
-			old.maxLifeTimer.Stop()
-		}
+		stopDebugTimersLocked(old)
 		old.mu.Unlock()
 	}
 
@@ -314,18 +309,7 @@ func (h *userDebugHub) stop(userID int64) {
 			s.active = false
 			close(s.ch)
 		}
-		if s.noAttachTimer != nil {
-			s.noAttachTimer.Stop()
-			s.noAttachTimer = nil
-		}
-		if s.idleTimer != nil {
-			s.idleTimer.Stop()
-			s.idleTimer = nil
-		}
-		if s.maxLifeTimer != nil {
-			s.maxLifeTimer.Stop()
-			s.maxLifeTimer = nil
-		}
+		stopDebugTimersLocked(s)
 		s.mu.Unlock()
 		delete(h.sessions, userID)
 	}
@@ -363,6 +347,10 @@ func (h *userDebugHub) attachStream(userID int64) (*userDebugSession, uint64, bo
 		return nil, 0, false
 	}
 	s.streamEpoch++
+	if s.graceTimer != nil {
+		s.graceTimer.Stop()
+		s.graceTimer = nil
+	}
 
 	// Cancel no-attach timer — SSE is now attached.
 	if s.noAttachTimer != nil {
@@ -494,7 +482,21 @@ func (h *userDebugHub) push(userID int64, evt debugEvent) bool {
 // closeAfter schedules cleanup of the same session after the disconnect grace.
 // Replacement sessions are protected by the expected pointer identity and epoch.
 func (h *userDebugHub) closeAfter(userID int64, expected *userDebugSession, streamEpoch uint64, grace time.Duration) {
-	time.AfterFunc(grace, func() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	s, ok := h.sessions[userID]
+	if !ok || s != expected {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.active || s.streamEpoch != streamEpoch {
+		return
+	}
+	if s.graceTimer != nil {
+		s.graceTimer.Stop()
+	}
+	s.graceTimer = time.AfterFunc(grace, func() {
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		s, ok := h.sessions[userID]
@@ -508,21 +510,31 @@ func (h *userDebugHub) closeAfter(userID int64, expected *userDebugSession, stre
 		}
 		s.active = false
 		close(s.ch)
-		// Stop timers.
-		if s.noAttachTimer != nil {
-			s.noAttachTimer.Stop()
-			s.noAttachTimer = nil
-		}
-		if s.idleTimer != nil {
-			s.idleTimer.Stop()
-			s.idleTimer = nil
-		}
-		if s.maxLifeTimer != nil {
-			s.maxLifeTimer.Stop()
-			s.maxLifeTimer = nil
-		}
+		stopDebugTimersLocked(s)
 		delete(h.sessions, userID)
 	})
+}
+
+// shutdown closes every active debug stream and cancels all session timers.
+// It is safe to call repeatedly after the HTTP server has stopped accepting
+// work and drained its handlers.
+func (h *userDebugHub) shutdown() {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for userID, s := range h.sessions {
+		s.mu.Lock()
+		if s.active {
+			s.active = false
+			close(s.ch)
+		}
+		stopDebugTimersLocked(s)
+		s.mu.Unlock()
+		delete(h.sessions, userID)
+	}
+	h.startTimes = make(map[int64][]time.Time)
 }
 
 // ---- response capture (tee for debug interception) ----

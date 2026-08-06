@@ -131,6 +131,24 @@ func NewGateway(cfg *config.Config, store *db.Store) *Gateway {
 	return gw
 }
 
+// Shutdown stops gateway-owned background activity after the HTTP server has
+// stopped accepting requests. Database ownership remains with main, which
+// closes the Store only after this method and the process cleanup worker have
+// returned or the shared shutdown deadline has expired.
+func (g *Gateway) Shutdown(ctx context.Context) error {
+	if g == nil {
+		return nil
+	}
+	g.loginThrottle.shutdown()
+	g.webThrottle.shutdown()
+	g.authFailThrottle.shutdown()
+	g.userDebug.shutdown()
+	if g.mailer != nil {
+		return g.mailer.Shutdown(ctx)
+	}
+	return nil
+}
+
 // RegisterRoutes sets up HTTP routes.
 func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/models", g.handleModels)

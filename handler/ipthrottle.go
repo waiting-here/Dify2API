@@ -22,6 +22,9 @@ type ipThrottle struct {
 	rpm        int                // per-period cap; 0 disables the throttle
 	penaltyDur time.Duration
 	windowSec  int // sliding window size in seconds
+	stop       chan struct{}
+	done       chan struct{}
+	stopOnce   sync.Once
 }
 
 func newIPThrottle(rpm, penaltySec, windowSec int) *ipThrottle {
@@ -31,17 +34,35 @@ func newIPThrottle(rpm, penaltySec, windowSec int) *ipThrottle {
 		rpm:        rpm,
 		penaltyDur: time.Duration(penaltySec) * time.Second,
 		windowSec:  windowSec,
+		stop:       make(chan struct{}),
+		done:       make(chan struct{}),
 	}
 	if rpm > 0 {
 		go func() {
+			defer close(t.done)
 			ticker := time.NewTicker(5 * time.Minute)
 			defer ticker.Stop()
-			for range ticker.C {
-				t.purge(time.Now())
+			for {
+				select {
+				case <-ticker.C:
+					t.purge(time.Now())
+				case <-t.stop:
+					return
+				}
 			}
 		}()
+	} else {
+		close(t.done)
 	}
 	return t
+}
+
+func (t *ipThrottle) shutdown() {
+	if t == nil {
+		return
+	}
+	t.stopOnce.Do(func() { close(t.stop) })
+	<-t.done
 }
 
 // allow records a hit for the IP and reports whether it is within limits.

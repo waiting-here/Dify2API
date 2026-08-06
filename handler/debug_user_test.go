@@ -639,6 +639,28 @@ func drainDebugChan(ch chan debugEvent) {
 	}
 }
 
+func TestUserDebugHubShutdownClosesSessionsAndTimers(t *testing.T) {
+	hub := newUserDebugHub()
+	ch, _ := hub.start(42, true)
+	s, epoch, ok := hub.attachStream(42)
+	if !ok {
+		t.Fatal("attachStream failed")
+	}
+	hub.closeAfter(42, s, epoch, time.Hour)
+	hub.shutdown()
+	if hub.isActive(42) {
+		t.Fatal("session remained active after shutdown")
+	}
+	if _, ok := <-ch; ok {
+		t.Fatal("session channel remained open after shutdown")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.noAttachTimer != nil || s.idleTimer != nil || s.maxLifeTimer != nil || s.graceTimer != nil {
+		t.Fatal("session timers remained armed after shutdown")
+	}
+}
+
 // ---- Debug Abuse Detection ----
 
 func TestDebugAbuse_TriggersAlert(t *testing.T) {

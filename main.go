@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -51,8 +52,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Database error: %v", err)
 	}
-	defer store.Close()
-
 	// Resolve durable charity reservations left by an interrupted process
 	// before accepting traffic: never-dispatched work is refunded; dispatched
 	// work is conservatively settled as consumed.
@@ -110,11 +109,82 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	// Background cleanup: enforce rolling 30-day retention for every request
-	// log and settled charity accounting record, remove expired sessions, and
-	// materialize overdue donations as expired. Retention cleanup runs once at
-	// startup and then every 24 hours; the expiry sweep below runs every minute.
+	cleanupCtx, cancelCleanup := context.WithCancel(context.Background())
+	cleanupDone := startCleanupWorker(cleanupCtx, store)
+
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- server.ListenAndServe() }()
+
+	var listenErr error
+	serveResultReceived := false
+	select {
+	case <-signalCtx.Done():
+		log.Printf("Received shutdown signal, draining for up to %d seconds...", cfg.ShutdownTimeoutSec)
+	case listenErr = <-serveErr:
+		serveResultReceived = true
+		if listenErr != nil && !errors.Is(listenErr, http.ErrServerClosed) {
+			log.Printf("Server stopped unexpectedly: %v", listenErr)
+		}
+	}
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Duration(cfg.ShutdownTimeoutSec)*time.Second)
+	shutdownErr := shutdownApplication(shutdownCtx, server, gw, cancelCleanup, cleanupDone)
+	shutdownCancel()
+	if !serveResultReceived {
+		listenErr = <-serveErr
+	}
+	if closeErr := store.Close(); closeErr != nil {
+		shutdownErr = errors.Join(shutdownErr, fmt.Errorf("close database: %w", closeErr))
+	}
+	if shutdownErr != nil {
+		log.Printf("Shutdown completed with warning: %v", shutdownErr)
+	}
+	if listenErr != nil && !errors.Is(listenErr, http.ErrServerClosed) {
+		log.Fatalf("Server error: %v", listenErr)
+	}
+	log.Println("Server stopped")
+}
+
+type shutdownServer interface {
+	Shutdown(context.Context) error
+	Close() error
+}
+
+type shutdownGateway interface {
+	Shutdown(context.Context) error
+}
+
+// shutdownApplication orders process teardown so no component uses the Store
+// after it is closed by main: stop periodic work, drain HTTP handlers, stop
+// gateway-owned timers/senders, and wait for cleanup up to the shared deadline.
+func shutdownApplication(ctx context.Context, server shutdownServer, gateway shutdownGateway, cancelCleanup context.CancelFunc, cleanupDone <-chan struct{}) error {
+	cancelCleanup()
+	var errs []error
+	if err := server.Shutdown(ctx); err != nil {
+		errs = append(errs, fmt.Errorf("drain HTTP server: %w", err))
+		if closeErr := server.Close(); closeErr != nil {
+			errs = append(errs, fmt.Errorf("force close HTTP server: %w", closeErr))
+		}
+	}
+	if err := gateway.Shutdown(ctx); err != nil {
+		errs = append(errs, fmt.Errorf("stop gateway background work: %w", err))
+	}
+	select {
+	case <-cleanupDone:
+	case <-ctx.Done():
+		errs = append(errs, fmt.Errorf("wait for cleanup worker: %w", ctx.Err()))
+	}
+	return errors.Join(errs...)
+}
+
+// startCleanupWorker enforces retention and expiry until ctx is cancelled.
+// Closing the returned channel means all Store access by this worker ended.
+func startCleanupWorker(ctx context.Context, store *db.Store) <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		runCleanup := func() {
 			now := time.Now().Unix()
 			donationsExpired, donationErr := store.ExpireOverdueDonations(now)
@@ -136,13 +206,20 @@ func main() {
 			log.Printf("[CLEANUP] expired %d donations; purged %d request logs, %d bound alerts, %d sessions, %d charity reservations",
 				donationsExpired, logsDeleted, alertsDeleted, sessionsDeleted, reservationsDeleted)
 		}
-		runCleanup()
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			runCleanup()
+		}
 		cleanupTicker := time.NewTicker(24 * time.Hour)
 		expiryTicker := time.NewTicker(time.Minute)
 		defer cleanupTicker.Stop()
 		defer expiryTicker.Stop()
 		for {
 			select {
+			case <-ctx.Done():
+				return
 			case <-cleanupTicker.C:
 				runCleanup()
 			case <-expiryTicker.C:
@@ -155,19 +232,5 @@ func main() {
 			}
 		}
 	}()
-
-	// Graceful shutdown on SIGINT/SIGTERM
-	go func() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		sig := <-sigCh
-		log.Printf("Received signal %v, shutting down...", sig)
-		server.Close()
-	}()
-
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("Server error: %v", err)
-	}
-
-	log.Println("Server stopped")
+	return done
 }

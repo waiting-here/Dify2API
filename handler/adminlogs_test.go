@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -504,5 +505,87 @@ func TestAdminLogs_ExportNotTruncated(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(recCSV.Body.String()), "\n")
 	if len(lines) != n+1 { // header + data rows
 		t.Fatalf("csv lines = %d, want %d", len(lines), n+1)
+	}
+}
+
+func TestSafeCSVCell_AllExportFields(t *testing.T) {
+	fields := []string{
+		"ID", "User", "Username", "Model", "Service", "StartedAt", "EndedAt",
+		"Status", "ErrorCode", "HTTPStatus", "ErrorDetail", "DonationID",
+		"CreditsConsumed", "AntiAbuseInfo", "DonationSource",
+	}
+	for _, field := range fields {
+		for _, prefix := range []string{"=", "+", "-", "@"} {
+			t.Run(field+"/"+prefix, func(t *testing.T) {
+				input := prefix + "dangerous()"
+				if got := safeCSVCell(input); got != "'"+input {
+					t.Fatalf("safeCSVCell(%q) = %q, want apostrophe-prefixed text", input, got)
+				}
+			})
+		}
+	}
+	for _, safe := range []string{"", "plain", "  =leading-space", "123"} {
+		if got := safeCSVCell(safe); got != safe {
+			t.Errorf("safeCSVCell(%q) = %q, want unchanged", safe, got)
+		}
+	}
+}
+
+func TestAdminLogs_CSVFormulaInjectionAndSecretFields(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+	u, err := store.CreateUser("=discord", "+username", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddRequestLogFull(u.ID, "=model", "+service", time.Unix(100, 0), time.Unix(101, 0),
+		"-status", "@error", -418, "=detail,with,commas", 0, -7, "+anti-abuse"); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := adminGet(gw, adminCookie, "/api/admin/logs/export?format=csv")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	rows, err := csv.NewReader(strings.NewReader(rec.Body.String())).ReadAll()
+	if err != nil {
+		t.Fatalf("parse CSV: %v", err)
+	}
+	if len(rows) != 2 || len(rows[1]) != 15 {
+		t.Fatalf("CSV shape = %d rows / %d columns; body=%q", len(rows), len(rows[1]), rec.Body.String())
+	}
+	for _, index := range []int{2, 3, 4, 7, 8, 9, 10, 12, 13} {
+		if !strings.HasPrefix(rows[1][index], "'") {
+			t.Errorf("column %s = %q, want formula-safe apostrophe", rows[0][index], rows[1][index])
+		}
+	}
+	for _, header := range rows[0] {
+		if strings.Contains(strings.ToLower(header), "key") {
+			t.Errorf("CSV schema unexpectedly exposes key material: header=%q", header)
+		}
+	}
+
+	// Formula protection is CSV-only; the existing JSON export contract must
+	// remain byte-for-value compatible for the same log fields.
+	jsonRec := adminGet(gw, adminCookie, "/api/admin/logs/export?format=json")
+	var jsonRows []struct {
+		Username        string `json:"username"`
+		Model           string `json:"model"`
+		Service         string `json:"service"`
+		Status          string `json:"status"`
+		ErrorCode       string `json:"error_code"`
+		HTTPStatus      int    `json:"http_status"`
+		ErrorDetail     string `json:"error_detail"`
+		CreditsConsumed int    `json:"credits_consumed"`
+		AntiAbuseInfo   string `json:"anti_abuse_info"`
+	}
+	if err := json.Unmarshal(jsonRec.Body.Bytes(), &jsonRows); err != nil || len(jsonRows) != 1 {
+		t.Fatalf("JSON export decode: rows=%d err=%v body=%s", len(jsonRows), err, jsonRec.Body.String())
+	}
+	got := jsonRows[0]
+	if got.Username != "+username" || got.Model != "=model" || got.Service != "+service" ||
+		got.Status != "-status" || got.ErrorCode != "@error" || got.HTTPStatus != -418 ||
+		got.ErrorDetail != "=detail,with,commas" || got.CreditsConsumed != -7 || got.AntiAbuseInfo != "+anti-abuse" {
+		t.Fatalf("JSON semantics changed: %+v", got)
 	}
 }

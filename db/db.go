@@ -16,6 +16,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	sqlite "modernc.org/sqlite"
@@ -289,25 +290,122 @@ func (s *Store) Exec(query string, args ...interface{}) (sql.Result, error) {
 
 // loadMasterKey reads the base64-encoded 32-byte master key from path,
 // generating a fresh random one (mode 0600) when the file does not exist.
+// Creation uses a fully-written same-directory temporary file followed by an
+// atomic, no-replace hard link. Concurrent starters therefore either publish
+// the complete new key or load the complete winner; a partial target file is
+// never observable and an existing key is never overwritten.
 func loadMasterKey(path string) ([]byte, error) {
-	data, err := os.ReadFile(path)
+	key, err := readMasterKey(path)
 	if err == nil {
-		key, decErr := base64.StdEncoding.DecodeString(string(bytes.TrimSpace(data)))
-		if decErr != nil || len(key) != 32 {
-			return nil, fmt.Errorf("invalid master key file %s (want base64 of 32 bytes)", path)
-		}
 		return key, nil
 	}
-	if !os.IsNotExist(err) {
-		return nil, fmt.Errorf("read master key: %w", err)
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
 	}
 
-	key := make([]byte, 32)
+	key = make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, key); err != nil {
 		return nil, fmt.Errorf("generate master key: %w", err)
 	}
-	if err := os.WriteFile(path, []byte(base64.StdEncoding.EncodeToString(key)+"\n"), 0o600); err != nil {
-		return nil, fmt.Errorf("write master key: %w", err)
+	dir := filepath.Dir(path)
+	if dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("create master key directory: %w", err)
+		}
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return nil, fmt.Errorf("create temporary master key: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	complete := false
+	defer func() {
+		if !complete {
+			_ = tmp.Close()
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		return nil, fmt.Errorf("set temporary master key permissions: %w", err)
+	}
+	encoded := []byte(base64.StdEncoding.EncodeToString(key) + "\n")
+	if _, err := tmp.Write(encoded); err != nil {
+		return nil, fmt.Errorf("write temporary master key: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return nil, fmt.Errorf("sync temporary master key: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return nil, fmt.Errorf("close temporary master key: %w", err)
+	}
+	complete = true
+
+	if err := os.Link(tmpPath, path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return readMasterKey(path)
+		}
+		return nil, fmt.Errorf("publish master key atomically: %w", err)
+	}
+	if runtime.GOOS != "windows" {
+		dirHandle, err := os.Open(dir)
+		if err != nil {
+			return nil, fmt.Errorf("open master key directory for sync: %w", err)
+		}
+		syncErr := dirHandle.Sync()
+		closeErr := dirHandle.Close()
+		if syncErr != nil {
+			return nil, fmt.Errorf("sync master key directory: %w", syncErr)
+		}
+		if closeErr != nil {
+			return nil, fmt.Errorf("close master key directory: %w", closeErr)
+		}
+	}
+	return key, nil
+}
+
+func readMasterKey(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, os.ErrNotExist
+		}
+		return nil, fmt.Errorf("inspect master key: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("invalid master key file %s (must be a regular file)", path)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open master key: %w", err)
+	}
+	defer file.Close()
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("inspect opened master key: %w", err)
+	}
+	if !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) {
+		return nil, fmt.Errorf("master key file %s changed during validation", path)
+	}
+	// Windows reports POSIX mode bits derived from ACLs and cannot reliably
+	// express the deployment guarantee. Unix deployments must not expose the
+	// encryption root to group or other users.
+	if runtime.GOOS != "windows" && openedInfo.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("insecure master key permissions %s: got %04o, want 0600", path, openedInfo.Mode().Perm())
+	}
+	data, err := io.ReadAll(io.LimitReader(file, 129))
+	if err != nil {
+		return nil, fmt.Errorf("read master key: %w", err)
+	}
+	if len(data) > 128 {
+		return nil, fmt.Errorf("invalid master key file %s (content too long)", path)
+	}
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) != base64.StdEncoding.EncodedLen(32) {
+		return nil, fmt.Errorf("invalid master key file %s (want base64 of exactly 32 bytes)", path)
+	}
+	key, err := base64.StdEncoding.DecodeString(string(trimmed))
+	if err != nil || len(key) != 32 {
+		return nil, fmt.Errorf("invalid master key file %s (want base64 of exactly 32 bytes)", path)
 	}
 	return key, nil
 }

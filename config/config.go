@@ -108,6 +108,9 @@ type Config struct {
 	// LogDetailMaxChars is the maximum length of error_detail stored in
 	// request_logs (default 500).
 	LogDetailMaxChars int
+	// ShutdownTimeoutSec bounds HTTP draining and background shutdown before
+	// the database is closed (default 30 seconds).
+	ShutdownTimeoutSec int
 }
 
 // SMTPConfig holds the email-delivery settings for operational alerts.
@@ -210,6 +213,7 @@ func LoadStartup(path string) (*Config, error) {
 		RPMWindowSec:        getIntOr(envMap, "RPM_WINDOW_SEC", 60),
 		IPThrottleWindowSec: getIntOr(envMap, "IP_THROTTLE_WINDOW_SEC", 60),
 		LogDetailMaxChars:   getIntOr(envMap, "LOG_DETAIL_MAX_CHARS", 500),
+		ShutdownTimeoutSec:  getIntOr(envMap, "SHUTDOWN_TIMEOUT_SEC", 30),
 	}
 
 	a := &cfg.Admin

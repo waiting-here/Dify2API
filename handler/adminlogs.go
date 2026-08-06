@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -190,26 +192,28 @@ func (g *Gateway) handleAdminExportLogs(w http.ResponseWriter, r *http.Request) 
 	if format == "csv" {
 		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="dify2api-logs-%s.csv"`, ts))
-		w.Write([]byte("ID,User,Username,Model,Service,StartedAt,EndedAt,Status,ErrorCode,HTTPStatus,ErrorDetail,DonationID,CreditsConsumed,AntiAbuseInfo,DonationSource\n"))
+		csvWriter := csv.NewWriter(w)
+		_ = csvWriter.Write([]string{"ID", "User", "Username", "Model", "Service", "StartedAt", "EndedAt", "Status", "ErrorCode", "HTTPStatus", "ErrorDetail", "DonationID", "CreditsConsumed", "AntiAbuseInfo", "DonationSource"})
 		for _, l := range logs {
 			var donID, donSrc string
 			if l.DonationID != nil {
 				donID = strconv.FormatInt(*l.DonationID, 10)
 				donSrc = donCache[*l.DonationID]
 			}
-			// CSV escaping: wrap fields containing comma/quote/newline in double quotes.
-			escCSV := func(s string) string {
-				if strings.ContainsAny(s, ",\"\n\r") {
-					return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
-				}
-				return s
+			row := []string{
+				strconv.FormatInt(l.ID, 10), strconv.FormatInt(l.UserID, 10), l.Username,
+				l.Model, l.Service, strconv.FormatInt(l.StartedAt, 10), strconv.FormatInt(l.EndedAt, 10),
+				l.Status, l.ErrorCode, strconv.Itoa(l.HTTPStatus), l.ErrorDetail, donID,
+				strconv.Itoa(l.CreditsConsumed), l.AntiAbuseInfo, donSrc,
 			}
-			fmt.Fprintf(w, "%d,%s,%s,%s,%s,%d,%d,%s,%s,%d,%s,%s,%d,%s,%s\n",
-				l.ID, escCSV(strconv.FormatInt(l.UserID, 10)), escCSV(l.Username),
-				escCSV(l.Model), escCSV(l.Service),
-				l.StartedAt, l.EndedAt, escCSV(l.Status), escCSV(l.ErrorCode),
-				l.HTTPStatus, escCSV(l.ErrorDetail), donID, l.CreditsConsumed,
-				escCSV(l.AntiAbuseInfo), escCSV(donSrc))
+			for i := range row {
+				row[i] = safeCSVCell(row[i])
+			}
+			_ = csvWriter.Write(row)
+		}
+		csvWriter.Flush()
+		if err := csvWriter.Error(); err != nil {
+			log.Printf("[ERROR] write admin log CSV export: %v", err)
 		}
 		return
 	}
@@ -251,6 +255,22 @@ func (g *Gateway) handleAdminExportLogs(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="dify2api-logs-%s.json"`, ts))
 	json.NewEncoder(w).Encode(out)
+}
+
+// safeCSVCell prevents spreadsheet programs from interpreting exported data
+// as a formula. The leading apostrophe is the broadly compatible text marker
+// used by Excel, LibreOffice, and similar applications; encoding/csv still
+// handles commas, quotes, and newlines independently.
+func safeCSVCell(value string) string {
+	if value == "" {
+		return value
+	}
+	switch value[0] {
+	case '=', '+', '-', '@':
+		return "'" + value
+	default:
+		return value
+	}
 }
 
 // handleAdminLogStats serves GET /api/admin/logs/stats with daily and

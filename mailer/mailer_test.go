@@ -1,6 +1,8 @@
 package mailer
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -32,7 +34,7 @@ type mockSender struct {
 	mails []sentMail
 }
 
-func (m *mockSender) send(cfg config.SMTPConfig, subject, body string) error {
+func (m *mockSender) send(_ context.Context, cfg config.SMTPConfig, subject, body string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.mails = append(m.mails, sentMail{subject: subject, body: body})
@@ -66,6 +68,60 @@ func TestStart_NoOp(t *testing.T) {
 		t.Fatal("expected non-nil mailer")
 	}
 	m.Start() // should not panic
+}
+
+func TestShutdownFlushesPendingAndRejectsNewEvents(t *testing.T) {
+	ms := &mockSender{}
+	m := New(testSMTPConfig(), Options{CoolMinutes: func() int { return 60 }})
+	if m == nil {
+		t.Fatal("expected mailer")
+	}
+	m.sendFunc = ms.send
+	m.UserAutoBanned("pending", 1, time.Now(), 1, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := m.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	ms.mu.Lock()
+	if len(ms.mails) != 1 {
+		t.Fatalf("flushed mail count = %d, want 1", len(ms.mails))
+	}
+	ms.mu.Unlock()
+	m.UserAutoBanned("late", 2, time.Now(), 1, 1)
+	time.Sleep(10 * time.Millisecond)
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	if len(ms.mails) != 1 {
+		t.Fatalf("post-shutdown event was accepted: mails=%d", len(ms.mails))
+	}
+}
+
+func TestShutdownHonorsDeadlineWhileSendIsInFlight(t *testing.T) {
+	release := make(chan struct{})
+	m := New(testSMTPConfig(), Options{CoolMinutes: func() int { return 60 }})
+	m.sendFunc = func(ctx context.Context, _ config.SMTPConfig, _, _ string) error {
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	m.UserAutoBanned("blocked", 1, time.Now(), 1, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	err := m.Shutdown(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		close(release)
+		t.Fatalf("Shutdown error = %v, want deadline exceeded", err)
+	}
+	close(release)
+	ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second)
+	defer cancel2()
+	if err := m.Shutdown(ctx2); err != nil {
+		t.Fatalf("second Shutdown did not observe completed send: %v", err)
+	}
 }
 
 func TestCooling_SingleEventFlushesAfterWindow(t *testing.T) {

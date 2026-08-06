@@ -37,7 +37,7 @@ func TestLoadStartup_Defaults(t *testing.T) {
 		t.Errorf("base defaults wrong: %+v", cfg)
 	}
 	if cfg.MaxChatInFlight != 32 || cfg.MaxRequestBodyMB != 10 || cfg.MaxWebRequestBodyKB != 256 || cfg.SSEBufferMB != 1 ||
-		cfg.DifyMaxResponseMB != 32 || cfg.DifyProbeInFlight != 8 {
+		cfg.DifyMaxResponseMB != 32 || cfg.DifyProbeInFlight != 8 || cfg.ShutdownTimeoutSec != 30 {
 		t.Errorf("perf defaults wrong: %+v", cfg)
 	}
 	if len(cfg.TrustedProxyCIDRs) != 2 || cfg.TrustedProxyCIDRs[0].String() != "127.0.0.0/8" || cfg.TrustedProxyCIDRs[1].String() != "::1/128" {
@@ -73,6 +73,7 @@ SSE_BUFFER_MB=2
 LOGIN_LOCK_MIN=120
 ADMIN_HOST=manage.example.com
 SOURCE_URL=https://git.example.com/me/fork
+SHUTDOWN_TIMEOUT_SEC=45
 `)
 	cfg, err := LoadStartup(p)
 	if err != nil {
@@ -90,6 +91,9 @@ SOURCE_URL=https://git.example.com/me/fork
 	}
 	if cfg.LoginLockMin != 120 {
 		t.Errorf("LOGIN_LOCK_MIN = %d, want 120", cfg.LoginLockMin)
+	}
+	if cfg.ShutdownTimeoutSec != 45 {
+		t.Errorf("SHUTDOWN_TIMEOUT_SEC = %d, want 45", cfg.ShutdownTimeoutSec)
 	}
 	if cfg.Admin.AdminHost != "manage.example.com" {
 		t.Errorf("AdminHost override = %q", cfg.Admin.AdminHost)

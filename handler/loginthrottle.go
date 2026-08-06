@@ -21,6 +21,9 @@ type loginThrottle struct {
 	window      time.Duration
 	lockDur     time.Duration
 	minLatency  time.Duration
+	stop        chan struct{}
+	done        chan struct{}
+	stopOnce    sync.Once
 }
 
 type failWindow struct {
@@ -35,19 +38,35 @@ func newLoginThrottle(cfg *config.Config) *loginThrottle {
 		window:      time.Duration(cfg.LoginWindowMin) * time.Minute,
 		lockDur:     time.Duration(cfg.LoginLockMin) * time.Minute,
 		minLatency:  time.Duration(cfg.LoginMinLatencyMs) * time.Millisecond,
+		stop:        make(chan struct{}),
+		done:        make(chan struct{}),
 	}
 	// Background goroutine removes entries that are no longer locked and
 	// have no recent failures within the sliding window.
 	go func() {
+		defer close(t.done)
 		// Use the window as the clean-up interval: once per window any
 		// stale timestamps are naturally expired.
 		ticker := time.NewTicker(t.window)
 		defer ticker.Stop()
-		for range ticker.C {
-			t.purge()
+		for {
+			select {
+			case <-ticker.C:
+				t.purge()
+			case <-t.stop:
+				return
+			}
 		}
 	}()
 	return t
+}
+
+func (t *loginThrottle) shutdown() {
+	if t == nil {
+		return
+	}
+	t.stopOnce.Do(func() { close(t.stop) })
+	<-t.done
 }
 
 // locked reports whether the key is currently locked.
