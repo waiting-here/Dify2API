@@ -124,6 +124,31 @@ func (g *Gateway) validateDonationApp(ctx context.Context, userID int64, service
 	return out
 }
 
+// validatePublicDonationApp applies the user-facing error boundary while the
+// admin validation path above intentionally retains raw diagnostics.
+func (g *Gateway) validatePublicDonationApp(ctx context.Context, userID int64, service, baseURL, apiKey, lang string) map[string]interface{} {
+	out := g.validateDonationApp(ctx, userID, service, baseURL, apiKey)
+	public := make(map[string]interface{}, len(out))
+	for key, value := range out {
+		public[key] = value
+	}
+	if compatible, ok := public["compatible"].(bool); ok && !compatible {
+		if raw, ok := public["message"].(string); ok && raw != "" {
+			public["message"] = sanitizePublicDonationValidationMessage(raw, lang)
+		}
+	}
+	return public
+}
+
+func sanitizePublicDonationValidationMessage(raw, lang string) string {
+	// This is a local contract diagnosis, not an upstream detail. Keep it
+	// useful; only probe/transport messages cross the sanitizer.
+	if raw == "App 参数与契约不兼容" || raw == "App parameter contract mismatch" {
+		return raw
+	}
+	return sanitizePublicUpstreamError(nil, raw, lang)
+}
+
 // --- Donation CRUD ---
 
 // POST /api/admin/donations
@@ -823,7 +848,7 @@ func (g *Gateway) handlePutCharity(w http.ResponseWriter, r *http.Request) {
 // --- Charity streaming/blocking handlers ---
 
 // charityStreaming handles streaming charity calls with donation accounting.
-func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time, donation *db.Donation, reservation *db.CharityReservation, ctx context.Context) {
+func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, lang, service string, startedAt time.Time, donation *db.Donation, reservation *db.CharityReservation, ctx context.Context) {
 	wfReq.ResponseMode = "streaming"
 	events, errCh := client.StreamWorkflowContext(ctx, wfReq)
 
@@ -845,7 +870,7 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 			g.charityFailAccounting(userID, donation, reservation, err)
 			g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_error",
 				difyErrorStatus(err), err.Error(), donation.ID, 0, "")
-			g.writeDifyError(w, err)
+			g.writeDifyError(w, err, lang)
 			return
 		}
 	case <-ctx.Done():
@@ -871,7 +896,7 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 				g.charityFailAccounting(userID, donation, reservation, err)
 				g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_error",
 					difyErrorStatus(err), err.Error(), donation.ID, 0, "")
-				g.writeDifyError(w, err)
+				g.writeDifyError(w, err, lang)
 				return
 			}
 		default:
@@ -910,7 +935,9 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 		return
 	}
 
-	conv := translator.NewStreamConverter(modelName)
+	conv := translator.NewStreamConverter(modelName, func(raw string) string {
+		return sanitizePublicUpstreamError(nil, raw, lang)
+	})
 
 	difyUser := fmt.Sprintf("u%d", userID)
 	var taskID string
@@ -985,7 +1012,7 @@ loop:
 		// user's transfer, but it is not a donation-endpoint failure: do not
 		// refund, increment failure_count, or auto-inactivate the donation.
 		log.Printf("[ERROR] dify charity stream (user %d): %v", userID, streamErr)
-		fmt.Fprint(w, translator.FormatSSEErrorFrame("[Dify] "+streamErr.Error()))
+		fmt.Fprint(w, translator.FormatSSEErrorFrame("[Dify] "+sanitizePublicUpstreamError(streamErr, streamErr.Error(), lang)))
 		flusher.Flush()
 		status, code = "error", "upstream_error"
 		detail = streamErr.Error()
@@ -1028,7 +1055,7 @@ func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wf
 			// Log first so the alert can link to this request log.
 			logID := g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_error", http.StatusOK, de.Error(), donationID, reservation.Price, "")
 			g.maybeRecordBlockingFailedAlert(userID, modelName, service, de, &donationID, logID)
-			g.writeDifyError(w, err)
+			g.writeDifyError(w, err, lang)
 			return
 		}
 		// Transport-level truncation (Cloudflare 100s timeout, connection
@@ -1048,7 +1075,7 @@ func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wf
 		g.charityFailAccounting(userID, donation, reservation, err)
 		g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_error",
 			difyErrorStatus(err), err.Error(), donationID, 0, "")
-		g.writeDifyError(w, err)
+		g.writeDifyError(w, err, lang)
 		return
 	}
 
@@ -1240,7 +1267,7 @@ func (g *Gateway) handleCreateDonationApp(w http.ResponseWriter, r *http.Request
 	normalizedBaseURL, baseErr := g.difyPolicy.ValidateBaseURL(req.DifyBaseURL)
 	if baseErr != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			t(g.resolveLang(r), "dify_base_url 不符合出站安全策略", "dify_base_url is not allowed by the egress policy")+": "+baseErr.Error())
+			t(g.resolveLang(r), "dify_base_url 不符合出站安全策略", "dify_base_url is not allowed by the egress policy"))
 		return
 	}
 	req.DifyBaseURL = normalizedBaseURL
@@ -1275,7 +1302,7 @@ func (g *Gateway) handleCreateDonationApp(w http.ResponseWriter, r *http.Request
 	resp := map[string]interface{}{
 		"ok":          true,
 		"application": applicationJSON(app),
-		"validation":  g.validateDonationApp(r.Context(), u.ID, req.Service, req.DifyBaseURL, req.DifyAPIKey),
+		"validation":  g.validatePublicDonationApp(r.Context(), u.ID, req.Service, req.DifyBaseURL, req.DifyAPIKey, g.resolveLang(r)),
 	}
 	if n := g.selfSiteNotice(r, req.DifyBaseURL); n != "" {
 		resp["notice"] = n

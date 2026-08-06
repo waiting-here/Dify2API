@@ -9,7 +9,26 @@ import (
 	"time"
 
 	"dify2api/auth"
+	"dify2api/db"
 )
+
+// sanitizePublicExportBundle returns a shallow bundle copy with an independent
+// request-log slice whose error details are safe for the self-service export.
+// Credential fields intentionally remain present for data portability. Admin
+// exports keep using the original Store bundle and retain raw diagnostics.
+func sanitizePublicExportBundle(bundle *db.ExportBundle, lang string) *db.ExportBundle {
+	if bundle == nil {
+		return nil
+	}
+	public := *bundle
+	public.Logs = append([]db.ExportLog(nil), bundle.Logs...)
+	for i := range public.Logs {
+		if public.Logs[i].ErrorDetail != "" {
+			public.Logs[i].ErrorDetail = sanitizePublicUpstreamError(nil, public.Logs[i].ErrorDetail, lang)
+		}
+	}
+	return &public
+}
 
 // --- GET /api/me/export ---
 // Self-service data export (GDPR right of access / data portability).
@@ -43,7 +62,7 @@ func (g *Gateway) handleMeExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := json.MarshalIndent(bundle, "", "  ")
+	body, err := json.MarshalIndent(sanitizePublicExportBundle(bundle, g.resolveLang(r)), "", "  ")
 	if err != nil {
 		g.writeError(w, http.StatusInternalServerError, "internal", "marshal failed")
 		return

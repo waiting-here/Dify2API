@@ -257,7 +257,7 @@ func TestCheckAppBinding_Incompatible(t *testing.T) {
 	}))
 	defer srv2.Close()
 	allowDifyTestOrigin(t, gw, srv.URL, srv2.URL)
-	check := gw.checkAppBinding(context.Background(), 0, "[general]x", srv2.URL, "k")
+	check := gw.checkAppBinding(context.Background(), 0, "[general]x", srv2.URL, "k", "zh")
 	if check["compatible"] != false {
 		t.Errorf("missing user_0 should be incompatible: %v", check)
 	}

@@ -556,7 +556,8 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if err := g.validateRemoteContent(service, inputs, images); err != nil {
 		g.logRequest(user.ID, req.Model, service, startedAt, "error", "remote_url_not_allowed",
 			http.StatusBadRequest, err.Error(), "")
-		g.writeError(writer, http.StatusBadRequest, "remote_url_not_allowed", err.Error())
+		g.writeError(writer, http.StatusBadRequest, "remote_url_not_allowed",
+			t(userLang(user), "远程内容地址不符合安全策略", "The remote content address is not allowed by the security policy"))
 		return
 	}
 
@@ -573,7 +574,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			log.Printf("[ERROR] image files (user %d): %v", user.ID, err)
 			g.logRequest(user.ID, req.Model, service, startedAt, "error", "image_upload_failed",
 				difyErrorStatus(err), err.Error(), "")
-			g.writeDifyError(writer, err)
+			g.writeDifyError(writer, err, userLang(user))
 			return
 		}
 		wfInputs["input_image_list"] = files
@@ -593,7 +594,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	// 7. Forward (streaming or blocking).
 	if req.Stream {
-		g.handleStreaming(writer, client, wfReq, modelName, user.ID, service, startedAt, r.Context())
+		g.handleStreaming(writer, client, wfReq, modelName, user.ID, userLang(user), service, startedAt, r.Context())
 	} else {
 		g.handleBlocking(writer, client, wfReq, modelName, user.ID, userLang(user), service, startedAt, r.Context())
 	}
@@ -678,7 +679,8 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 	if err := g.validateRemoteContent(service, inputs, images); err != nil {
 		g.logRequest(user.ID, logModel, service, startedAt, "error", "remote_url_not_allowed",
 			http.StatusBadRequest, err.Error(), "")
-		g.writeError(charityWriter, http.StatusBadRequest, "remote_url_not_allowed", err.Error())
+		g.writeError(charityWriter, http.StatusBadRequest, "remote_url_not_allowed",
+			t(userLang(user), "远程内容地址不符合安全策略", "The remote content address is not allowed by the security policy"))
 		return
 	}
 
@@ -815,7 +817,7 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 			g.charityFailAccounting(user.ID, picked, reservation, err)
 			g.logRequestDonation(user.ID, logModel, service, startedAt, "error", "image_upload_failed",
 				difyErrorStatus(err), err.Error(), picked.ID, 0, "")
-			g.writeDifyError(charityWriter, err)
+			g.writeDifyError(charityWriter, err, userLang(user))
 			return
 		}
 		wfInputs["input_image_list"] = files
@@ -829,13 +831,13 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 
 	// 7. Forward (streaming or blocking)
 	if req.Stream {
-		g.charityStreaming(charityWriter, client, wfReq, logModel, user.ID, service, startedAt, picked, reservation, r.Context())
+		g.charityStreaming(charityWriter, client, wfReq, logModel, user.ID, userLang(user), service, startedAt, picked, reservation, r.Context())
 	} else {
 		g.charityBlocking(charityWriter, client, wfReq, logModel, user.ID, userLang(user), service, startedAt, picked, reservation, r.Context())
 	}
 }
 
-func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, service string, startedAt time.Time, ctx context.Context) {
+func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wfReq *dify.WorkflowRequest, modelName string, userID int64, lang, service string, startedAt time.Time, ctx context.Context) {
 	wfReq.ResponseMode = "streaming"
 	events, errCh := client.StreamWorkflowContext(ctx, wfReq)
 
@@ -859,7 +861,7 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 		}
 		if err != nil {
 			g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error(), "")
-			g.writeDifyError(w, err)
+			g.writeDifyError(w, err, lang)
 			return
 		}
 	case <-ctx.Done():
@@ -881,7 +883,7 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 			}
 			if err != nil {
 				g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error(), "")
-				g.writeDifyError(w, err)
+				g.writeDifyError(w, err, lang)
 				return
 			}
 		default:
@@ -909,7 +911,9 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 		return
 	}
 
-	conv := translator.NewStreamConverter(modelName)
+	conv := translator.NewStreamConverter(modelName, func(raw string) string {
+		return sanitizePublicUpstreamError(nil, raw, lang)
+	})
 
 	difyUser := fmt.Sprintf("u%d", userID)
 	var taskID string
@@ -981,7 +985,7 @@ loop:
 		// Transport-level failure with no error event: emit the error
 		// frame ourselves, and likewise skip [DONE].
 		log.Printf("[ERROR] dify stream (user %d): %v", userID, streamErr)
-		fmt.Fprint(w, translator.FormatSSEErrorFrame("[Dify] "+streamErr.Error()))
+		fmt.Fprint(w, translator.FormatSSEErrorFrame("[Dify] "+sanitizePublicUpstreamError(streamErr, streamErr.Error(), lang)))
 		flusher.Flush()
 		status, code = "error", "upstream_error"
 		detail = streamErr.Error()
@@ -1039,7 +1043,7 @@ func (g *Gateway) handleBlocking(w http.ResponseWriter, client *dify.Client, wfR
 			// "view linked request" action can jump to this request.
 			g.maybeRecordBlockingFailedAlert(userID, modelName, service, de, nil, logID)
 		}
-		g.writeDifyError(w, err)
+		g.writeDifyError(w, err, lang)
 		return
 	}
 	g.limiter.record(rpmClassB, userID, time.Now())
@@ -1165,7 +1169,7 @@ func (g *Gateway) handleListLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"logs": logs})
+	json.NewEncoder(w).Encode(map[string]interface{}{"logs": sanitizePublicRequestLogs(logs, g.resolveLang(r))})
 }
 
 // writeError emits an OpenAI-style error body with a [Dify2API] prefix
@@ -1250,14 +1254,14 @@ func difyErrorStatus(err error) int {
 // Status mapping: upstream 4xx are passed through unchanged (they indicate
 // a caller-side problem, e.g. invalid_param → 400, so client retry logic
 // is not misled); everything else (5xx, network errors) maps to 502.
-func (g *Gateway) writeDifyError(w http.ResponseWriter, err error) {
+func (g *Gateway) writeDifyError(w http.ResponseWriter, err error, lang string) {
 	var de *dify.DifyError
 	code := "upstream_error"
-	message := err.Error()
+	message := sanitizePublicUpstreamError(err, err.Error(), lang)
 	status := http.StatusBadGateway
 	if errors.As(err, &de) {
 		if de.Code != "" {
-			code = de.Code
+			code = publicDifyErrorCode(de.Code)
 		}
 		if de.Status >= 400 && de.Status < 500 {
 			status = de.Status

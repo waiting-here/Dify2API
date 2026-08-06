@@ -7,8 +7,10 @@ import (
 	"dify2api/dify"
 )
 
+func passthroughTestError(s string) string { return s }
+
 func TestStreamConverter_TextAndFinish(t *testing.T) {
-	c := NewStreamConverter("m")
+	c := NewStreamConverter("m", passthroughTestError)
 	msg := c.Convert(dify.StreamEvent{Event: "text_chunk", Data: dify.StreamEventData{Text: "hello"}})
 	if msg == nil || !strings.Contains(msg.Data, `"content":"hello"`) {
 		t.Fatalf("text chunk not converted: %v", msg)
@@ -26,7 +28,7 @@ func TestStreamConverter_TextAndFinish(t *testing.T) {
 }
 
 func TestStreamConverter_WorkflowFailed(t *testing.T) {
-	c := NewStreamConverter("m")
+	c := NewStreamConverter("m", passthroughTestError)
 	c.Convert(dify.StreamEvent{Event: "text_chunk", Data: dify.StreamEventData{Text: "partial"}})
 	msg := c.Convert(dify.StreamEvent{Event: "workflow_finished", Data: dify.StreamEventData{Status: "failed", Error: "credit exhausted"}})
 	if msg == nil {
@@ -45,7 +47,7 @@ func TestStreamConverter_WorkflowFailed(t *testing.T) {
 }
 
 func TestStreamConverter_ErrorEvent(t *testing.T) {
-	c := NewStreamConverter("m")
+	c := NewStreamConverter("m", passthroughTestError)
 	msg := c.Convert(dify.StreamEvent{Event: "error", Data: dify.StreamEventData{Error: "boom"}})
 	if msg == nil || !strings.Contains(msg.Data, "boom") || !strings.Contains(msg.Data, `"upstream_error"`) {
 		t.Fatalf("error event frame wrong: %v", msg)
@@ -56,7 +58,7 @@ func TestStreamConverter_ErrorEvent(t *testing.T) {
 }
 
 func TestStreamConverter_ErrorEventEmptyMessage(t *testing.T) {
-	c := NewStreamConverter("m")
+	c := NewStreamConverter("m", passthroughTestError)
 	msg := c.Convert(dify.StreamEvent{Event: "error"})
 	if msg == nil || !strings.Contains(msg.Data, "upstream error") {
 		t.Fatalf("empty error event should fall back to generic message: %v", msg)

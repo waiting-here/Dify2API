@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -39,14 +38,14 @@ const appProbeTimeout = 15 * time.Second
 // The per-user probe cap and the total deadline keep the check cheap for the
 // operator to expose: rate-limited or timed-out probes report app_check.error
 // and never carry a "compatible" verdict.
-func (g *Gateway) checkAppBinding(ctx context.Context, userID int64, model, baseURL, apiKey string) map[string]interface{} {
+func (g *Gateway) checkAppBinding(ctx context.Context, userID int64, model, baseURL, apiKey, lang string) map[string]interface{} {
 	service := translator.ServiceOfModel(model)
 	// Per-user cap first: a rate-limited attempt must not consume a global
 	// semaphore slot (nor wait for one). The cap is admin-tunable via the
 	// probe_limit_per_user setting; <=0 falls back to the default.
 	limit := g.Store.GetSettingInt(db.SettingProbeLimitPerUser, db.DefaultProbeLimitPerUser)
 	if !g.probeLimiter.allow(userID, limit, time.Now()) {
-		return map[string]interface{}{"service": service, "error": "rate limited, try again later"}
+		return map[string]interface{}{"service": service, "error": t(lang, "App 检查请求过于频繁，请稍后重试。", "App check rate limited. Try again later.")}
 	}
 	// Single total deadline for the whole probe (queueing included). The
 	// request context's own cancellation (client disconnect) still applies.
@@ -54,16 +53,16 @@ func (g *Gateway) checkAppBinding(ctx context.Context, userID int64, model, base
 	defer cancel()
 	release, err := g.acquireDifyProbe(probeCtx)
 	if err != nil {
-		return map[string]interface{}{"service": service, "error": probeError(err)}
+		return map[string]interface{}{"service": service, "error": probeError(err, lang)}
 	}
 	defer release()
 	client, err := g.newDifyClient(userID, baseURL, apiKey, appProbeTimeout)
 	if err != nil {
-		return map[string]interface{}{"service": service, "error": err.Error()}
+		return map[string]interface{}{"service": service, "error": sanitizePublicUpstreamError(err, err.Error(), lang)}
 	}
 	params, err := client.FetchParametersContext(probeCtx)
 	if err != nil {
-		return map[string]interface{}{"service": service, "error": probeError(err)}
+		return map[string]interface{}{"service": service, "error": probeError(err, lang)}
 	}
 	res := translator.CheckAppParams(service, params)
 	out := map[string]interface{}{
@@ -84,12 +83,9 @@ func (g *Gateway) checkAppBinding(ctx context.Context, userID int64, model, base
 
 // probeError maps a probe failure to its app_check.error text: deadline
 // exhaustion (semaphore queueing or upstream) is always reported as a
-// timeout; other failures (network, DNS, …) keep their own description.
-func probeError(err error) string {
-	if errors.Is(err, context.DeadlineExceeded) {
-		return "probe timeout"
-	}
-	return err.Error()
+// timeout; all other failures are mapped to safe localized categories.
+func probeError(err error, lang string) string {
+	return sanitizePublicUpstreamError(err, err.Error(), lang)
 }
 
 // bindingUnchanged reports whether an update changes nothing the App probe
@@ -169,7 +165,7 @@ func (req *configRequest) validate(g *Gateway) string {
 	}
 	normalizedBaseURL, err := g.difyPolicy.ValidateBaseURL(req.BaseURL)
 	if err != nil {
-		return "dify_base_url is not allowed: " + err.Error()
+		return "dify_base_url is not allowed by the egress policy"
 	}
 	req.BaseURL = normalizedBaseURL
 	if req.APIKey == "" {
@@ -256,7 +252,7 @@ func (g *Gateway) handleCreateConfig(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]interface{}{
 		"ok":        true,
 		"config":    appConfigJSON(cfg),
-		"app_check": g.checkAppBinding(r.Context(), u.ID, req.Model, req.BaseURL, req.APIKey),
+		"app_check": g.checkAppBinding(r.Context(), u.ID, req.Model, req.BaseURL, req.APIKey, g.resolveLang(r)),
 	}
 	if n := g.selfSiteNotice(r, req.BaseURL); n != "" {
 		resp["notice"] = n
@@ -310,7 +306,7 @@ func (g *Gateway) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		"config": appConfigJSON(cfg),
 	}
 	if !g.bindingUnchanged(existing, &req) {
-		resp["app_check"] = g.checkAppBinding(r.Context(), u.ID, req.Model, req.BaseURL, req.APIKey)
+		resp["app_check"] = g.checkAppBinding(r.Context(), u.ID, req.Model, req.BaseURL, req.APIKey, g.resolveLang(r))
 	}
 	if n := g.selfSiteNotice(r, req.BaseURL); n != "" {
 		resp["notice"] = n

@@ -773,6 +773,70 @@ func TestCharityStreaming_PostStartTransportErrorCountsAsSuccess(t *testing.T) {
 	}
 }
 
+func TestCharityStreaming_BusinessErrorSanitizedButLoggedRaw(t *testing.T) {
+	rawFailure := "failed at https://charity.secret.example 198.51.100.80 [2001:db8::80] app-secret"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: {\"event\":\"error\",\"data\":{\"error\":%q}}\n\n", rawFailure)
+	}))
+	defer srv.Close()
+
+	gw, store := setupAuthGateway(t, "x")
+	allowDifyTestOrigin(t, gw, srv.URL)
+	consumer, err := store.CreateUser("515", "charity_stream_error", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := store.SetCallerKey(consumer.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.SetUserCharityEnabled(consumer.ID, true)
+	store.SetUserCredits(consumer.ID, 20)
+	store.SetSetting(db.SettingCharityEnabled, "true")
+	donor, err := store.CreateUser("516", "charity_stream_error_donor", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	donation, err := store.CreateDonation(&db.Donation{
+		Service:      "general",
+		Model:        "stream-error",
+		DifyBaseURL:  srv.URL,
+		SourceUserID: sql.NullInt64{Int64: donor.ID, Valid: true},
+		Deadline:     time.Now().Add(time.Hour).Unix(),
+		TotalCount:   10,
+		Status:       db.DonationActive,
+	}, "app-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertPricing("general", "stream-error", 10, ptr(5)); err != nil {
+		t.Fatal(err)
+	}
+	store.SetPricingEnabled("general", "stream-error", true)
+
+	rec := chatRequest(gw, key, `{"model":"[公益][general]stream-error","messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "上游 Dify 工作流执行失败") {
+		t.Fatalf("charity SSE response = %d %s", rec.Code, rec.Body.String())
+	}
+	for _, secret := range []string{rawFailure, "charity.secret.example", "198.51.100.80", "2001:db8::80", "app-secret"} {
+		if strings.Contains(rec.Body.String(), secret) {
+			t.Errorf("charity SSE leaked %q: %s", secret, rec.Body.String())
+		}
+	}
+	logs, err := store.ListRequestLogs(consumer.ID, 10)
+	if err != nil || len(logs) != 1 {
+		t.Fatalf("charity logs=%+v err=%v", logs, err)
+	}
+	if logs[0].ErrorDetail != rawFailure {
+		t.Fatalf("raw charity SSE error not retained: %+v", logs[0])
+	}
+	updated, err := store.GetDonation(donation.ID)
+	if err != nil || updated.SuccessCount != 1 {
+		t.Fatalf("charity business error accounting changed: donation=%+v err=%v", updated, err)
+	}
+}
+
 // TestCharityBlockingFailureLogIncludesDonationSource verifies that a failure
 // after selecting a donation still links the request log to that donation, so
 // the admin log table can resolve source_display.

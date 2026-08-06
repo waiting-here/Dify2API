@@ -138,14 +138,14 @@ func TestCheckAppBinding_RateLimitFollowsSetting(t *testing.T) {
 	}
 	ctx := context.Background()
 	for i := 0; i < 2; i++ {
-		check := gw.checkAppBinding(ctx, 43, "[general]x", "http://127.0.0.1:1", "k")
+		check := gw.checkAppBinding(ctx, 43, "[general]x", "http://127.0.0.1:1", "k", "zh")
 		msg, _ := check["error"].(string)
-		if msg == "rate limited, try again later" {
+		if strings.Contains(msg, "请求过于频繁") {
 			t.Fatalf("probe %d should pass the lowered cap, got %v", i+1, check)
 		}
 	}
-	check := gw.checkAppBinding(ctx, 43, "[general]x", "http://127.0.0.1:1", "k")
-	if check["error"] != "rate limited, try again later" {
+	check := gw.checkAppBinding(ctx, 43, "[general]x", "http://127.0.0.1:1", "k", "zh")
+	if msg, _ := check["error"].(string); !strings.Contains(msg, "请求过于频繁") {
 		t.Fatalf("3rd probe should be rate limited by the setting, got %v", check)
 	}
 }
@@ -155,9 +155,9 @@ func TestCheckAppBinding_RateLimited(t *testing.T) {
 	allowDifyTestOrigin(t, gw, "http://127.0.0.1:1")
 	ctx := context.Background()
 	for i := 0; i < 5; i++ {
-		check := gw.checkAppBinding(ctx, 42, "[general]x", "http://127.0.0.1:1", "k")
+		check := gw.checkAppBinding(ctx, 42, "[general]x", "http://127.0.0.1:1", "k", "zh")
 		msg, _ := check["error"].(string)
-		if msg == "" || msg == "rate limited, try again later" {
+		if msg == "" || strings.Contains(msg, "请求过于频繁") {
 			t.Fatalf("probe %d should fail with a network error, got %v", i+1, check)
 		}
 	}
@@ -170,8 +170,8 @@ func TestCheckAppBinding_RateLimited(t *testing.T) {
 	}
 	defer release()
 
-	check := gw.checkAppBinding(ctx, 42, "[general]x", "http://127.0.0.1:1", "k")
-	if check["error"] != "rate limited, try again later" {
+	check := gw.checkAppBinding(ctx, 42, "[general]x", "http://127.0.0.1:1", "k", "zh")
+	if msg, _ := check["error"].(string); !strings.Contains(msg, "请求过于频繁") {
 		t.Fatalf("6th probe should be rate limited, got %v", check)
 	}
 	if _, ok := check["compatible"]; ok {
@@ -190,8 +190,8 @@ func TestCheckAppBinding_TimeoutWhileQueued(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	check := gw.checkAppBinding(ctx, 7, "[general]x", "http://127.0.0.1:1", "k")
-	if check["error"] != "probe timeout" {
+	check := gw.checkAppBinding(ctx, 7, "[general]x", "http://127.0.0.1:1", "k", "zh")
+	if msg, _ := check["error"].(string); !strings.Contains(msg, "响应超时") {
 		t.Fatalf("queued probe should time out, got %v", check)
 	}
 	if _, ok := check["compatible"]; ok {
@@ -211,8 +211,8 @@ func TestCheckAppBinding_TimeoutUpstream(t *testing.T) {
 	allowDifyTestOrigin(t, gw, slow.URL)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	check := gw.checkAppBinding(ctx, 8, "[general]x", slow.URL, "k")
-	if check["error"] != "probe timeout" {
+	check := gw.checkAppBinding(ctx, 8, "[general]x", slow.URL, "k", "zh")
+	if msg, _ := check["error"].(string); !strings.Contains(msg, "响应超时") {
 		t.Fatalf("slow upstream should time out, got %v", check)
 	}
 }

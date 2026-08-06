@@ -52,9 +52,10 @@ func TestStreaming_Success_SendsDone(t *testing.T) {
 }
 
 func TestStreaming_WorkflowFailed_ErrorFrameNoDone(t *testing.T) {
+	rawFailure := "credit exhausted at https://workflow.secret.example 203.0.113.20 app-secret"
 	srv := mockDifySSE(t, []string{
 		`{"event":"text_chunk","data":{"text":"partial"}}`,
-		`{"event":"workflow_finished","data":{"status":"failed","error":"credit exhausted"}}`,
+		fmt.Sprintf(`{"event":"workflow_finished","data":{"status":"failed","error":%q}}`, rawFailure),
 	})
 	defer srv.Close()
 	gw, key, uid := setupRoutedUser(t, srv.URL, "[general]x")
@@ -64,8 +65,11 @@ func TestStreaming_WorkflowFailed_ErrorFrameNoDone(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d (SSE already committed); body: %s", rec.Code, body)
 	}
-	if !strings.Contains(body, `"error"`) || !strings.Contains(body, "credit exhausted") {
+	if !strings.Contains(body, `"error"`) || !strings.Contains(body, "上游 Dify 工作流执行失败") {
 		t.Errorf("failed stream must contain an error frame: %s", body)
+	}
+	if strings.Contains(body, rawFailure) || strings.Contains(body, "workflow.secret.example") || strings.Contains(body, "203.0.113.20") || strings.Contains(body, "app-secret") {
+		t.Errorf("failed stream must not expose upstream free text: %s", body)
 	}
 	if strings.Contains(body, "data: [DONE]") {
 		t.Errorf("failed stream must NOT send [DONE]: %s", body)
@@ -78,22 +82,33 @@ func TestStreaming_WorkflowFailed_ErrorFrameNoDone(t *testing.T) {
 	if logs[0].Status != "error" || logs[0].ErrorCode != "upstream_error" {
 		t.Errorf("log = %s/%s, want error/upstream_error", logs[0].Status, logs[0].ErrorCode)
 	}
+	if logs[0].ErrorDetail != rawFailure {
+		t.Errorf("admin log lost raw workflow error: %q", logs[0].ErrorDetail)
+	}
 }
 
 func TestStreaming_ErrorEvent_ErrorFrameNoDone(t *testing.T) {
+	rawFailure := "internal server error at https://event.secret.example [2001:db8::20] d2a_reflected_secret"
 	srv := mockDifySSE(t, []string{
-		`{"event":"error","data":{"error":"internal server error"}}`,
+		fmt.Sprintf(`{"event":"error","data":{"error":%q}}`, rawFailure),
 	})
 	defer srv.Close()
-	gw, key, _ := setupRoutedUser(t, srv.URL, "[general]x")
+	gw, key, userID := setupRoutedUser(t, srv.URL, "[general]x")
 
 	rec := streamChatRequest(gw, key)
 	body := rec.Body.String()
-	if !strings.Contains(body, `"error"`) || !strings.Contains(body, "internal server error") {
+	if !strings.Contains(body, `"error"`) || !strings.Contains(body, "上游 Dify 工作流执行失败") {
 		t.Errorf("error event must surface as error frame: %s", body)
+	}
+	if strings.Contains(body, rawFailure) || strings.Contains(body, "event.secret.example") || strings.Contains(body, "2001:db8::20") || strings.Contains(body, "d2a_reflected_secret") {
+		t.Errorf("error event must not expose upstream free text: %s", body)
 	}
 	if strings.Contains(body, "data: [DONE]") {
 		t.Errorf("error stream must NOT send [DONE]: %s", body)
+	}
+	logs, err := gw.Store.ListRequestLogs(userID, 10)
+	if err != nil || len(logs) != 1 || logs[0].ErrorDetail != rawFailure {
+		t.Fatalf("raw SSE event error was not retained: logs=%+v err=%v", logs, err)
 	}
 }
 

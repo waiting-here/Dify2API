@@ -25,6 +25,7 @@ type StreamConverter struct {
 	done         bool
 	failed       bool
 	failMsg      string
+	sanitizeErr  func(string) string
 }
 
 // Failed reports whether the stream ended in a failure (Dify error event or
@@ -38,12 +39,18 @@ func (c *StreamConverter) Failed() bool { return c.failed }
 func (c *StreamConverter) FailMessage() string { return c.failMsg }
 
 // NewStreamConverter creates a new StreamConverter.
-func NewStreamConverter(modelName string) *StreamConverter {
+func NewStreamConverter(modelName string, sanitizeError func(string) string) *StreamConverter {
+	if sanitizeError == nil {
+		// Fail closed if a caller forgets to provide its display policy. The
+		// converter still retains the raw message in FailMessage for logging.
+		sanitizeError = func(string) string { return "upstream workflow failed" }
+	}
 	return &StreamConverter{
-		chunkID:    fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()/1000%1000000000000),
-		modelName:  modelName,
-		created:    time.Now().Unix(),
-		firstChunk: true,
+		chunkID:     fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()/1000%1000000000000),
+		modelName:   modelName,
+		created:     time.Now().Unix(),
+		firstChunk:  true,
+		sanitizeErr: sanitizeError,
 	}
 }
 
@@ -83,7 +90,7 @@ func (c *StreamConverter) Convert(evt dify.StreamEvent) *SSEMessage {
 				msg = "workflow failed"
 			}
 			c.failMsg = msg
-			return &SSEMessage{Data: formatSSEError("[Dify] " + msg)}
+			return &SSEMessage{Data: formatSSEError("[Dify] " + c.sanitizeErr("workflow failed: "+msg))}
 		}
 		chunk := buildStreamChunk(c.chunkID, c.modelName, c.created, "", "", false, "stop")
 		return &SSEMessage{Data: formatSSEChunk(chunk)}
@@ -100,7 +107,7 @@ func (c *StreamConverter) Convert(evt dify.StreamEvent) *SSEMessage {
 			msg = "upstream error"
 		}
 		c.failMsg = msg
-		return &SSEMessage{Data: formatSSEError("[Dify] " + msg)}
+		return &SSEMessage{Data: formatSSEError("[Dify] " + c.sanitizeErr("workflow failed: "+msg))}
 
 	case "node_started", "node_finished", "workflow_started", "ping":
 		return nil
