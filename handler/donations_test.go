@@ -603,6 +603,255 @@ func TestUserCharityAPI(t *testing.T) {
 	}
 }
 
+type charityOutcomeFixture struct {
+	gw       *Gateway
+	key      string
+	consumer *db.User
+	donor    *db.User
+	donation *db.Donation
+	service  string
+	model    string
+}
+
+func setupCharityOutcomeFixture(t *testing.T, difyURL, service, model string) *charityOutcomeFixture {
+	t.Helper()
+	gw, store := setupAuthGateway(t, "x")
+	allowDifyTestOrigin(t, gw, difyURL)
+	consumer, err := store.CreateUser("charity-outcome-consumer-"+service+"-"+model, "charity_outcome_consumer", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := store.SetCallerKey(consumer.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetUserCharityEnabled(consumer.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetUserCredits(consumer.ID, 20); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetSetting(db.SettingCharityEnabled, "true"); err != nil {
+		t.Fatal(err)
+	}
+	donor, err := store.CreateUser("charity-outcome-donor-"+service+"-"+model, "charity_outcome_donor", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	donation, err := store.CreateDonation(&db.Donation{
+		Service:      service,
+		Model:        model,
+		DifyBaseURL:  difyURL,
+		SourceUserID: sql.NullInt64{Int64: donor.ID, Valid: true},
+		Deadline:     time.Now().Add(time.Hour).Unix(),
+		TotalCount:   10,
+		Status:       db.DonationActive,
+	}, "app-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertPricing(service, model, 10, ptr(5)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetPricingEnabled(service, model, true); err != nil {
+		t.Fatal(err)
+	}
+	return &charityOutcomeFixture{
+		gw: gw, key: key, consumer: consumer, donor: donor, donation: donation,
+		service: service, model: model,
+	}
+}
+
+func (f *charityOutcomeFixture) assertCommitted(t *testing.T) {
+	t.Helper()
+	donation, err := f.gw.Store.GetDonation(f.donation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumer, err := f.gw.Store.GetUserByID(f.consumer.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	donor, err := f.gw.Store.GetUserByID(f.donor.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservations, err := f.gw.Store.ListUserCharityReservations(f.consumer.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reservations) != 1 || reservations[0].Status != db.ReservationCommitted {
+		t.Fatalf("reservations = %+v, want one committed", reservations)
+	}
+	if donation.RemainingCount != 9 || donation.SuccessCount != 1 || donation.FailureCount != 0 || donation.ConsecutiveFailures != 0 {
+		t.Fatalf("donation settlement = remaining %d success %d failure %d consecutive %d, want 9/1/0/0",
+			donation.RemainingCount, donation.SuccessCount, donation.FailureCount, donation.ConsecutiveFailures)
+	}
+	if consumer.Credits != 10 {
+		t.Fatalf("consumer credits = %d, want 10", consumer.Credits)
+	}
+	if donor.Credits != 5 || donor.DonationCredit != 1 {
+		t.Fatalf("donor credits/contribution = %d/%d, want 5/1", donor.Credits, donor.DonationCredit)
+	}
+}
+
+func (f *charityOutcomeFixture) requestBody(stream bool) string {
+	return fmt.Sprintf(`{"model":"[公益][%s]%s","messages":[{"role":"user","content":"hello"}],"stream":%t}`,
+		f.service, f.model, stream)
+}
+
+func TestCharityDispatchedUncertainOutcomesCommit(t *testing.T) {
+	tests := []struct {
+		name       string
+		stream     bool
+		handler    http.HandlerFunc
+		wantStatus int
+	}{
+		{
+			name: "blocking immediate upstream error",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusBadGateway)
+				fmt.Fprint(w, `{"code":"upstream_failed","message":"temporary failure"}`)
+			},
+			wantStatus: http.StatusBadGateway,
+		},
+		{
+			name: "blocking HTTP 200 workflow failed",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, `{"data":{"status":"failed","error":"workflow failed","outputs":{}}}`)
+			},
+			wantStatus: http.StatusBadGateway,
+		},
+		{
+			name: "blocking truncated HTTP 200 response",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				hijacker, ok := w.(http.Hijacker)
+				if !ok {
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				conn, rw, err := hijacker.Hijack()
+				if err != nil {
+					return
+				}
+				fmt.Fprint(rw, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 200\r\n\r\n{\"data\":")
+				rw.Flush()
+				conn.Close()
+			},
+			wantStatus: http.StatusGatewayTimeout,
+		},
+		{
+			name:   "streaming error before first event",
+			stream: true,
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				fmt.Fprint(w, `{"code":"server_overloaded","message":"try later"}`)
+			},
+			wantStatus: http.StatusBadGateway,
+		},
+		{
+			name:   "streaming truncated first frame",
+			stream: true,
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, "data: {\n\n")
+			},
+			wantStatus: http.StatusBadGateway,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/workflows/run" {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				tc.handler(w, r)
+			}))
+			defer srv.Close()
+
+			fixture := setupCharityOutcomeFixture(t, srv.URL, "general", strings.ReplaceAll(tc.name, " ", "-"))
+			rec := chatRequest(fixture.gw, fixture.key, fixture.requestBody(tc.stream))
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body: %s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			fixture.assertCommitted(t)
+		})
+	}
+}
+
+func TestCharityImageUploadErrorAfterDispatchCommits(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/files/upload":
+			w.WriteHeader(http.StatusBadGateway)
+			fmt.Fprint(w, `{"code":"upload_failed","message":"temporary failure"}`)
+		case "/v1/workflows/run":
+			t.Error("workflow request must not run after image upload failure")
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	fixture := setupCharityOutcomeFixture(t, srv.URL, "image-processing", "image-upload-error")
+	body := `{"model":"[公益][image-processing]image-upload-error","messages":[{"role":"user","content":[` +
+		`{"type":"text","text":"describe"},{"type":"image_url","image_url":{"url":"data:image/png;base64,QUJD"}}]}]}`
+	rec := chatRequest(fixture.gw, fixture.key, body)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body: %s", rec.Code, rec.Body.String())
+	}
+	fixture.assertCommitted(t)
+}
+
+func TestCharityClientCancelAfterDispatchCommits(t *testing.T) {
+	started := make(chan struct{})
+	releaseUpstream := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/workflows/run" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		close(started)
+		select {
+		case <-r.Context().Done():
+		case <-releaseUpstream:
+		}
+	}))
+	defer srv.Close()
+	defer close(releaseUpstream)
+	fixture := setupCharityOutcomeFixture(t, srv.URL, "general", "client-cancel")
+
+	mux := http.NewServeMux()
+	fixture.gw.RegisterRoutes(mux)
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(fixture.requestBody(false))).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+fixture.key)
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		mux.ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("upstream request did not start")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("charity request did not stop after client cancellation")
+	}
+	fixture.assertCommitted(t)
+}
+
 // TestCharityRouting_Success tests a full charity routing path with a real
 // donation entry, verifying the donation is consumed and credits are deducted.
 func TestCharityRouting_Success(t *testing.T) {
@@ -756,13 +1005,17 @@ func TestCharityStreaming_PostStartTransportErrorCountsAsSuccess(t *testing.T) {
 	if updated.FailureCount != 0 || updated.ConsecutiveFailures != 0 {
 		t.Errorf("post-start stream error counted as donation failure: failure %d consecutive %d", updated.FailureCount, updated.ConsecutiveFailures)
 	}
+	reservations, err := store.ListUserCharityReservations(u.ID)
+	if err != nil || len(reservations) != 1 || reservations[0].Status != db.ReservationCommitted {
+		t.Fatalf("post-start reservation = %+v, err=%v", reservations, err)
+	}
 	caller, _ := store.GetUserByID(u.ID)
 	if caller.Credits != 10 {
 		t.Errorf("caller credits = %d, want 10 after committed call", caller.Credits)
 	}
 	donorUpdated, _ := store.GetUserByID(donor.ID)
-	if donorUpdated.DonationCredit != 1 {
-		t.Errorf("donor donation_credit = %d, want 1", donorUpdated.DonationCredit)
+	if donorUpdated.DonationCredit != 1 || donorUpdated.Credits != 5 {
+		t.Errorf("donor donation_credit/credits = %d/%d, want 1/5", donorUpdated.DonationCredit, donorUpdated.Credits)
 	}
 
 	gw.limiter.mu.Lock()
@@ -832,8 +1085,16 @@ func TestCharityStreaming_BusinessErrorSanitizedButLoggedRaw(t *testing.T) {
 		t.Fatalf("raw charity SSE error not retained: %+v", logs[0])
 	}
 	updated, err := store.GetDonation(donation.ID)
-	if err != nil || updated.SuccessCount != 1 {
+	if err != nil || updated.SuccessCount != 1 || updated.RemainingCount != 9 || updated.FailureCount != 0 || updated.ConsecutiveFailures != 0 {
 		t.Fatalf("charity business error accounting changed: donation=%+v err=%v", updated, err)
+	}
+	consumerUpdated, _ := store.GetUserByID(consumer.ID)
+	donorUpdated, _ := store.GetUserByID(donor.ID)
+	reservations, reservationErr := store.ListUserCharityReservations(consumer.ID)
+	if consumerUpdated.Credits != 10 || donorUpdated.Credits != 5 || donorUpdated.DonationCredit != 1 ||
+		reservationErr != nil || len(reservations) != 1 || reservations[0].Status != db.ReservationCommitted {
+		t.Fatalf("charity business error balances/reservation: consumer=%+v donor=%+v reservations=%+v err=%v",
+			consumerUpdated, donorUpdated, reservations, reservationErr)
 	}
 }
 
@@ -1822,7 +2083,7 @@ func settleCharityForTest(t *testing.T, gw *Gateway, consumerID int64, donation 
 	if err := gw.Store.MarkCharityDispatched(context.Background(), reservation.ID); err != nil {
 		t.Fatalf("mark dispatched: %v", err)
 	}
-	gw.charitySuccessAccounting(reservation)
+	gw.charityCommitAccounting(reservation)
 }
 
 // TestCharitySuccessAccounting_Reward verifies that the reward is granted

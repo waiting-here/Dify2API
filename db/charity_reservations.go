@@ -159,8 +159,9 @@ func getCharityReservationTx(ctx context.Context, tx *sql.Tx, id string) (*Chari
 	))
 }
 
-// CommitCharityReservation atomically records successful consumption and
-// grants the donor's contribution/reward. It is idempotent.
+// CommitCharityReservation atomically records a dispatched call as consumed
+// and grants the donor's contribution/reward. This is also the conservative
+// settlement for an uncertain upstream result. It is idempotent.
 func (s *Store) CommitCharityReservation(ctx context.Context, id string) (*CharityReservation, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -214,9 +215,11 @@ func (s *Store) CommitCharityReservation(ctx context.Context, id string) (*Chari
 	return r, nil
 }
 
-// ReleaseCharityReservation atomically refunds the consumer and restores the
-// reserved donation use. When countFailure is true it also records a donor
-// endpoint failure and returns the new consecutive-failure count.
+// ReleaseCharityReservation atomically refunds the consumer and restores a
+// donation use only while the reservation is still known to be undispatched.
+// Once dispatched, an uncertain result must be committed instead. When
+// countFailure is true it also records a donor endpoint failure and returns
+// the new consecutive-failure count.
 func (s *Store) ReleaseCharityReservation(ctx context.Context, id string, countFailure bool) (int, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -232,7 +235,9 @@ func (s *Store) ReleaseCharityReservation(ctx context.Context, id string, countF
 		return 0, nil
 	case ReservationCommitted:
 		return 0, fmt.Errorf("reservation %s was already committed", id)
-	case ReservationReserved, ReservationDispatched:
+	case ReservationDispatched:
+		return 0, fmt.Errorf("reservation %s was already dispatched and must be committed", id)
+	case ReservationReserved:
 	default:
 		return 0, fmt.Errorf("reservation %s has invalid status %q", id, r.Status)
 	}

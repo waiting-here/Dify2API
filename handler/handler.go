@@ -808,15 +808,15 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 		files, err := g.buildImageFiles(r.Context(), client, wfReq_User(user.ID), images)
 		if err != nil {
 			if r.Context().Err() != nil || errors.Is(err, context.Canceled) {
-				g.charitySuccessAccounting(reservation)
+				g.charityCommitAccounting(reservation)
 				g.logRequestDonation(user.ID, logModel, service, startedAt, "error", "client_canceled",
 					statusClientClosedRequest, "client disconnected during image upload", picked.ID, reservation.Price, "")
 				return
 			}
 			log.Printf("[ERROR] charity image files (user %d): %v", user.ID, err)
-			g.charityFailAccounting(user.ID, picked, reservation, err)
+			g.charityCommitAccounting(reservation)
 			g.logRequestDonation(user.ID, logModel, service, startedAt, "error", "image_upload_failed",
-				difyErrorStatus(err), err.Error(), picked.ID, 0, "")
+				difyErrorStatus(err), err.Error(), picked.ID, reservation.Price, "")
 			g.writeDifyError(charityWriter, err, userLang(user))
 			return
 		}

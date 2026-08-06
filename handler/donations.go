@@ -861,20 +861,20 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 		}
 	case err := <-errCh:
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
-			g.charitySuccessAccounting(reservation)
+			g.charityCommitAccounting(reservation)
 			g.logRequestDonation(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest,
 				"client disconnected before first upstream event", donation.ID, reservation.Price, "")
 			return
 		}
 		if err != nil {
-			g.charityFailAccounting(userID, donation, reservation, err)
+			g.charityCommitAccounting(reservation)
 			g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_error",
-				difyErrorStatus(err), err.Error(), donation.ID, 0, "")
+				difyErrorStatus(err), err.Error(), donation.ID, reservation.Price, "")
 			g.writeDifyError(w, err, lang)
 			return
 		}
 	case <-ctx.Done():
-		g.charitySuccessAccounting(reservation)
+		g.charityCommitAccounting(reservation)
 		g.logRequestDonation(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest,
 			ctx.Err().Error(), donation.ID, reservation.Price, "")
 		return
@@ -887,15 +887,15 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 				if ctx.Err() != nil {
 					detail = ctx.Err().Error()
 				}
-				g.charitySuccessAccounting(reservation)
+				g.charityCommitAccounting(reservation)
 				g.logRequestDonation(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest,
 					detail, donation.ID, reservation.Price, "")
 				return
 			}
 			if err != nil {
-				g.charityFailAccounting(userID, donation, reservation, err)
+				g.charityCommitAccounting(reservation)
 				g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_error",
-					difyErrorStatus(err), err.Error(), donation.ID, 0, "")
+					difyErrorStatus(err), err.Error(), donation.ID, reservation.Price, "")
 				g.writeDifyError(w, err, lang)
 				return
 			}
@@ -904,7 +904,7 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 	}
 
 	if ctx.Err() != nil {
-		g.charitySuccessAccounting(reservation)
+		g.charityCommitAccounting(reservation)
 		if firstEvt != nil {
 			// We observed an upstream event before the downstream canceled;
 			// this is still a class-B success.
@@ -920,7 +920,7 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 	// a later truncation must not turn this consumed call into a donation
 	// failure or trigger auto-inactivation.
 	donationID := donation.ID
-	g.charitySuccessAccounting(reservation)
+	g.charityCommitAccounting(reservation)
 	g.limiter.record(rpmClassB, userID, time.Now())
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -1003,9 +1003,8 @@ loop:
 				detail = streamErr.Error()
 			}
 		}
-		// No charityFailAccounting here — the success was already
-		// recorded when the stream started, and workflow failure
-		// does not indicate Dify-endpoint unavailability.
+		// The reservation was already committed when the stream started;
+		// workflow failure does not indicate Dify-endpoint unavailability.
 	case streamErr != nil:
 		// The stream had already started, so the reservation was committed and
 		// class B was recorded above. A transport truncation still fails the
@@ -1041,7 +1040,7 @@ func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wf
 			if ctx.Err() != nil {
 				detail = ctx.Err().Error()
 			}
-			g.charitySuccessAccounting(reservation)
+			g.charityCommitAccounting(reservation)
 			g.logRequestDonation(userID, modelName, service, startedAt, "error", "client_canceled",
 				statusClientClosedRequest, detail, donationID, reservation.Price, "")
 			return
@@ -1050,7 +1049,7 @@ func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wf
 		if errors.As(err, &de) && de.Status == http.StatusOK {
 			// 200-but-failed: success per §1.2, but admin alert
 			g.limiter.record(rpmClassB, userID, time.Now())
-			g.charitySuccessAccounting(reservation)
+			g.charityCommitAccounting(reservation)
 
 			// Log first so the alert can link to this request log.
 			logID := g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_error", http.StatusOK, de.Error(), donationID, reservation.Price, "")
@@ -1064,24 +1063,26 @@ func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wf
 		// clear timeout diagnosis so they know the request was counted.
 		if dify.IsTimeoutError(err) {
 			g.limiter.record(rpmClassB, userID, time.Now())
-			g.charitySuccessAccounting(reservation)
+			g.charityCommitAccounting(reservation)
 			g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_timeout", http.StatusGatewayTimeout, err.Error(), donationID, reservation.Price, "")
 			g.writeError(w, http.StatusGatewayTimeout, "upstream_timeout",
 				t(lang, "上游 Dify 服务响应超时：请求可能因 Cloudflare 100 秒限制被截断。建议使用流式传输（stream: true）或拆分任务后重试。", "Upstream Dify service timeout: the request may have been truncated by Cloudflare's 100-second limit. Consider using streaming (stream: true) or splitting the task."))
 			return
 		}
-		// Real upstream failure — donation failure. Keep the selected donation
-		// ID on the request log so the admin view can resolve its source.
-		g.charityFailAccounting(userID, donation, reservation, err)
+		// The workflow request was already dispatched. Even a transport or HTTP
+		// failure before a usable response is uncertain: Dify may have consumed
+		// the donor call, so settle conservatively and do not penalize the
+		// donation endpoint.
+		g.charityCommitAccounting(reservation)
 		g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_error",
-			difyErrorStatus(err), err.Error(), donationID, 0, "")
+			difyErrorStatus(err), err.Error(), donationID, reservation.Price, "")
 		g.writeDifyError(w, err, lang)
 		return
 	}
 
 	// Success
 	g.limiter.record(rpmClassB, userID, time.Now())
-	g.charitySuccessAccounting(reservation)
+	g.charityCommitAccounting(reservation)
 
 	resp := map[string]interface{}{
 		"id":      fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()/1000%1000000000000),
@@ -1106,9 +1107,11 @@ func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wf
 	g.logRequestDonation(userID, modelName, service, startedAt, "success", "", http.StatusOK, "", donationID, reservation.Price, "")
 }
 
-// charitySuccessAccounting commits a durable reservation. The donation use
-// and consumer debit were already claimed atomically before dispatch.
-func (g *Gateway) charitySuccessAccounting(reservation *db.CharityReservation) {
+// charityCommitAccounting commits a durable dispatched reservation. The
+// donation use and consumer debit were already claimed atomically before
+// dispatch. Both confirmed consumption and uncertain upstream outcomes use
+// this conservative settlement.
+func (g *Gateway) charityCommitAccounting(reservation *db.CharityReservation) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if _, err := g.Store.CommitCharityReservation(ctx, reservation.ID); err != nil {
@@ -1116,39 +1119,18 @@ func (g *Gateway) charitySuccessAccounting(reservation *db.CharityReservation) {
 	}
 }
 
-// charityFailAccounting refunds a pre-dispatch debit/use and records a Dify
-// endpoint failure in the same transaction.
-func (g *Gateway) charityFailAccounting(userID int64, donation *db.Donation, reservation *db.CharityReservation, err error) {
-	log.Printf("[DONATION] donation %d failure (user %d, reservation %s): %v", donation.ID, userID, reservation.ID, err)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	consecutive, recErr := g.Store.ReleaseCharityReservation(ctx, reservation.ID, true)
-	if recErr != nil {
-		log.Printf("[ERROR] release charity reservation %s: %v", reservation.ID, recErr)
-		return
-	}
-	g.maybeInactivateDonation(donation, consecutive)
-}
-
-func (g *Gateway) maybeInactivateDonation(donation *db.Donation, consecutive int) {
-	limit := g.Store.GetSettingInt(db.SettingDonationFailLimit, db.DefaultDonationFailLimit)
-	if consecutive < limit {
-		return
-	}
-	if err := g.Store.SetDonationStatus(donation.ID, db.DonationInactive); err != nil {
-		log.Printf("[ERROR] auto-inactivate donation %d after %d failures: %v", donation.ID, consecutive, err)
-		return
-	}
-	log.Printf("[DONATION] donation %d auto-inactivated after %d consecutive failures", donation.ID, consecutive)
-	if g.mailer != nil {
-		g.mailer.DonationInactive(donation.Service, donation.Model, donation.ID, consecutive)
-	}
-}
-
 func (g *Gateway) releaseCharitySetup(reservation *db.CharityReservation) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if _, err := g.Store.ReleaseCharityReservation(ctx, reservation.ID, false); err != nil {
+		// MarkCharityDispatched can return an uncertain database/context error.
+		// If the durable row nevertheless crossed the dispatch boundary, release
+		// is intentionally rejected and the only safe settlement is commit.
+		current, getErr := g.Store.GetCharityReservation(reservation.ID)
+		if getErr == nil && current != nil && (current.Status == db.ReservationDispatched || current.Status == db.ReservationCommitted) {
+			g.charityCommitAccounting(reservation)
+			return
+		}
 		log.Printf("[ERROR] release charity setup reservation %s: %v", reservation.ID, err)
 	}
 }

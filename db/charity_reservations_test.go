@@ -75,7 +75,7 @@ func TestCharityReservation_CommitIsAtomicAndIdempotent(t *testing.T) {
 	}
 }
 
-func TestCharityReservation_ReleaseRefundsAndRestores(t *testing.T) {
+func TestCharityReservation_ReleaseReservedRefundsAndRestores(t *testing.T) {
 	store, consumer, _, donation := reservationFixture(t, 1, 20)
 	ctx := context.Background()
 	reservation, err := store.ReserveCharityCall(ctx, consumer.ID, donation.ID, 10, 0)
@@ -86,24 +86,66 @@ func TestCharityReservation_ReleaseRefundsAndRestores(t *testing.T) {
 	if got.RemainingCount != 0 || got.Status != DonationExpired {
 		t.Fatalf("last use should be reserved/expired: %+v", got)
 	}
-	if err := store.MarkCharityDispatched(ctx, reservation.ID); err != nil {
-		t.Fatal(err)
-	}
 	if err := store.DeleteDonation(donation.ID); err == nil {
 		t.Fatal("in-flight donation must not be deleted")
 	}
-	consecutive, err := store.ReleaseCharityReservation(ctx, reservation.ID, true)
-	if err != nil || consecutive != 1 {
+	consecutive, err := store.ReleaseCharityReservation(ctx, reservation.ID, false)
+	if err != nil || consecutive != 0 {
 		t.Fatalf("release = consecutive %d, err %v", consecutive, err)
 	}
 	// Idempotent retry cannot refund twice.
-	if _, err := store.ReleaseCharityReservation(ctx, reservation.ID, true); err != nil {
+	if _, err := store.ReleaseCharityReservation(ctx, reservation.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = store.GetDonation(donation.ID)
 	gotConsumer, _ := store.GetUserByID(consumer.ID)
-	if got.RemainingCount != 1 || got.Status != DonationActive || got.FailureCount != 1 || got.ConsecutiveFailures != 1 || gotConsumer.Credits != 20 {
+	if got.RemainingCount != 1 || got.Status != DonationActive || got.FailureCount != 0 || got.ConsecutiveFailures != 0 || gotConsumer.Credits != 20 {
 		t.Fatalf("released state: donation=%+v credits=%d", got, gotConsumer.Credits)
+	}
+}
+
+func TestCharityReservation_DispatchedCannotBeReleased(t *testing.T) {
+	store, consumer, donor, donation := reservationFixture(t, 2, 20)
+	ctx := context.Background()
+	reservation, err := store.ReserveCharityCall(ctx, consumer.ID, donation.ID, 10, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkCharityDispatched(ctx, reservation.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Even a legacy caller asking to count a donation failure cannot cross the
+	// dispatch boundary by refunding the reservation.
+	if _, err := store.ReleaseCharityReservation(ctx, reservation.ID, true); err == nil {
+		t.Fatal("dispatched reservation was released")
+	}
+	gotReservation, _ := store.GetCharityReservation(reservation.ID)
+	gotDonation, _ := store.GetDonation(donation.ID)
+	gotConsumer, _ := store.GetUserByID(consumer.ID)
+	if gotReservation.Status != ReservationDispatched || gotDonation.RemainingCount != 1 ||
+		gotDonation.SuccessCount != 0 || gotDonation.FailureCount != 0 || gotDonation.ConsecutiveFailures != 0 || gotConsumer.Credits != 10 {
+		t.Fatalf("release rejection mutated state: reservation=%+v donation=%+v consumer=%+v", gotReservation, gotDonation, gotConsumer)
+	}
+
+	if _, err := store.CommitCharityReservation(ctx, reservation.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Repeating either settlement cannot double-apply it or reverse it.
+	if _, err := store.CommitCharityReservation(ctx, reservation.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReleaseCharityReservation(ctx, reservation.ID, true); err == nil {
+		t.Fatal("committed reservation was released")
+	}
+	gotReservation, _ = store.GetCharityReservation(reservation.ID)
+	gotDonation, _ = store.GetDonation(donation.ID)
+	gotConsumer, _ = store.GetUserByID(consumer.ID)
+	gotDonor, _ := store.GetUserByID(donor.ID)
+	if gotReservation.Status != ReservationCommitted || gotDonation.RemainingCount != 1 ||
+		gotDonation.SuccessCount != 1 || gotDonation.FailureCount != 0 || gotDonation.ConsecutiveFailures != 0 ||
+		gotConsumer.Credits != 10 || gotDonor.Credits != 3 || gotDonor.DonationCredit != 1 {
+		t.Fatalf("commit settlement mismatch: reservation=%+v donation=%+v consumer=%+v donor=%+v", gotReservation, gotDonation, gotConsumer, gotDonor)
 	}
 }
 
@@ -177,6 +219,11 @@ func TestCharityReservation_Recovery(t *testing.T) {
 	if err != nil || released != 1 || committed != 1 {
 		t.Fatalf("recovery released=%d committed=%d err=%v", released, committed, err)
 	}
+	// Re-running recovery after an interrupted startup is a no-op.
+	released, committed, err = store.RecoverCharityReservations(ctx)
+	if err != nil || released != 0 || committed != 0 {
+		t.Fatalf("second recovery released=%d committed=%d err=%v", released, committed, err)
+	}
 	reserved, _ = store.GetCharityReservation(reserved.ID)
 	dispatched, _ = store.GetCharityReservation(dispatched.ID)
 	if reserved.Status != ReservationReleased || dispatched.Status != ReservationCommitted {
@@ -185,7 +232,8 @@ func TestCharityReservation_Recovery(t *testing.T) {
 	gotConsumer, _ := store.GetUserByID(consumer.ID)
 	gotDonor, _ := store.GetUserByID(donor.ID)
 	gotDonation, _ := store.GetDonation(donation.ID)
-	if gotConsumer.Credits != 20 || gotDonor.Credits != 4 || gotDonor.DonationCredit != 1 || gotDonation.RemainingCount != 2 || gotDonation.SuccessCount != 1 {
+	if gotConsumer.Credits != 20 || gotDonor.Credits != 4 || gotDonor.DonationCredit != 1 ||
+		gotDonation.RemainingCount != 2 || gotDonation.SuccessCount != 1 || gotDonation.FailureCount != 0 || gotDonation.ConsecutiveFailures != 0 {
 		t.Fatalf("recovered balances: consumer=%d donor=%d contribution=%d donation=%+v", gotConsumer.Credits, gotDonor.Credits, gotDonor.DonationCredit, gotDonation)
 	}
 }
