@@ -585,7 +585,7 @@ func (c *debugResponseCapture) body() string {
 // POST /api/me/debug/start
 func (g *Gateway) handleDebugStart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 	u := g.currentUser(r)
@@ -614,7 +614,7 @@ func (g *Gateway) handleDebugStart(w http.ResponseWriter, r *http.Request) {
 // POST /api/me/debug/stop
 func (g *Gateway) handleDebugStop(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 	u := g.currentUser(r)
@@ -706,7 +706,7 @@ func (g *Gateway) handleDebugStream(w http.ResponseWriter, r *http.Request) {
 // POST /api/me/debug/dry-run
 func (g *Gateway) handleDebugDryRun(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 	u := g.currentUser(r)

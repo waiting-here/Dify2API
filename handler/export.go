@@ -43,7 +43,7 @@ func sanitizePublicExportBundle(bundle *db.ExportBundle, lang string) *db.Export
 // session TTL reasonable.
 func (g *Gateway) handleMeExport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 	u := g.currentUser(r)
@@ -82,7 +82,7 @@ func (g *Gateway) handleMeExport(w http.ResponseWriter, r *http.Request) {
 // is invalidated and the client is expected to redirect to the login page.
 func (g *Gateway) handleMeDelete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 	u := g.currentUser(r)

@@ -559,6 +559,16 @@ function _debugSetConsented(v) {
 // Timer handle for auto-restoring the check-in button at midnight.
 let _checkinTimer = null;
 
+function bindCreditsLogoFallback(container) {
+  const img = container && container.querySelector(".credits-logo-img");
+  if (!img) return;
+  img.addEventListener("error", () => {
+    const text = img.parentElement && img.parentElement.querySelector(".cr-text");
+    if (text) text.style.display = "";
+    img.style.display = "none";
+  }, { once: true });
+}
+
 async function renderCreditsCard() {
   const card = $("#credits-card");
   if (!card) return;
@@ -571,11 +581,12 @@ async function renderCreditsCard() {
     // Use i18n'd name if available, fall back to the single-value env var.
     const creditsName = (state.site["credits_name_" + currentLang]) || state.site.credits_name || T('creditsTitle');
     const logoText = state.site.credits_logo_text || "";
-    const logoImg = `<img src="/credits-logo" alt="" style="height:2rem;vertical-align:middle;margin-right:.5rem" onerror="var t=this.parentElement.querySelector('.cr-text');if(t)t.style.display='';this.style.display='none'">`;
+    const logoImg = `<img class="credits-logo-img" src="/credits-logo" alt="" style="height:2rem;vertical-align:middle;margin-right:.5rem">`;
     $("#credits-info").innerHTML = `
       ${logoImg}<span class="cr-text" style="${logoText ? 'display:none' : ''};font-size:1.5rem;margin-right:.5rem">${esc(logoText)}</span>
       <strong>${esc(creditsName)}</strong>
       <span class="badge ok" style="margin-left:.75rem">${T('creditsBalance').replace("{n}", String(me.credits || 0))}</span>`;
+    bindCreditsLogoFallback($("#credits-info"));
 
     const btn = $("#checkin-btn");
     if (!btn) return;
@@ -628,6 +639,7 @@ async function renderCreditsCard() {
           ${logoImg}<span class="cr-text" style="${logoText ? 'display:none' : ''};font-size:1.5rem;margin-right:.5rem">${esc(logoText)}</span>
           <strong>${esc(creditsName)}</strong>
           <span class="badge ok" style="margin-left:.75rem">${T('creditsBalance').replace("{n}", String(me2.credits || 0))}</span>`;
+        bindCreditsLogoFallback($("#credits-info"));
       } catch (err) {
         if (err.message && err.message.includes("今日已签到")) {
           toast(T('creditsCheckedIn'));
@@ -1140,4 +1152,3 @@ async function loadLogs() {
   logPager.data = logs || [];
   renderPaged(logPager, "#log-rows", "#log-pager", 8);
 }
-

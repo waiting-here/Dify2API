@@ -55,7 +55,7 @@ func (g *Gateway) handleCheckinStatus(w http.ResponseWriter, r *http.Request) {
 // POST /api/me/checkin — signs the user in for the day and awards random credits.
 func (g *Gateway) handleCheckin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 

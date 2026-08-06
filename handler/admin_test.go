@@ -258,6 +258,7 @@ func TestSettingsPut_OmittedFieldsAndRollback(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/api/admin/settings", strings.NewReader(body))
 		req.Host = gw.Config.Admin.AdminHost
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "http://admin.localhost")
 		req.AddCookie(adminCookie)
 		rec := httptest.NewRecorder()
 		wrapped.ServeHTTP(rec, req)

@@ -2572,6 +2572,77 @@ func TestAdminHost_ApplicationsAllowed(t *testing.T) {
 	}
 }
 
+func TestApproveDeadlineValidationThroughGateway(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	admin := adminCookie(t, gw)
+	applicant, _ := store.CreateUser("deadline-user", "deadline-user", "")
+	past := time.Now().Add(-time.Hour).Unix()
+	future := time.Now().Add(24 * time.Hour).Unix()
+	expired, err := store.CreateDonationApplication(applicant.ID, "general", "expired-one", "https://dify.example.com/v1", "key-1", 10, past, 5, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	modifiable, err := store.CreateDonationApplication(applicant.ID, "general", "expired-modified", "https://dify.example.com/v1", "key-2", 10, future, 5, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	h := gw.Wrap(mux)
+	request := func(path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "http://admin.localhost"+path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "http://admin.localhost")
+		req.AddCookie(admin)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	for _, tc := range []struct {
+		path string
+		body string
+	}{
+		{path: fmt.Sprintf("/api/admin/donations/%d/approve", expired.ID), body: `{}`},
+		{path: fmt.Sprintf("/api/admin/donations/%d/approve", modifiable.ID), body: fmt.Sprintf(`{"deadline":%d}`, past)},
+	} {
+		rec := request(tc.path, tc.body)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s status=%d body=%s", tc.path, rec.Code, rec.Body.String())
+		}
+		var out struct {
+			Error struct {
+				Code string `json:"code"`
+				Type string `json:"type"`
+			} `json:"error"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&out); err != nil || out.Error.Code != "invalid_request" || out.Error.Type != "invalid_request" {
+			t.Fatalf("%s response=%+v decode err=%v", tc.path, out, err)
+		}
+	}
+
+	batchRec := request("/api/admin/donations/approve/batch", fmt.Sprintf(`{"ids":[%d]}`, expired.ID))
+	if batchRec.Code != http.StatusBadRequest {
+		t.Fatalf("batch status=%d body=%s", batchRec.Code, batchRec.Body.String())
+	}
+	var batchOut struct {
+		FailedID int64 `json:"failed_id"`
+		Error    struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(batchRec.Body).Decode(&batchOut); err != nil || batchOut.FailedID != expired.ID || batchOut.Error.Code != "invalid_request" {
+		t.Fatalf("batch response=%+v decode err=%v", batchOut, err)
+	}
+	for _, id := range []int64{expired.ID, modifiable.ID} {
+		app, _ := store.GetApplication(id)
+		if app == nil || app.Status != db.AppStatusPending || app.DonationID.Valid {
+			t.Fatalf("application %d changed after deadline rejection: %+v", id, app)
+		}
+	}
+}
+
 func TestDonationPatch_TotalCountNeverNegativeRemaining(t *testing.T) {
 	// Regression: lowering total_count used `remaining_count + (new - old)`
 	// without a lower bound, so shrinking the total below the already-used

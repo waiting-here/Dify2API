@@ -187,6 +187,7 @@ v1.2.0 的公益记账在**预留时**即扣减捐赠 `remaining_count` 与消�
 | 401 | `unauthorized`, `invalid_credentials` | 调用密钥、会话或管理员凭据无效 |
 | 403 | `forbidden`, `charity_disabled`, `donation_disabled`, `insufficient_credits`, `login_locked`, `rpm_exceeded` | 权限或业务门禁 |
 | 404 | `not_found`, `model_not_found`, `debug_intercept` | 路径/模型不存在或 debug 拦截 |
+| 405 | `method_not_allowed` | HTTP 方法不受该接口支持 |
 | 409 | `conflict` | 模型名等唯一约束冲突 |
 | 413/415 | `request_too_large`, `invalid_request` | 请求体过大或 Content-Type 错误 |
 | 429 | `charity_overloaded`, `rate_limited`, `server_busy` | 公益、IP 或并发限流；可能附 `Retry-After` |

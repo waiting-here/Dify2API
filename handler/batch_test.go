@@ -157,9 +157,12 @@ func TestBatchApprove_OneNotPending(t *testing.T) {
 	}
 
 	var errResp struct {
-		OK       bool   `json:"ok"`
-		Error    string `json:"error"`
-		FailedID int64  `json:"failed_id"`
+		OK    bool `json:"ok"`
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+		FailedID int64 `json:"failed_id"`
 	}
 	if err := json.Unmarshal(rec2.Body.Bytes(), &errResp); err != nil {
 		t.Fatalf("json decode: %v", err)
@@ -170,8 +173,8 @@ func TestBatchApprove_OneNotPending(t *testing.T) {
 	if errResp.FailedID != id2 {
 		t.Errorf("failed_id = %d, want %d", errResp.FailedID, id2)
 	}
-	if !strings.Contains(errResp.Error, "不是 pending") {
-		t.Errorf("error message should mention '不是 pending', got: %s", errResp.Error)
+	if errResp.Error.Code != "invalid_request" || !strings.Contains(errResp.Error.Message, "不是 pending") {
+		t.Errorf("error should be invalid_request and mention '不是 pending', got: %+v", errResp.Error)
 	}
 
 	// Verify id1 is still pending (not partially approved).
@@ -380,9 +383,12 @@ func TestBatchActivate_NoPricing(t *testing.T) {
 	}
 
 	var errResp struct {
-		OK       bool   `json:"ok"`
-		Error    string `json:"error"`
-		FailedID int64  `json:"failed_id"`
+		OK    bool `json:"ok"`
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+		FailedID int64 `json:"failed_id"`
 	}
 	json.Unmarshal(rec.Body.Bytes(), &errResp)
 	if errResp.OK {
@@ -391,8 +397,8 @@ func TestBatchActivate_NoPricing(t *testing.T) {
 	if errResp.FailedID != id1 {
 		t.Errorf("failed_id = %d, want %d (first one with missing pricing)", errResp.FailedID, id1)
 	}
-	if !strings.Contains(errResp.Error, "尚未设定价格") {
-		t.Errorf("error should mention pricing, got: %s", errResp.Error)
+	if errResp.Error.Code != "invalid_request" || !strings.Contains(errResp.Error.Message, "尚未设定价格") {
+		t.Errorf("error should be invalid_request and mention pricing, got: %+v", errResp.Error)
 	}
 
 	// Verify both still inactive.
@@ -441,16 +447,19 @@ func TestBatchDonationStatus_ExpiredRejected(t *testing.T) {
 	}
 
 	var errResp struct {
-		OK       bool   `json:"ok"`
-		Error    string `json:"error"`
-		FailedID int64  `json:"failed_id"`
+		OK    bool `json:"ok"`
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+		FailedID int64 `json:"failed_id"`
 	}
 	json.Unmarshal(rec.Body.Bytes(), &errResp)
 	if errResp.FailedID != created.ID {
 		t.Errorf("failed_id = %d, want %d", errResp.FailedID, created.ID)
 	}
-	if !strings.Contains(errResp.Error, "已失效") {
-		t.Errorf("error should mention expired, got: %s", errResp.Error)
+	if errResp.Error.Code != "invalid_request" || !strings.Contains(errResp.Error.Message, "已失效") {
+		t.Errorf("error should be invalid_request and mention expired, got: %+v", errResp.Error)
 	}
 }
 
@@ -683,8 +692,11 @@ func TestBatchDeletePricing_HasDonation(t *testing.T) {
 	}
 
 	var errResp struct {
-		OK         bool              `json:"ok"`
-		Error      string            `json:"error"`
+		OK    bool `json:"ok"`
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
 		FailedPair map[string]string `json:"failed_pair"`
 	}
 	json.Unmarshal(rec.Body.Bytes(), &errResp)
@@ -694,8 +706,8 @@ func TestBatchDeletePricing_HasDonation(t *testing.T) {
 	if errResp.FailedPair["service"] != "general" || errResp.FailedPair["model"] != "has-donation" {
 		t.Errorf("failed_pair = %v, want {general, has-donation}", errResp.FailedPair)
 	}
-	if !strings.Contains(errResp.Error, "存在捐赠条目") {
-		t.Errorf("error should mention donation dependency, got: %s", errResp.Error)
+	if errResp.Error.Code != "invalid_request" || !strings.Contains(errResp.Error.Message, "存在捐赠条目") {
+		t.Errorf("error should be invalid_request and mention donation dependency, got: %+v", errResp.Error)
 	}
 
 	// Verify no-donation pricing still exists (not partially deleted).

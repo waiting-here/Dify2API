@@ -278,7 +278,7 @@ func (g *Gateway) userFromCallerKey(r *http.Request) *db.User {
 // global charity switch is on.
 func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 	user := g.userFromCallerKey(r)
@@ -337,7 +337,7 @@ func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
 
 func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 
@@ -379,14 +379,14 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		if g.Config.Debug {
 			dumpDebugRequest(g.Config.DebugDir, r, rawBody, "decode failed: "+err.Error(), nil)
 		}
-		http.Error(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
+		g.writeError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("invalid request: %v", err))
 		return
 	}
 	if len(req.Messages) == 0 {
 		if g.Config.Debug {
 			dumpDebugRequest(g.Config.DebugDir, r, rawBody, "messages array is empty", nil)
 		}
-		http.Error(w, "messages array is empty", http.StatusBadRequest)
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "messages array is empty")
 		return
 	}
 
@@ -907,7 +907,7 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		g.logRequest(userID, modelName, service, startedAt, "error", "stream_unsupported", http.StatusInternalServerError, "response writer does not support streaming", "")
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		g.writeError(w, http.StatusInternalServerError, "internal", "streaming not supported")
 		return
 	}
 
@@ -1155,7 +1155,7 @@ func (g *Gateway) logRequest(userID int64, model, service string, startedAt time
 // handleListLogs returns the session user's recent request logs.
 func (g *Gateway) handleListLogs(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		g.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 	u := g.currentUser(r)

@@ -10,17 +10,137 @@ import (
 	"strings"
 	"time"
 
+	"dify2api/auth"
 	"dify2api/db"
 )
 
 // Wrap applies gateway-wide middleware, outermost first:
 //  1. Reject unknown Host values before constructing any redirect.
-//  2. HTTPS enforcement using a configured, fixed redirect authority.
-//  3. Host-based separation between the user site and the admin site.
-//  4. Maintenance mode and per-IP web rate limiting.
-//  5. A hard byte cap for state-changing /api/* request bodies.
+//  2. Security response headers.
+//  3. HTTPS enforcement using a configured, fixed redirect authority.
+//  4. Host-based separation between the user site and the admin site.
+//  5. Origin checks for cookie-authenticated state changes.
+//  6. Maintenance mode and per-IP web rate limiting.
+//  7. A hard byte cap for state-changing /api/* request bodies.
 func (g *Gateway) Wrap(next http.Handler) http.Handler {
-	return g.validateHost(g.forceHTTPS(g.hostSeparation(g.maintenanceCheck(g.webRateLimit(g.webBodyLimit(next))))))
+	return g.validateHost(g.securityHeaders(g.forceHTTPS(g.hostSeparation(g.csrfOriginCheck(g.maintenanceCheck(g.webRateLimit(g.webBodyLimit(g.apiErrorEnvelope(next)))))))))
+}
+
+// apiErrorEnvelope converts the standard library ServeMux's plaintext 404/405
+// fallback into the same JSON contract used by application handlers. It only
+// touches API paths and preserves successful responses, HTML pages, and SSE.
+func (g *Gateway) apiErrorEnvelope(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/") && !strings.HasPrefix(r.URL.Path, "/v1/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		base := &apiErrorResponseWriter{ResponseWriter: w, gateway: g}
+		if _, ok := w.(http.Flusher); ok {
+			next.ServeHTTP(&apiErrorFlushingResponseWriter{apiErrorResponseWriter: base}, r)
+			return
+		}
+		next.ServeHTTP(base, r)
+	})
+}
+
+type apiErrorResponseWriter struct {
+	http.ResponseWriter
+	gateway  *Gateway
+	replaced bool
+}
+
+func (w *apiErrorResponseWriter) WriteHeader(status int) {
+	contentType := strings.ToLower(w.Header().Get("Content-Type"))
+	if (status == http.StatusNotFound || status == http.StatusMethodNotAllowed) &&
+		!strings.HasPrefix(contentType, "application/json") {
+		code := "not_found"
+		if status == http.StatusMethodNotAllowed {
+			code = "method_not_allowed"
+		}
+		w.Header().Del("Content-Length")
+		w.gateway.writeError(w.ResponseWriter, status, code, strings.ToLower(http.StatusText(status)))
+		w.replaced = true
+		return
+	}
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *apiErrorResponseWriter) Write(p []byte) (int, error) {
+	if w.replaced {
+		return len(p), nil
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+type apiErrorFlushingResponseWriter struct {
+	*apiErrorResponseWriter
+}
+
+func (w *apiErrorFlushingResponseWriter) Flush() {
+	w.ResponseWriter.(http.Flusher).Flush()
+}
+
+func (g *Gateway) securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		if g.requestIsHTTPS(r) {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (g *Gateway) requestIsHTTPS(r *http.Request) bool {
+	return r.TLS != nil || (g.trustedProxyRequest(r) && strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https"))
+}
+
+// csrfOriginCheck protects browser session endpoints from cross-site state
+// changes. Anonymous requests (including admin login) and caller-key /v1
+// requests retain their existing semantics; a request is subject to this check
+// only when it carries the session cookie and targets a mutating /api route.
+func (g *Gateway) csrfOriginCheck(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isStateChangingMethod(r.Method) || !strings.HasPrefix(r.URL.Path, "/api/") || auth.SessionToken(r) == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		origin := strings.TrimSpace(r.Header.Get("Origin"))
+		if origin == "" || !g.sameSiteOrigin(r, origin) {
+			g.writeError(w, http.StatusForbidden, "forbidden", "invalid request origin")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func isStateChangingMethod(method string) bool {
+	switch method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
+}
+
+func (g *Gateway) sameSiteOrigin(r *http.Request, rawOrigin string) bool {
+	originURL, err := url.Parse(rawOrigin)
+	if err != nil || originURL.Scheme == "" || originURL.Host == "" || originURL.User != nil || originURL.Path != "" || originURL.RawQuery != "" || originURL.Fragment != "" {
+		return false
+	}
+	siteURL, err := url.Parse(g.Config.Admin.SiteBaseURL)
+	if err != nil || siteURL.Scheme == "" || siteURL.Host == "" {
+		return false
+	}
+	expected := siteURL
+	if g.isAdminHost(r) {
+		expected = &url.URL{Scheme: siteURL.Scheme, Host: g.Config.Admin.AdminHost}
+	}
+	return canonicalOrigin(originURL) == canonicalOrigin(expected)
 }
 
 // webRateLimit applies the per-IP sliding-window limit to /api/* session
@@ -49,7 +169,7 @@ func (g *Gateway) validateHost(next http.Handler) http.Handler {
 		host := stripPort(r.Host)
 		if !strings.EqualFold(host, g.Config.Admin.SiteHost) &&
 			!strings.EqualFold(host, stripPort(g.Config.Admin.AdminHost)) {
-			http.Error(w, "misdirected request", http.StatusMisdirectedRequest)
+			g.writeError(w, http.StatusMisdirectedRequest, "invalid_request", "misdirected request")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -60,8 +180,7 @@ func (g *Gateway) validateHost(next http.Handler) http.Handler {
 // forwarding proto is trusted only from an explicitly configured proxy peer.
 func (g *Gateway) forceHTTPS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		forwardedHTTPS := g.trustedProxyRequest(r) && strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
-		if g.Config.ForceHTTPS && r.TLS == nil && !forwardedHTTPS {
+		if g.Config.ForceHTTPS && !g.requestIsHTTPS(r) {
 			host := g.Config.Admin.SiteURLHost
 			if g.isAdminHost(r) {
 				host = g.Config.Admin.AdminHost
@@ -122,7 +241,11 @@ func (g *Gateway) hostSeparation(next http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			g.serve404Page(w, r)
+			if strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, "/v1/") {
+				g.writeError(w, http.StatusNotFound, "not_found", "not found")
+			} else {
+				g.serve404Page(w, r)
+			}
 			return
 		}
 		// User site: admin endpoints are not exposed here.

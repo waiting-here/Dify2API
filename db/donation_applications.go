@@ -21,6 +21,18 @@ const (
 // would exceed the user's configured pending-review limit.
 var ErrPendingApplicationLimit = errors.New("pending donation application limit reached")
 
+// ApplicationDeadlineError reports an approval whose effective deadline has
+// already elapsed. The check lives inside the approval transaction so batch
+// and future callers cannot bypass the HTTP-layer validation.
+type ApplicationDeadlineError struct {
+	ApplicationID int64
+	Deadline      int64
+}
+
+func (e *ApplicationDeadlineError) Error() string {
+	return fmt.Sprintf("application %d deadline has expired", e.ApplicationID)
+}
+
 // ApplicationReviewError identifies an application that could not be claimed
 // for review because it is absent or no longer pending. Batch callers use the
 // ID to report the item that caused the whole transaction to roll back.
@@ -315,6 +327,9 @@ func (s *Store) approveApplicationTx(tx *sql.Tx, id int64, reviewerID int64, m *
 	}
 	if m.RpmLimit > 0 {
 		rpmLimit = m.RpmLimit
+	}
+	if deadline <= now {
+		return nil, nil, &ApplicationDeadlineError{ApplicationID: id, Deadline: deadline}
 	}
 
 	// Compute SHA-256 of the plaintext API key for duplicate detection.

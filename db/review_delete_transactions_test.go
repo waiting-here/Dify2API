@@ -31,6 +31,38 @@ func reviewTransactionFixture(t *testing.T) (*Store, *User, *User, *DonationAppl
 	return st, applicant, reviewer, app
 }
 
+func TestApproveApplicationRejectsExpiredEffectiveDeadline(t *testing.T) {
+	st, applicant, reviewer, app := reviewTransactionFixture(t)
+	past := time.Now().Add(-time.Hour).Unix()
+	_, _, err := st.ApproveApplication(app.ID, reviewer.ID, &ApproveApplicationFields{Deadline: past}, "expired")
+	var deadlineErr *ApplicationDeadlineError
+	if !errors.As(err, &deadlineErr) || deadlineErr.ApplicationID != app.ID {
+		t.Fatalf("ApproveApplication err=%v, want deadline error for %d", err, app.ID)
+	}
+	got, _ := st.GetApplication(app.ID)
+	if got == nil || got.Status != AppStatusPending || got.DonationID.Valid {
+		t.Fatalf("application changed after rejected approval: %+v", got)
+	}
+
+	expired, err := st.CreateDonationApplication(applicant.ID, "general", "expired-batch", "https://dify.example.com/v1", "expired-key", 10, past, 5, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ApproveApplications([]int64{app.ID, expired.ID}, reviewer.ID, "batch"); !errors.As(err, &deadlineErr) {
+		t.Fatalf("ApproveApplications err=%v, want deadline error", err)
+	}
+	for _, id := range []int64{app.ID, expired.ID} {
+		got, _ := st.GetApplication(id)
+		if got == nil || got.Status != AppStatusPending || got.DonationID.Valid {
+			t.Fatalf("application %d changed despite batch rollback: %+v", id, got)
+		}
+	}
+	var donations int
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM donations WHERE model IN ('review-model','expired-batch')`).Scan(&donations); err != nil || donations != 0 {
+		t.Fatalf("donations=%d err=%v, want 0", donations, err)
+	}
+}
+
 func TestApplicationReview_ConcurrentApproveCreatesOneDonation(t *testing.T) {
 	st, _, reviewer, app := reviewTransactionFixture(t)
 	start := make(chan struct{})

@@ -129,6 +129,74 @@ func TestSessions(t *testing.T) {
 	}
 }
 
+func TestSessionSlidingExpiryHasAbsoluteLimit(t *testing.T) {
+	st, _ := openTemp(t)
+	u, _ := st.CreateUser("session-limit", "session-limit", "")
+	token, _, err := st.CreateSession(u.ID)
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	created := time.Unix(2_000_000_000, 0)
+	if _, err := st.db.Exec(`UPDATE sessions SET created_at=?, expires_at=? WHERE id=?`,
+		created.Unix(), created.Add(29*24*time.Hour+time.Hour).Unix(), token); err != nil {
+		t.Fatalf("seed session times: %v", err)
+	}
+
+	// Activity near the absolute deadline renews only up to that deadline.
+	lookupAt := created.Add(29 * 24 * time.Hour)
+	got, err := st.getSessionUserAt(token, lookupAt)
+	if err != nil || got == nil {
+		t.Fatalf("near-limit lookup: user=%v err=%v", got, err)
+	}
+	var expiresAt int64
+	if err := st.db.QueryRow(`SELECT expires_at FROM sessions WHERE id=?`, token).Scan(&expiresAt); err != nil {
+		t.Fatalf("read renewed expiry: %v", err)
+	}
+	wantAbsolute := created.Add(SessionAbsoluteTTL).Unix()
+	if expiresAt != wantAbsolute {
+		t.Fatalf("renewed expiry=%d, want absolute limit %d", expiresAt, wantAbsolute)
+	}
+
+	// The exact absolute boundary is expired and the token is removed.
+	got, err = st.getSessionUserAt(token, created.Add(SessionAbsoluteTTL))
+	if err != nil || got != nil {
+		t.Fatalf("absolute-boundary lookup: user=%v err=%v", got, err)
+	}
+	var count int
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE id=?`, token).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("expired session count=%d err=%v", count, err)
+	}
+}
+
+func TestSessionIdleBoundaryAndAbsolutePurge(t *testing.T) {
+	st, _ := openTemp(t)
+	u, _ := st.CreateUser("session-purge", "session-purge", "")
+	token, _, _ := st.CreateSession(u.ID)
+	base := time.Unix(2_100_000_000, 0)
+	idleExpiry := base.Add(time.Hour)
+	if _, err := st.db.Exec(`UPDATE sessions SET created_at=?, expires_at=? WHERE id=?`,
+		base.Unix(), idleExpiry.Unix(), token); err != nil {
+		t.Fatalf("seed idle session: %v", err)
+	}
+	if got, err := st.getSessionUserAt(token, idleExpiry); err != nil || got != nil {
+		t.Fatalf("idle-boundary lookup: user=%v err=%v", got, err)
+	}
+
+	legacy, _, _ := st.CreateSession(u.ID)
+	now := time.Now()
+	if _, err := st.db.Exec(`UPDATE sessions SET created_at=?, expires_at=? WHERE id=?`,
+		now.Add(-SessionAbsoluteTTL-time.Hour).Unix(), now.Add(time.Hour).Unix(), legacy); err != nil {
+		t.Fatalf("seed legacy session: %v", err)
+	}
+	if n, err := st.PurgeExpiredSessions(); err != nil || n < 1 {
+		t.Fatalf("PurgeExpiredSessions: n=%d err=%v", n, err)
+	}
+	if got, _ := st.GetSessionUser(legacy); got != nil {
+		t.Fatal("absolute-expired legacy session survived purge")
+	}
+}
+
 func TestSettings(t *testing.T) {
 	st, _ := openTemp(t)
 

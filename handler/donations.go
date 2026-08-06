@@ -931,7 +931,7 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 	if !ok {
 		g.logRequestDonation(userID, modelName, service, startedAt, "error", "stream_unsupported",
 			http.StatusInternalServerError, "response writer does not support streaming", donationID, reservation.Price, "")
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		g.writeError(w, http.StatusInternalServerError, "internal", "streaming not supported")
 		return
 	}
 
@@ -1492,6 +1492,14 @@ func (g *Gateway) handleApproveApplication(w http.ResponseWriter, r *http.Reques
 		g.writeError(w, http.StatusNotFound, "not_found", "application not found")
 		return
 	}
+	effectiveDeadline := req.Deadline
+	if effectiveDeadline == 0 {
+		effectiveDeadline = existingApp.Deadline
+	}
+	if effectiveDeadline <= time.Now().Unix() {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "application deadline has expired")
+		return
+	}
 	effectiveBaseURL := req.DifyBaseURL
 	if effectiveBaseURL == "" {
 		effectiveBaseURL = existingApp.DifyBaseURL
@@ -1591,8 +1599,12 @@ func writeBatchDonationError(w http.ResponseWriter, msg string, id int64) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusBadRequest)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ok":        false,
-		"error":     msg,
+		"ok": false,
+		"error": map[string]interface{}{
+			"message": "[Dify2API] " + msg,
+			"type":    "invalid_request",
+			"code":    "invalid_request",
+		},
 		"failed_id": id,
 	})
 }
@@ -1602,8 +1614,12 @@ func writeBatchPairError(w http.ResponseWriter, msg string, service, model strin
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusBadRequest)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ok":          false,
-		"error":       msg,
+		"ok": false,
+		"error": map[string]interface{}{
+			"message": "[Dify2API] " + msg,
+			"type":    "invalid_request",
+			"code":    "invalid_request",
+		},
 		"failed_pair": map[string]string{"service": service, "model": model},
 	})
 }
@@ -1647,6 +1663,10 @@ func (g *Gateway) handleBatchApproveApplications(w http.ResponseWriter, r *http.
 				fmt.Sprintf("申请 %d 状态不是 pending（当前：%s）", id, app.Status), id)
 			return
 		}
+		if app.Deadline <= time.Now().Unix() {
+			writeBatchDonationError(w, fmt.Sprintf("申请 %d 的截止时间已过期", id), id)
+			return
+		}
 		if _, baseErr := g.difyPolicy.ValidateBaseURL(app.DifyBaseURL); baseErr != nil {
 			writeBatchDonationError(w, fmt.Sprintf("申请 %d 的 Dify 地址不符合出站安全策略", id), id)
 			return
@@ -1657,6 +1677,11 @@ func (g *Gateway) handleBatchApproveApplications(w http.ResponseWriter, r *http.
 		var stateErr *db.ApplicationReviewError
 		if errors.As(err, &stateErr) {
 			writeBatchDonationError(w, err.Error(), stateErr.ApplicationID)
+			return
+		}
+		var deadlineErr *db.ApplicationDeadlineError
+		if errors.As(err, &deadlineErr) {
+			writeBatchDonationError(w, err.Error(), deadlineErr.ApplicationID)
 			return
 		}
 		g.writeError(w, http.StatusInternalServerError, "internal", fmt.Sprintf("批量批准申请失败: %v", err))

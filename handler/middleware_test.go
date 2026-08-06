@@ -9,8 +9,175 @@ import (
 	"strings"
 	"testing"
 
+	"dify2api/auth"
 	"dify2api/db"
 )
+
+func TestCSRFCookieOriginBoundary(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "x")
+	mux := http.NewServeMux()
+	ok := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
+	mux.HandleFunc("POST /api/test", ok)
+	mux.HandleFunc("POST /api/admin/test", ok)
+	mux.HandleFunc("POST /v1/test", ok)
+	h := gw.Wrap(mux)
+	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: "session-token"}
+
+	tests := []struct {
+		name   string
+		url    string
+		origin string
+		cookie bool
+		want   int
+	}{
+		{name: "anonymous api request keeps existing semantics", url: "http://localhost:10086/api/test", want: http.StatusNoContent},
+		{name: "missing origin", url: "http://localhost:10086/api/test", cookie: true, want: http.StatusForbidden},
+		{name: "wrong origin", url: "http://localhost:10086/api/test", origin: "https://evil.example", cookie: true, want: http.StatusForbidden},
+		{name: "admin origin on user host", url: "http://localhost:10086/api/test", origin: "http://admin.localhost", cookie: true, want: http.StatusForbidden},
+		{name: "user same origin", url: "http://localhost:10086/api/test", origin: "http://localhost:10086", cookie: true, want: http.StatusNoContent},
+		{name: "origin with path rejected", url: "http://localhost:10086/api/test", origin: "http://localhost:10086/path", cookie: true, want: http.StatusForbidden},
+		{name: "user origin on admin host", url: "http://admin.localhost/api/admin/test", origin: "http://localhost:10086", cookie: true, want: http.StatusForbidden},
+		{name: "admin same origin", url: "http://admin.localhost/api/admin/test", origin: "http://admin.localhost", cookie: true, want: http.StatusNoContent},
+		{name: "caller key api is not a cookie csrf surface", url: "http://localhost:10086/v1/test", origin: "https://evil.example", cookie: true, want: http.StatusNoContent},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tc.url, nil)
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			if tc.cookie {
+				req.AddCookie(cookie)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status=%d want=%d body=%s", rec.Code, tc.want, rec.Body.String())
+			}
+			if tc.want == http.StatusForbidden {
+				var out struct {
+					Error struct {
+						Code string `json:"code"`
+						Type string `json:"type"`
+					} `json:"error"`
+				}
+				if err := json.NewDecoder(rec.Body).Decode(&out); err != nil || out.Error.Code != "forbidden" || out.Error.Type != "forbidden" {
+					t.Fatalf("csrf response=%+v decode err=%v", out, err)
+				}
+			}
+		})
+	}
+}
+
+func TestGatewayAPIErrorEnvelopes(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "x")
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	h := gw.Wrap(mux)
+	tests := []struct {
+		name string
+		url  string
+		want int
+		code string
+	}{
+		{name: "unknown host", url: "http://attacker.example/api/me", want: http.StatusMisdirectedRequest, code: "invalid_request"},
+		{name: "admin api hidden on user host", url: "http://localhost:10086/api/admin/users", want: http.StatusNotFound, code: "not_found"},
+		{name: "user api hidden on admin host", url: "http://admin.localhost/api/configs", want: http.StatusNotFound, code: "not_found"},
+		{name: "unknown user api path", url: "http://localhost:10086/api/not-registered", want: http.StatusNotFound, code: "not_found"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tc.url, nil)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status=%d want=%d body=%s", rec.Code, tc.want, rec.Body.String())
+			}
+			var out struct {
+				Error struct {
+					Code    string `json:"code"`
+					Type    string `json:"type"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if err := json.NewDecoder(rec.Body).Decode(&out); err != nil || out.Error.Code != tc.code || out.Error.Type != tc.code || !strings.HasPrefix(out.Error.Message, "[Dify2API]") {
+				t.Fatalf("response=%+v decode err=%v", out, err)
+			}
+		})
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "http://localhost:10086/v1/models", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("method mismatch status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var methodOut struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&methodOut); err != nil || methodOut.Error.Code != "method_not_allowed" {
+		t.Fatalf("method response=%+v decode err=%v", methodOut, err)
+	}
+}
+
+func TestSecurityHeadersAcrossResponseTypes(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "x")
+	mux := http.NewServeMux()
+	for path, contentType := range map[string]string{
+		"/":              "text/html; charset=utf-8",
+		"/static/test":   "text/css",
+		"/api/test-json": "application/json",
+		"/api/test-sse":  "text/event-stream",
+	} {
+		path, contentType := path, contentType
+		mux.HandleFunc("GET "+path, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", contentType)
+			w.WriteHeader(http.StatusOK)
+		})
+	}
+	h := gw.Wrap(mux)
+	for _, path := range []string{"/", "/static/test", "/api/test-json", "/api/test-sse"} {
+		req := httptest.NewRequest(http.MethodGet, "http://localhost:10086"+path, nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s", path, rec.Code, rec.Body.String())
+		}
+		for name, want := range map[string]string{
+			"X-Content-Type-Options": "nosniff",
+			"X-Frame-Options":        "DENY",
+			"Referrer-Policy":        "no-referrer",
+		} {
+			if got := rec.Header().Get(name); got != want {
+				t.Errorf("%s %s=%q want=%q", path, name, got, want)
+			}
+		}
+		if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'none'") || !strings.Contains(csp, "script-src 'self'") {
+			t.Errorf("%s CSP=%q", path, csp)
+		}
+		if rec.Header().Get("Strict-Transport-Security") != "" {
+			t.Errorf("%s sent HSTS over plain HTTP", path)
+		}
+	}
+
+	secureReq := httptest.NewRequest(http.MethodGet, "https://localhost:10086/", nil)
+	secureRec := httptest.NewRecorder()
+	h.ServeHTTP(secureRec, secureReq)
+	if got := secureRec.Header().Get("Strict-Transport-Security"); !strings.Contains(got, "max-age=") {
+		t.Fatalf("HTTPS HSTS=%q", got)
+	}
+
+	proxyReq := httptest.NewRequest(http.MethodGet, "http://localhost:10086/", nil)
+	proxyReq.RemoteAddr = "127.0.0.1:12345"
+	proxyReq.Header.Set("X-Forwarded-Proto", "https")
+	proxyRec := httptest.NewRecorder()
+	h.ServeHTTP(proxyRec, proxyReq)
+	if proxyRec.Header().Get("Strict-Transport-Security") == "" {
+		t.Fatal("trusted forwarded HTTPS did not receive HSTS")
+	}
+}
 
 func TestForceHTTPS_Redirect(t *testing.T) {
 	gw, _ := setupAuthGateway(t, "x")
