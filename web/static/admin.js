@@ -125,16 +125,25 @@ function switchAdminTab(tab) {
   if (btn) btn.classList.add("active");
   const content = $(`#tab-${tab}`);
   if (content) content.style.display = "";
-  // Lazy load on first activation.
+  // Lazy load on first activation. Mark the tab loaded only after its async
+  // init succeeds, so a failed load can be retried by leaving and re-entering.
   if (!_adminTabLoaded[tab]) {
-    _adminTabLoaded[tab] = true;
-    switch (tab) {
-      case "users": initAdminUsersTab(); break;
-      case "logs": initAdminLogsTab(); break;
-      case "donations": initAdminDonationsTab(); break;
-      case "alerts": initAdminAlertsTab(); break;
-      case "bulletins": initAdminBulletinsTab(); break;
-      case "antiabuse": initAdminAntiAbuseTab(); break;
+    const inits = {
+      users: initAdminUsersTab,
+      logs: initAdminLogsTab,
+      donations: initAdminDonationsTab,
+      alerts: initAdminAlertsTab,
+      bulletins: initAdminBulletinsTab,
+      antiabuse: initAdminAntiAbuseTab,
+    };
+    const fn = inits[tab];
+    if (fn) {
+      Promise.resolve(fn()).then(
+        () => { _adminTabLoaded[tab] = true; },
+        () => toast(T('tabLoadFailed'), 3000)
+      );
+    } else {
+      _adminTabLoaded[tab] = true;
     }
   } else if (tab === "logs") {
     // A chart hidden by another tab can have a stale zero-sized layout.
@@ -161,7 +170,7 @@ async function initAdminLogsTab() {
   let svcOpts = `<option value="">${T('adminLogsAllServices')}</option>`;
   data.services.forEach((s) => { svcOpts += `<option value="${esc(s.name)}">${esc(s.name)}</option>`; });
   $("#alf-service").innerHTML = svcOpts;
-  $("#alf-query").onclick = () => { adminLogPager.page = 1; loadAdminLogs(); };
+  $("#alf-query").onclick = () => { adminLogPager.page = 1; loadAdminLogs(); loadAdminLogStats(); };
   $("#alf-export").onclick = onExportLogs;
   await loadAdminLogStats();
   await loadAdminLogs();
@@ -363,9 +372,6 @@ async function renderAdminDashboard() {
           <div class="admin-log-chart" id="alf-day-chart-wrap">
             <canvas id="alf-day-chart" role="img" aria-label="${esc(T('adminLogsDailyChartAria'))}" aria-describedby="alf-chart-summary">${esc(T('adminLogsDailyChartAria'))}</canvas>
           </div>
-          <div class="admin-log-chart" id="alf-service-chart-wrap">
-            <canvas id="alf-service-chart" role="img" aria-label="${esc(T('adminLogsServiceChartAria'))}" aria-describedby="alf-chart-summary">${esc(T('adminLogsServiceChartAria'))}</canvas>
-          </div>
           <p id="alf-chart-summary" class="sr-only" aria-live="polite"></p>
         </div>
         <div class="table-wrap"><table><thead><tr><th>${T('thTime')}</th><th>${T('thUser')}</th><th>${T('thModel')}</th><th>${T('thService')}</th><th>${T('thDuration')}</th><th>${T('thStatus')}</th><th>${T('thHTTPStatus')}</th><th>${T('thErrorCode')}</th><th>${T('thErrorDetail')}</th><th>${T('thCreditsConsumed')}</th><th>${T('thAntiAbuse')}</th><th>${T('thDonationSource')}</th></tr></thead><tbody id="alf-rows"></tbody></table></div>
@@ -447,11 +453,11 @@ async function renderAdminDashboard() {
           <button class="secondary batch-don-deactivate" style="width:auto;margin:0">${T('batchDeactivate')}</button>
           <button class="contrast outline batch-don-delete" style="width:auto;margin:0">${T('batchDelete')}</button>
         </div>
-        <div id="don-filter" style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:.75rem">
-          <label style="margin-bottom:0">${T('charityThStatus')}<select id="don-filter-status" style="width:auto;margin-bottom:0"><option value="">${T('donationAppStatusAll')}</option><option value="active">${T('charityStatusActive')}</option><option value="inactive">${T('charityStatusInactive')}</option><option value="expired">${T('charityStatusExpired')}</option></select></label>
-          <label style="margin-bottom:0">${T('thService')}<select id="don-filter-service" style="width:auto;margin-bottom:0"><option value="">${T('adminLogsAllServices')}</option></select></label>
-          <label style="margin-bottom:0">${T('donFilterKeyword')}<input id="don-filter-q" placeholder="${T('donFilterKeywordPlaceholder')}" style="width:14rem;margin-bottom:0" autocomplete="off"></label>
-          <label style="margin-bottom:0">${T('thUser')}<input id="don-filter-user" list="don-filter-user-list" placeholder="${T('adminLogsUserSearch')}" style="margin-bottom:0" autocomplete="off"><datalist id="don-filter-user-list"></datalist></label>
+        <div id="don-filter">
+          <label>${T('charityThStatus')}<select id="don-filter-status"><option value="">${T('donationAppStatusAll')}</option><option value="active">${T('charityStatusActive')}</option><option value="inactive">${T('charityStatusInactive')}</option><option value="expired">${T('charityStatusExpired')}</option></select></label>
+          <label>${T('thService')}<select id="don-filter-service"><option value="">${T('adminLogsAllServices')}</option></select></label>
+          <label>${T('donFilterKeyword')}<input id="don-filter-q" placeholder="${T('donFilterKeywordPlaceholder')}" autocomplete="off"></label>
+          <label>${T('thUser')}<input id="don-filter-user" list="don-filter-user-list" placeholder="${T('adminLogsUserSearch')}" autocomplete="off"><datalist id="don-filter-user-list"></datalist></label>
         </div>
         <div class="table-wrap"><table><thead><tr>
           <th><input type="checkbox" id="don-select-all" title="${T('batchSelectAll')}"></th>
@@ -888,7 +894,8 @@ async function loadAdminLogs() {
   const until = $("#alf-until").value;
   if (until) params.set("until", String(Math.floor(new Date(until).getTime() / 1000)));
   // Server-side pagination: "全部" uses a large value (no server cap).
-  const size = adminLogPager.size === Infinity ? 10000 : adminLogPager.size;
+  // If the total exceeds it, truncatedListNote surfaces the truncation.
+  const size = adminLogPager.size === Infinity ? MAX_SERVER_ROWS : adminLogPager.size;
   params.set("limit", String(size));
   params.set("offset", String((adminLogPager.page - 1) * size));
 
@@ -920,7 +927,8 @@ function renderAdminLogs(data) {
     </select>
     <button class="pg-prev secondary" ${adminLogPager.page <= 1 ? "disabled" : ""}>‹</button>
     <span class="muted">${T('paginationInfo').replace('{page}', String(adminLogPager.page)).replace('{pages}', String(pages)).replace('{total}', String(total))}</span>
-    <button class="pg-next secondary" ${adminLogPager.page >= pages ? "disabled" : ""}>›</button>`;
+    <button class="pg-next secondary" ${adminLogPager.page >= pages ? "disabled" : ""}>›</button>
+    ${truncatedListNote(total, size)}`;
 
   const c = $("#alf-pager");
   c.querySelector(".pg-size").onchange = (e) => {
@@ -982,22 +990,83 @@ async function onExportLogs() {
   }
 }
 
+let _adminLogStatsRequest = 0;
+
+// Merge UTC hour buckets into local-timezone days. Missing days are filled by
+// walking the local calendar (setDate), which is DST-safe: a fixed 86400s step
+// would land on the wrong local day across a DST transition.
+function mergeHourStatsToLocalDays(byHour) {
+  const pad = (n) => String(n).padStart(2, "0");
+  const dayKey = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const days = new Map();
+  let minMs = Infinity;
+  let maxMs = -Infinity;
+  for (const h of byHour) {
+    const ms = Number(h.hour_unix) * 1000;
+    if (!Number.isFinite(ms) || ms <= 0) continue;
+    const d = new Date(ms);
+    const key = dayKey(d);
+    const cur = days.get(key) || { date: key, success: 0, error: 0 };
+    cur.success += Number(h.success) || 0;
+    cur.error += Number(h.error) || 0;
+    days.set(key, cur);
+    if (ms < minMs) minMs = ms;
+    if (ms > maxMs) maxMs = ms;
+  }
+  if (days.size === 0) return [];
+  const out = [];
+  const cursor = new Date(minMs);
+  cursor.setHours(0, 0, 0, 0); // local midnight of the first day
+  const last = new Date(maxMs);
+  last.setHours(23, 59, 59, 999);
+  while (cursor <= last) {
+    const key = dayKey(cursor);
+    out.push(days.get(key) || { date: key, success: 0, error: 0 });
+    cursor.setDate(cursor.getDate() + 1); // local calendar day increment
+  }
+  return out;
+}
+
 async function loadAdminLogStats() {
   if (!$("#alf-chart-area")) return;
-  let data;
-  try {
-    data = await api("/api/admin/logs/stats?days=7");
-  } catch {
+  // Mirror loadAdminLogs' filter parsing (no pagination): the chart must
+  // follow the exact same filter semantics as the table, and a bad filter
+  // must not silently fall back to the full dataset.
+  const params = new URLSearchParams();
+  const resolved = resolveLogUserFilter($("#alf-user").value);
+  if (resolved.error) {
     _adminLogStats = null;
     hideAdminLogCharts();
     return;
   }
+  if (resolved.id !== null) params.set("user_id", String(resolved.id));
+  const svc = $("#alf-service").value;
+  if (svc) params.set("service", svc);
+  const model = $("#alf-model").value.trim();
+  if (model) params.set("model", model);
+  const st = $("#alf-status").value;
+  if (st) params.set("status", st);
+  const since = $("#alf-since").value;
+  if (since) params.set("since", String(Math.floor(new Date(since).getTime() / 1000)));
+  const until = $("#alf-until").value;
+  if (until) params.set("until", String(Math.floor(new Date(until).getTime() / 1000)));
 
-  _adminLogStats = {
-    by_day: Array.isArray(data.by_day) ? data.by_day : [],
-    by_service: Array.isArray(data.by_service) ? data.by_service : [],
-  };
-  if (_adminLogStats.by_day.length === 0) {
+  // Stale-response guard: rapid consecutive queries must never let an older
+  // in-flight response overwrite a newer one (or its chart state).
+  const request = ++_adminLogStatsRequest;
+  let data;
+  try {
+    data = await api(`/api/admin/logs/stats?${params.toString()}`);
+  } catch {
+    if (request !== _adminLogStatsRequest) return;
+    _adminLogStats = null;
+    hideAdminLogCharts();
+    return;
+  }
+  if (request !== _adminLogStatsRequest) return;
+
+  _adminLogStats = { by_hour: Array.isArray(data.by_hour) ? data.by_hour : [] };
+  if (_adminLogStats.by_hour.length === 0) {
     hideAdminLogCharts();
     return;
   }
@@ -1008,14 +1077,11 @@ async function loadAdminLogStats() {
   }
 }
 
-function buildAdminLogChartSummary(byDay, byService) {
+function buildAdminLogChartSummary(byDay) {
   const daily = byDay.map((d) =>
     `${d.date}: ${T('adminLogsSuccess')} ${Number(d.success) || 0}, ${T('adminLogsError')} ${Number(d.error) || 0}`
   ).join("; ");
-  const services = byService.map((s) =>
-    `${s.service}: ${Number(s.count) || 0}`
-  ).join("; ");
-  return `${T('adminLogsChartSummary')}: ${daily}. ${T('adminLogsByService')}: ${services || T('empty')}.`;
+  return `${T('adminLogsChartSummary')}: ${daily}.`;
 }
 
 async function renderAdminLogCharts(stats) {
@@ -1025,13 +1091,10 @@ async function renderAdminLogCharts(stats) {
 
   const area = $("#alf-chart-area");
   const dayCanvas = $("#alf-day-chart");
-  const serviceCanvas = $("#alf-service-chart");
-  const serviceWrap = $("#alf-service-chart-wrap");
   const summary = $("#alf-chart-summary");
-  if (generation !== _adminLogChartGeneration || !area || !dayCanvas || !serviceCanvas || !adminLogsTabVisible()) return;
+  if (generation !== _adminLogChartGeneration || !area || !dayCanvas || !adminLogsTabVisible()) return;
 
-  const byDay = stats.by_day || [];
-  const byService = stats.by_service || [];
+  const byDay = mergeHourStatsToLocalDays(stats.by_hour || []);
   if (byDay.length === 0) {
     area.style.display = "none";
     return;
@@ -1045,11 +1108,8 @@ async function renderAdminLogCharts(stats) {
   const gridStyle = { color: gridColor };
 
   dayCanvas.setAttribute("aria-label", T('adminLogsDailyChartAria'));
-  serviceCanvas.setAttribute("aria-label", T('adminLogsServiceChartAria'));
-  summary.textContent = buildAdminLogChartSummary(byDay, byService);
+  summary.textContent = buildAdminLogChartSummary(byDay);
   area.style.display = "";
-  serviceWrap.style.display = byService.length > 0 ? "" : "none";
-  serviceWrap.style.setProperty("--admin-service-chart-height", `${Math.min(30, Math.max(12, 5 + byService.length * 2))}rem`);
 
   const dayChart = new ChartJS(dayCanvas, {
     type: "bar",
@@ -1075,31 +1135,6 @@ async function renderAdminLogCharts(stats) {
     },
   });
   _adminLogCharts.push(dayChart);
-
-  if (byService.length > 0) {
-    const serviceChart = new ChartJS(serviceCanvas, {
-      type: "bar",
-      data: {
-        labels: byService.map((s) => s.service),
-        datasets: [{ label: T('adminLogsRequests'), data: byService.map((s) => Number(s.count) || 0), backgroundColor: "#4a7ddb" }],
-      },
-      options: {
-        indexAxis: "y",
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { mode: "nearest", intersect: false },
-        scales: {
-          x: { beginAtZero: true, ticks: { ...tickStyle, precision: 0 }, grid: gridStyle, title: { display: true, text: T('adminLogsRequests'), color: textColor } },
-          y: { ticks: tickStyle, grid: { display: false } },
-        },
-        plugins: {
-          tooltip: { intersect: false },
-          legend: { display: false },
-        },
-      },
-    });
-    _adminLogCharts.push(serviceChart);
-  }
 }
 
 /* ---------------- admin site: alert center ---------------- */
@@ -1190,7 +1225,7 @@ function alertRow(a) {
 }
 
 async function loadAdminAlerts() {
-  const size = alertPager.size === Infinity ? 10000 : alertPager.size;
+  const size = alertPager.size === Infinity ? MAX_SERVER_ROWS : alertPager.size;
   const params = new URLSearchParams({
     limit: String(size),
     offset: String((alertPager.page - 1) * size),
@@ -1223,7 +1258,8 @@ function renderAdminAlerts(data) {
     </select>
     <button class="pg-prev secondary" ${alertPager.page <= 1 ? "disabled" : ""}>‹</button>
     <span class="muted">${T('paginationInfo').replace('{page}', String(alertPager.page)).replace('{pages}', String(pages)).replace('{total}', String(total))}</span>
-    <button class="pg-next secondary" ${alertPager.page >= pages ? "disabled" : ""}>›</button>`;
+    <button class="pg-next secondary" ${alertPager.page >= pages ? "disabled" : ""}>›</button>
+    ${truncatedListNote(total, size)}`;
 
   const c = $("#alert-pager");
   c.querySelector(".pg-size").onchange = (e) => {
@@ -2104,31 +2140,33 @@ async function loadAdminBulletins() {
     adminBulletinPager.afterRender = () => {
       clearBatchSelection("#bulletin-select-all", ".bulletin-chk", "bulletin-batch-bar");
       bindBatchSelectAll("#bulletin-select-all", ".bulletin-chk:not([disabled])", () => refBatchBar("bulletin-batch-bar", ".bulletin-chk:checked"));
+      // Bind edit buttons. Bound here (inside afterRender) so paging the
+      // table re-binds the freshly rendered rows instead of losing the
+      // handlers after a page change.
+      document.querySelectorAll(".bull-edit").forEach((btn) => {
+        btn.onclick = () => {
+          const id = parseInt(btn.dataset.id, 10);
+          const b = adminBulletinPager.data.find((x) => x.id === id);
+          if (!b) return;
+          showBulletinEditDialog(b);
+        };
+      });
+      // Bind delete buttons.
+      document.querySelectorAll(".bull-del").forEach((btn) => {
+        btn.onclick = async () => {
+          if (!confirm(T('bulletinDeleteConfirm'))) return;
+          const id = parseInt(btn.dataset.id, 10);
+          try {
+            await api(`/api/admin/bulletins/${id}`, { method: "DELETE" });
+            toast(T('bulletinDeleted'));
+            await loadAdminBulletins();
+          } catch (err) {
+            toast(T('error').replace("{msg}", err.message), 3000);
+          }
+        };
+      });
     };
     renderPaged(adminBulletinPager, "#admin-bulletin-rows", "#admin-bulletin-pager", 7);
-    // Bind edit buttons.
-    document.querySelectorAll(".bull-edit").forEach((btn) => {
-      btn.onclick = () => {
-        const id = parseInt(btn.dataset.id, 10);
-        const b = adminBulletinPager.data.find((x) => x.id === id);
-        if (!b) return;
-        showBulletinEditDialog(b);
-      };
-    });
-    // Bind delete buttons.
-    document.querySelectorAll(".bull-del").forEach((btn) => {
-      btn.onclick = async () => {
-        if (!confirm(T('bulletinDeleteConfirm'))) return;
-        const id = parseInt(btn.dataset.id, 10);
-        try {
-          await api(`/api/admin/bulletins/${id}`, { method: "DELETE" });
-          toast(T('bulletinDeleted'));
-          await loadAdminBulletins();
-        } catch (err) {
-          toast(T('error').replace("{msg}", err.message), 3000);
-        }
-      };
-    });
   } catch (err) {
     $("#admin-bulletin-rows").innerHTML = `<tr><td colspan="9" class="muted">${T('error').replace("{msg}", err.message)}</td></tr>`;
     $("#admin-bulletin-pager").innerHTML = "";

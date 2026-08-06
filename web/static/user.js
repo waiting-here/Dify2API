@@ -919,25 +919,29 @@ function cfgRow(c) {
 async function loadConfigs() {
   const { configs } = await api("/api/configs");
   cfgPager.data = configs || [];
+  // Bind row actions inside afterRender so they are re-bound after every
+  // render (initial load, page change, page-size change). Binding once after
+  // renderPaged left paged-away rows dead after flipping pages.
+  cfgPager.afterRender = () => {
+    document.querySelectorAll(".cfg-toggle").forEach((cb) => (cb.onchange = async (e) => {
+      const id = e.target.closest("tr").dataset.id;
+      await api(`/api/configs/${id}/toggle`, { method: "POST", body: { enabled: e.target.checked } });
+      toast(T('settingsSaved'));
+    }));
+    document.querySelectorAll(".cfg-del").forEach((b) => (b.onclick = async (e) => {
+      if (!confirm(T('deleteConfirm'))) return;
+      const id = e.target.closest("tr").dataset.id;
+      await api(`/api/configs/${id}`, { method: "DELETE" });
+      await loadConfigs();
+    }));
+    document.querySelectorAll(".cfg-edit").forEach((b) => (b.onclick = (e) => {
+      const id = e.target.closest("tr").dataset.id;
+      const c = cfgPager.data.find((x) => String(x.id) === id);
+      if (!c) return;
+      showConfigEditDialog(c);
+    }));
+  };
   renderPaged(cfgPager, "#cfg-rows", "#cfg-pager", 4);
-
-  document.querySelectorAll(".cfg-toggle").forEach((cb) => (cb.onchange = async (e) => {
-    const id = e.target.closest("tr").dataset.id;
-    await api(`/api/configs/${id}/toggle`, { method: "POST", body: { enabled: e.target.checked } });
-    toast(T('settingsSaved'));
-  }));
-  document.querySelectorAll(".cfg-del").forEach((b) => (b.onclick = async (e) => {
-    if (!confirm(T('deleteConfirm'))) return;
-    const id = e.target.closest("tr").dataset.id;
-    await api(`/api/configs/${id}`, { method: "DELETE" });
-    await loadConfigs();
-  }));
-  document.querySelectorAll(".cfg-edit").forEach((b) => (b.onclick = (e) => {
-    const id = e.target.closest("tr").dataset.id;
-    const c = cfgPager.data.find((x) => String(x.id) === id);
-    if (!c) return;
-    showConfigEditDialog(c);
-  }));
 }
 
 async function showConfigEditDialog(c) {

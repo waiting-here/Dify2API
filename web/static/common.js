@@ -207,11 +207,27 @@ function renderPaged(p, rowsSel, ctrlsSel, emptyCols) {
     p.size = e.target.value === "inf" ? Infinity : parseInt(e.target.value, 10);
     p.page = 1;
     renderPaged(p, rowsSel, ctrlsSel, emptyCols);
-    if (p.afterRender) p.afterRender();
   };
-  c.querySelector(".pg-prev").onclick = () => { p.page--; renderPaged(p, rowsSel, ctrlsSel, emptyCols); if (p.afterRender) p.afterRender(); };
-  c.querySelector(".pg-next").onclick = () => { p.page++; renderPaged(p, rowsSel, ctrlsSel, emptyCols); if (p.afterRender) p.afterRender(); };
+  c.querySelector(".pg-prev").onclick = () => { p.page--; renderPaged(p, rowsSel, ctrlsSel, emptyCols); };
+  c.querySelector(".pg-next").onclick = () => { p.page++; renderPaged(p, rowsSel, ctrlsSel, emptyCols); };
+  // afterRender runs exactly once per render (initial, page change, size
+  // change). Re-binding inside it must therefore be idempotent-safe: row
+  // elements are recreated by the innerHTML writes above, and
+  // bindBatchSelectAll guards its listeners (see below).
   if (p.afterRender) p.afterRender();
+}
+
+// Server-paginated lists (admin request logs, alerts) cap the "全部" mode at
+// this many rows. Callers must surface the truncation in the UI — see
+// truncatedListNote below — never silently hide it.
+const MAX_SERVER_ROWS = 10000;
+
+// HTML snippet (or empty string) shown next to a server-paginated pager when
+// "全部" is selected and the total exceeds the server-side row cap.
+function truncatedListNote(total, size) {
+  return size === Infinity && total > MAX_SERVER_ROWS
+    ? `<span class="muted trunc-note">${T('listTruncated').replace("{n}", String(MAX_SERVER_ROWS))}</span>`
+    : "";
 }
 
 /* ---------------- batch selection helpers ---------------- */
@@ -223,7 +239,12 @@ function bindBatchSelectAll(selectAllSel, chkSel, onSelectionChange) {
     document.querySelectorAll(chkSel).forEach(c => { c.checked = selectAll.checked; });
     if (onSelectionChange) onSelectionChange();
   };
+  // Guard per element: afterRender may re-run on the same freshly rendered
+  // rows (e.g. duplicated invocation paths), and addEventListener would
+  // accumulate duplicate change listeners on the checkboxes.
   document.querySelectorAll(chkSel).forEach(c => {
+    if (c._batchBound) return;
+    c._batchBound = true;
     c.addEventListener("change", () => {
       if (!c.checked) {
         const sa = document.querySelector(selectAllSel);

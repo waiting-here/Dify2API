@@ -82,12 +82,16 @@
   #admin-logs-filter .afl-until  { grid-column: 2; grid-row: 3; }
   #admin-logs-filter .afl-actions { grid-column: 3; grid-row: 1 / 4; align-self: center; display: flex; flex-direction: column; gap: .5rem; }
   #admin-logs-filter .afl-actions button { width: auto; margin: 0; }
+  /* Admin donation filter: 2×2 grid on wide screens, single column on narrow
+     (media query below). Labels share a uniform width inside their cells. */
+  #don-filter { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem .75rem; align-items: end; margin-bottom: .75rem; }
+  #don-filter label { margin-bottom: 0; }
+  #don-filter input, #don-filter select { width: 100%; margin-bottom: 0; }
   .admin-log-chart { position: relative; height: 18rem; padding: .5rem; border: 1px solid var(--pico-muted-border-color); border-radius: 4px; }
-  .admin-log-chart + .admin-log-chart { margin-top: .75rem; }
-  #alf-service-chart-wrap { height: var(--admin-service-chart-height, 14rem); }
   @media (max-width: 800px) {
     #admin-logs-filter { grid-template-columns: 1fr; }
     #admin-logs-filter .afl-actions { grid-column: 1; grid-row: auto; flex-direction: row; }
+    #don-filter { grid-template-columns: 1fr; }
   }
   /* ---- Mobile / tablet adaptation ----
      Two breakpoints: 768px (tablet/phone) and 480px (small phone).
