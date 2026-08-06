@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -15,6 +16,26 @@ const (
 	AppStatusApproved = "approved"
 	AppStatusRejected = "rejected"
 )
+
+// ErrPendingApplicationLimit is returned when an atomic application insert
+// would exceed the user's configured pending-review limit.
+var ErrPendingApplicationLimit = errors.New("pending donation application limit reached")
+
+// ApplicationReviewError identifies an application that could not be claimed
+// for review because it is absent or no longer pending. Batch callers use the
+// ID to report the item that caused the whole transaction to roll back.
+type ApplicationReviewError struct {
+	ApplicationID int64
+	Status        string
+	NotFound      bool
+}
+
+func (e *ApplicationReviewError) Error() string {
+	if e.NotFound {
+		return fmt.Sprintf("application %d not found", e.ApplicationID)
+	}
+	return fmt.Sprintf("application %d is not pending (current: %s)", e.ApplicationID, e.Status)
+}
 
 // DonationApplication represents a user-submitted donation application.
 type DonationApplication struct {
@@ -54,6 +75,16 @@ func scanDonationApplication(row interface{ Scan(...interface{}) error }) (*Dona
 // CreateDonationApplication inserts a new pending application with encrypted API key.
 // rpmLimit defaults to 10 when <= 0.
 func (s *Store) CreateDonationApplication(userID int64, service, model, difyBaseURL, difyAPIKey string, totalCount int, deadline int64, rpmLimit int, note string) (*DonationApplication, error) {
+	return s.CreateDonationApplicationWithLimit(userID, service, model, difyBaseURL, difyAPIKey, totalCount, deadline, rpmLimit, note, -1)
+}
+
+// CreateDonationApplicationWithLimit inserts a pending application only when
+// the user's current pending count is below pendingLimit. The count predicate
+// and INSERT are one SQLite statement, so concurrent submissions cannot both
+// pass a separate count-then-insert check. A negative limit disables the cap
+// for trusted internal callers. A zero limit rejects all submissions,
+// matching the existing administrator setting semantics.
+func (s *Store) CreateDonationApplicationWithLimit(userID int64, service, model, difyBaseURL, difyAPIKey string, totalCount int, deadline int64, rpmLimit int, note string, pendingLimit int) (*DonationApplication, error) {
 	enc, err := s.Encrypt(difyAPIKey)
 	if err != nil {
 		return nil, fmt.Errorf("encrypt api key: %w", err)
@@ -67,12 +98,21 @@ func (s *Store) CreateDonationApplication(userID int64, service, model, difyBase
 	res, err := s.db.Exec(
 		`INSERT INTO donation_applications (user_id, service, model, dify_base_url, dify_api_key_enc,
 		 total_count, deadline, rpm_limit, note, status, created_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		 SELECT ?,?,?,?,?,?,?,?,?,?,?
+		 WHERE ? < 0 OR (
+			SELECT COUNT(1) FROM donation_applications WHERE user_id=? AND status=?
+		 ) < ?`,
 		userID, service, model, difyBaseURL, enc,
 		totalCount, deadline, rpmLimit, note, AppStatusPending, now,
+		pendingLimit, userID, AppStatusPending, pendingLimit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create application: %w", err)
+	}
+	if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+		return nil, fmt.Errorf("create application rows affected: %w", rowsErr)
+	} else if n != 1 {
+		return nil, ErrPendingApplicationLimit
 	}
 	id, _ := res.LastInsertId()
 	return s.GetApplication(id)
@@ -178,18 +218,68 @@ type ApproveApplicationFields struct {
 // modifiedFields may be partially populated; empty/zero fields retain the
 // original application values.
 func (s *Store) ApproveApplication(id int64, reviewerID int64, m *ApproveApplicationFields, reviewNote string) (*DonationApplication, *Donation, error) {
-	now := time.Now().Unix()
-
-	// Load application.
-	app, err := s.GetApplication(id)
+	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, nil, err
 	}
-	if app == nil {
-		return nil, nil, fmt.Errorf("application %d not found", id)
+	defer tx.Rollback()
+	app, donation, err := s.approveApplicationTx(tx, id, reviewerID, m, reviewNote)
+	if err != nil {
+		return nil, nil, err
 	}
-	if app.Status != AppStatusPending {
-		return nil, nil, fmt.Errorf("application %d is not pending (current: %s)", id, app.Status)
+	if err := tx.Commit(); err != nil {
+		return nil, nil, err
+	}
+	return app, donation, nil
+}
+
+// ApproveApplications approves every ID in one transaction. Any missing,
+// duplicate, or already-final application rolls back all prior work.
+func (s *Store) ApproveApplications(ids []int64, reviewerID int64, reviewNote string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		if _, _, err := s.approveApplicationTx(tx, id, reviewerID, &ApproveApplicationFields{}, reviewNote); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) approveApplicationTx(tx *sql.Tx, id int64, reviewerID int64, m *ApproveApplicationFields, reviewNote string) (*DonationApplication, *Donation, error) {
+	if m == nil {
+		m = &ApproveApplicationFields{}
+	}
+	now := time.Now().Unix()
+
+	// Claim the pending row before reading or creating the donation. If any
+	// later step fails, the transaction restores the pending state.
+	claim, err := tx.Exec(
+		`UPDATE donation_applications
+		 SET status=?, reviewer_id=?, review_note=?
+		 WHERE id=? AND status=?`,
+		AppStatusApproved, reviewerID, reviewNote, id, AppStatusPending,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("claim application for approval: %w", err)
+	}
+	if n, rowsErr := claim.RowsAffected(); rowsErr != nil {
+		return nil, nil, rowsErr
+	} else if n != 1 {
+		return nil, nil, applicationReviewStateError(tx, id)
+	}
+
+	app, err := scanDonationApplication(tx.QueryRow(
+		`SELECT id, user_id, service, model, dify_base_url, dify_api_key_enc,
+		 total_count, deadline, rpm_limit, note, status,
+		 reviewer_id, review_note, donation_id, created_at
+		 FROM donation_applications WHERE id=?`, id,
+	))
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// Merge modified fields with originals.
@@ -233,7 +323,10 @@ func (s *Store) ApproveApplication(id int64, reviewerID int64, m *ApproveApplica
 	plainKey := m.DifyAPIKey
 	if plainKey == "" {
 		// Reviewer did not modify the key; decrypt the original.
-		plainKey, _ = s.Decrypt(app.DifyAPIKeyEnc)
+		plainKey, err = s.Decrypt(app.DifyAPIKeyEnc)
+		if err != nil {
+			return nil, nil, fmt.Errorf("decrypt application api key: %w", err)
+		}
 	}
 	keySHA256 := ""
 	if plainKey != "" {
@@ -244,12 +337,11 @@ func (s *Store) ApproveApplication(id int64, reviewerID int64, m *ApproveApplica
 	// Create donation entry (inactive).
 	// Look up the applicant's Discord ID and username for the source fields.
 	var sourceDiscordID, sourceUsername string
-	if applicant, err := s.GetUserByID(app.UserID); err == nil && applicant != nil {
-		sourceDiscordID = applicant.DiscordID
-		sourceUsername = applicant.Username
+	if err := tx.QueryRow(`SELECT discord_id, username FROM users WHERE id=?`, app.UserID).Scan(&sourceDiscordID, &sourceUsername); err != nil {
+		return nil, nil, fmt.Errorf("load application user: %w", err)
 	}
 
-	res, err := s.db.Exec(
+	res, err := tx.Exec(
 		`INSERT INTO donations (service, model, dify_base_url, dify_api_key_enc, dify_api_key_sha256,
 		 source_user_id, source_discord_id, source_username, source_text,
 		 deadline, total_count, remaining_count, rpm_limit, status, note,
@@ -265,57 +357,101 @@ func (s *Store) ApproveApplication(id int64, reviewerID int64, m *ApproveApplica
 	}
 	donationID, _ := res.LastInsertId()
 
-	// Update application status.
-	_, err = s.db.Exec(
+	// Link the claimed application to the donation. The condition protects
+	// against accidental double-linking inside future callers.
+	link, err := tx.Exec(
 		`UPDATE donation_applications
-		 SET status=?, reviewer_id=?, review_note=?, donation_id=?
-		 WHERE id=?`,
-		AppStatusApproved, reviewerID, reviewNote, donationID, id,
+		 SET donation_id=?
+		 WHERE id=? AND status=? AND donation_id IS NULL`,
+		donationID, id, AppStatusApproved,
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("update application status: %w", err)
+		return nil, nil, fmt.Errorf("link approved application: %w", err)
+	}
+	if n, rowsErr := link.RowsAffected(); rowsErr != nil {
+		return nil, nil, rowsErr
+	} else if n != 1 {
+		return nil, nil, fmt.Errorf("link approved application %d: row changed concurrently", id)
 	}
 
-	// Refresh application.
-	app, err = s.GetApplication(id)
-	if err != nil {
-		return nil, nil, err
+	app.DonationID = sql.NullInt64{Int64: donationID, Valid: true}
+	donation := &Donation{
+		ID: donationID, Service: service, Model: model, DifyBaseURL: baseURL,
+		DifyAPIKeyEnc: apiKeyEnc, DifyAPIKeySHA256: keySHA256,
+		SourceUserID:    sql.NullInt64{Int64: app.UserID, Valid: true},
+		SourceDiscordID: sourceDiscordID, SourceUsername: sourceUsername,
+		Deadline: deadline, TotalCount: totalCount, RemainingCount: totalCount,
+		RpmLimit: rpmLimit, Status: DonationInactive, Note: app.Note,
+		CreatedAt: now, UpdatedAt: now,
 	}
-
-	// Fetch created donation.
-	donation, err := s.GetDonation(donationID)
-	if err != nil {
-		return app, nil, err
-	}
-
 	return app, donation, nil
 }
 
 // RejectApplication rejects a pending application with an optional review note.
 func (s *Store) RejectApplication(id int64, reviewerID int64, reviewNote string) (*DonationApplication, error) {
-	// Load application.
-	app, err := s.GetApplication(id)
+	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
 	}
-	if app == nil {
-		return nil, fmt.Errorf("application %d not found", id)
+	defer tx.Rollback()
+	app, err := rejectApplicationTx(tx, id, reviewerID, reviewNote)
+	if err != nil {
+		return nil, err
 	}
-	if app.Status != AppStatusPending {
-		return nil, fmt.Errorf("application %d is not pending (current: %s)", id, app.Status)
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
+	return app, nil
+}
 
-	_, err = s.db.Exec(
+// RejectApplications rejects every ID in one transaction.
+func (s *Store) RejectApplications(ids []int64, reviewerID int64, reviewNote string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		if _, err := rejectApplicationTx(tx, id, reviewerID, reviewNote); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func rejectApplicationTx(tx *sql.Tx, id int64, reviewerID int64, reviewNote string) (*DonationApplication, error) {
+	res, err := tx.Exec(
 		`UPDATE donation_applications
 		 SET status=?, reviewer_id=?, review_note=?
-		 WHERE id=?`,
-		AppStatusRejected, reviewerID, reviewNote, id,
+		 WHERE id=? AND status=?`,
+		AppStatusRejected, reviewerID, reviewNote, id, AppStatusPending,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("update application status: %w", err)
+		return nil, fmt.Errorf("claim application for rejection: %w", err)
 	}
+	if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+		return nil, rowsErr
+	} else if n != 1 {
+		return nil, applicationReviewStateError(tx, id)
+	}
+	return scanDonationApplication(tx.QueryRow(
+		`SELECT id, user_id, service, model, dify_base_url, dify_api_key_enc,
+		 total_count, deadline, rpm_limit, note, status,
+		 reviewer_id, review_note, donation_id, created_at
+		 FROM donation_applications WHERE id=?`, id,
+	))
+}
 
-	return s.GetApplication(id)
+func applicationReviewStateError(tx *sql.Tx, id int64) error {
+	var status string
+	err := tx.QueryRow(`SELECT status FROM donation_applications WHERE id=?`, id).Scan(&status)
+	if err == sql.ErrNoRows {
+		return &ApplicationReviewError{ApplicationID: id, NotFound: true}
+	}
+	if err != nil {
+		return err
+	}
+	return &ApplicationReviewError{ApplicationID: id, Status: status}
 }
 
 // UpdateDonationReviewNote updates the review_note for a donation's originating application.

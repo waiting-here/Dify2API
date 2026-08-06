@@ -40,6 +40,21 @@ type Donation struct {
 	UpdatedAt           int64
 }
 
+// DonationDeleteError identifies an expected delete conflict. Batch callers
+// use DonationID to report the item that caused the transaction to roll back.
+type DonationDeleteError struct {
+	DonationID int64
+	InFlight   int
+	NotFound   bool
+}
+
+func (e *DonationDeleteError) Error() string {
+	if e.NotFound {
+		return fmt.Sprintf("donation %d not found", e.DonationID)
+	}
+	return fmt.Sprintf("donation %d has %d in-flight charity reservation(s)", e.DonationID, e.InFlight)
+}
+
 func scanDonation(row interface{ Scan(...interface{}) error }) (*Donation, error) {
 	var d Donation
 	if err := row.Scan(
@@ -199,18 +214,54 @@ func (s *Store) SetDonationStatus(id int64, status string) error {
 // remain available until the same per-row 30-day retention cutoff as all
 // other request metadata; donation_id may therefore become temporarily orphaned.
 func (s *Store) DeleteDonation(id int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := deleteDonationTx(tx, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// DeleteDonations removes all IDs in one transaction. Missing/duplicate IDs
+// and active reservations roll back every deletion.
+func (s *Store) DeleteDonations(ids []int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		if err := deleteDonationTx(tx, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func deleteDonationTx(tx *sql.Tx, id int64) error {
 	var active int
-	if err := s.db.QueryRow(
+	if err := tx.QueryRow(
 		`SELECT COUNT(1) FROM charity_reservations WHERE donation_id=? AND status IN (?,?)`,
 		id, ReservationReserved, ReservationDispatched,
 	).Scan(&active); err != nil {
 		return err
 	}
 	if active > 0 {
-		return fmt.Errorf("donation %d has %d in-flight charity reservation(s)", id, active)
+		return &DonationDeleteError{DonationID: id, InFlight: active}
 	}
-	_, err := s.db.Exec(`DELETE FROM donations WHERE id=?`, id)
-	return err
+	res, err := tx.Exec(`DELETE FROM donations WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+		return rowsErr
+	} else if n != 1 {
+		return &DonationDeleteError{DonationID: id, NotFound: true}
+	}
+	return nil
 }
 
 // RecordDonationSuccess is retained for low-level compatibility tests.

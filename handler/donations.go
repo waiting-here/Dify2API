@@ -1194,18 +1194,9 @@ func (g *Gateway) handleCreateDonationApp(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Check pending limit.
+	// The pending cap is enforced by the same SQLite statement that inserts
+	// the application, avoiding a concurrent count-then-insert race.
 	limit := g.Store.GetSettingInt(db.SettingDonationReviewLimit, db.DefaultDonationReviewLimit)
-	pending, err := g.Store.CountPendingByUser(u.ID)
-	if err != nil {
-		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-		return
-	}
-	if pending >= limit {
-		g.writeError(w, http.StatusBadRequest, "too_many_pending",
-			fmt.Sprintf("您已有 %d 条待审核申请（上限 %d），请等待审核完成后再提交", pending, limit))
-		return
-	}
 
 	var req struct {
 		Service     string `json:"service"`
@@ -1275,8 +1266,17 @@ func (g *Gateway) handleCreateDonationApp(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	app, err := g.Store.CreateDonationApplication(u.ID, req.Service, req.Model, req.DifyBaseURL, req.DifyAPIKey, req.TotalCount, req.Deadline, req.RpmLimit, strings.TrimSpace(req.Note))
+	app, err := g.Store.CreateDonationApplicationWithLimit(u.ID, req.Service, req.Model, req.DifyBaseURL, req.DifyAPIKey, req.TotalCount, req.Deadline, req.RpmLimit, strings.TrimSpace(req.Note), limit)
 	if err != nil {
+		if errors.Is(err, db.ErrPendingApplicationLimit) {
+			pending, countErr := g.Store.CountPendingByUser(u.ID)
+			if countErr != nil {
+				pending = limit
+			}
+			g.writeError(w, http.StatusBadRequest, "too_many_pending",
+				fmt.Sprintf("您已有 %d 条待审核申请（上限 %d），请等待审核完成后再提交", pending, limit))
+			return
+		}
 		g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -1653,15 +1653,14 @@ func (g *Gateway) handleBatchApproveApplications(w http.ResponseWriter, r *http.
 		}
 	}
 
-	// All passed: approve each.
-	for _, id := range req.IDs {
-		_, _, err := g.Store.ApproveApplication(id, adminUser.ID,
-			&db.ApproveApplicationFields{}, strings.TrimSpace(req.ReviewNote))
-		if err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal",
-				fmt.Sprintf("批准申请 %d 失败: %v", id, err))
+	if err := g.Store.ApproveApplications(req.IDs, adminUser.ID, strings.TrimSpace(req.ReviewNote)); err != nil {
+		var stateErr *db.ApplicationReviewError
+		if errors.As(err, &stateErr) {
+			writeBatchDonationError(w, err.Error(), stateErr.ApplicationID)
 			return
 		}
+		g.writeError(w, http.StatusInternalServerError, "internal", fmt.Sprintf("批量批准申请失败: %v", err))
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1710,14 +1709,14 @@ func (g *Gateway) handleBatchRejectApplications(w http.ResponseWriter, r *http.R
 		}
 	}
 
-	// All passed: reject each.
-	for _, id := range req.IDs {
-		_, err := g.Store.RejectApplication(id, adminUser.ID, strings.TrimSpace(req.ReviewNote))
-		if err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal",
-				fmt.Sprintf("拒绝申请 %d 失败: %v", id, err))
+	if err := g.Store.RejectApplications(req.IDs, adminUser.ID, strings.TrimSpace(req.ReviewNote)); err != nil {
+		var stateErr *db.ApplicationReviewError
+		if errors.As(err, &stateErr) {
+			writeBatchDonationError(w, err.Error(), stateErr.ApplicationID)
 			return
 		}
+		g.writeError(w, http.StatusInternalServerError, "internal", fmt.Sprintf("批量拒绝申请失败: %v", err))
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1839,13 +1838,14 @@ func (g *Gateway) handleBatchDeleteDonations(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	// All passed: delete each.
-	for _, id := range req.IDs {
-		if err := g.Store.DeleteDonation(id); err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal",
-				fmt.Sprintf("删除捐赠条目 %d 失败: %v", id, err))
+	if err := g.Store.DeleteDonations(req.IDs); err != nil {
+		var deleteErr *db.DonationDeleteError
+		if errors.As(err, &deleteErr) {
+			writeBatchDonationError(w, err.Error(), deleteErr.DonationID)
 			return
 		}
+		g.writeError(w, http.StatusInternalServerError, "internal", fmt.Sprintf("批量删除捐赠条目失败: %v", err))
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")

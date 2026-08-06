@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -180,6 +181,61 @@ func TestBatchApprove_OneNotPending(t *testing.T) {
 	}
 }
 
+func TestBatchApprove_DuplicateIDRollsBack(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	store.SetSetting(db.SettingDonationEnabled, "true")
+	adminC := adminCookie(t, gw)
+	userC := batchUserCookie(t, gw, store)
+	id := batchCreatePendingApp(t, gw, store, userC)
+
+	rec := batchRequest(gw, adminC, "POST", "/api/admin/donations/approve/batch", map[string]interface{}{
+		"ids": []int64{id, id},
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("duplicate approve: status=%d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	app, err := store.GetApplication(id)
+	if err != nil || app == nil || app.Status != db.AppStatusPending || app.DonationID.Valid {
+		t.Fatalf("application after rollback=%+v, err=%v", app, err)
+	}
+	donations, err := store.ListDonations()
+	if err != nil || len(donations) != 0 {
+		t.Fatalf("donations after rollback=%d, err=%v", len(donations), err)
+	}
+}
+
+func TestBatchApprove_FieldValidationFailureLeavesAllPending(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	store.SetSetting(db.SettingDonationEnabled, "true")
+	adminC := adminCookie(t, gw)
+	userC := batchUserCookie(t, gw, store)
+	goodID := batchCreatePendingApp(t, gw, store, userC)
+	u, err := store.CreateUser("batch-invalid-owner", "invalid", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad, err := store.CreateDonationApplication(
+		u.ID, "general", "batch-invalid-url", "ftp://invalid.example.com",
+		"invalid-url-key", 10, time.Now().Add(time.Hour).Unix(), 10, "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := batchRequest(gw, adminC, "POST", "/api/admin/donations/approve/batch", map[string]interface{}{
+		"ids": []int64{goodID, bad.ID},
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid field batch: status=%d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	for _, id := range []int64{goodID, bad.ID} {
+		app, err := store.GetApplication(id)
+		if err != nil || app == nil || app.Status != db.AppStatusPending || app.DonationID.Valid {
+			t.Fatalf("application %d after validation failure=%+v, err=%v", id, app, err)
+		}
+	}
+}
+
 // TestBatchReject_AllPending tests batch reject succeeds.
 func TestBatchReject_AllPending(t *testing.T) {
 	gw, store := setupAuthGateway(t, "x")
@@ -215,6 +271,25 @@ func TestBatchReject_AllPending(t *testing.T) {
 		if app.Status != db.AppStatusRejected {
 			t.Errorf("application %d status = %s, want rejected", id, app.Status)
 		}
+	}
+}
+
+func TestBatchReject_DuplicateIDRollsBack(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	store.SetSetting(db.SettingDonationEnabled, "true")
+	adminC := adminCookie(t, gw)
+	userC := batchUserCookie(t, gw, store)
+	id := batchCreatePendingApp(t, gw, store, userC)
+
+	rec := batchRequest(gw, adminC, "POST", "/api/admin/donations/reject/batch", map[string]interface{}{
+		"ids": []int64{id, id},
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("duplicate reject: status=%d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	app, err := store.GetApplication(id)
+	if err != nil || app == nil || app.Status != db.AppStatusPending || app.ReviewerID.Valid {
+		t.Fatalf("application after rollback=%+v, err=%v", app, err)
 	}
 }
 
@@ -457,6 +532,45 @@ func TestBatchDeleteDonations_MissingID(t *testing.T) {
 	still, _ := store.GetDonation(created.ID)
 	if still == nil {
 		t.Error("existing donation should NOT have been deleted")
+	}
+}
+
+func TestBatchDeleteDonations_ActiveReservationRollsBack(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	adminC := adminCookie(t, gw)
+	consumer, err := store.CreateUser("batch-delete-consumer", "consumer", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetUserCredits(consumer.ID, 10); err != nil {
+		t.Fatal(err)
+	}
+	create := func(model string) *db.Donation {
+		d, err := store.CreateDonation(&db.Donation{
+			Service: "general", Model: model, DifyBaseURL: "https://dify.example.com/v1",
+			Deadline: time.Now().Add(time.Hour).Unix(), TotalCount: 2, Status: db.DonationActive,
+		}, "batch-delete-key-"+model)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	first := create("batch-delete-first")
+	second := create("batch-delete-reserved")
+	if _, err := store.ReserveCharityCall(context.Background(), consumer.ID, second.ID, 1, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := batchRequest(gw, adminC, "POST", "/api/admin/donations/delete/batch", map[string]interface{}{
+		"ids": []int64{first.ID, second.ID},
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("batch delete reserved: status=%d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	for _, id := range []int64{first.ID, second.ID} {
+		if got, err := store.GetDonation(id); err != nil || got == nil {
+			t.Fatalf("donation %d was partially deleted: got=%+v err=%v", id, got, err)
+		}
 	}
 }
 

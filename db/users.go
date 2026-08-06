@@ -309,8 +309,25 @@ func (s *Store) SetUserCharityEnabled(userID int64, enabled bool) error {
 
 // DeleteUser removes a user and their dependent rows.
 func (s *Store) DeleteUser(id int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("delete user: %w", err)
+	}
+	defer tx.Rollback()
+
+	var isAdmin bool
+	if err := tx.QueryRow(`SELECT is_admin FROM users WHERE id=?`, id).Scan(&isAdmin); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("delete user: user %d not found", id)
+		}
+		return fmt.Errorf("delete user: %w", err)
+	}
+	if isAdmin {
+		return fmt.Errorf("delete user: administrator cannot be deleted")
+	}
+
 	var activeReservations int
-	if err := s.db.QueryRow(
+	if err := tx.QueryRow(
 		`SELECT COUNT(1) FROM charity_reservations
 		 WHERE (user_id=? OR donor_user_id=?) AND status IN (?,?)`,
 		id, id, ReservationReserved, ReservationDispatched,
@@ -320,18 +337,30 @@ func (s *Store) DeleteUser(id int64) error {
 	if activeReservations > 0 {
 		return fmt.Errorf("delete user: %d charity call(s) are still in flight", activeReservations)
 	}
-	if _, err := s.db.Exec(
+	if _, err := tx.Exec(
 		`DELETE FROM charity_reservations
 		 WHERE (user_id=? AND (donor_user_id IS NULL OR donor_user_id=?))
 		    OR (donor_user_id=? AND user_id=0)`, id, id, id,
 	); err != nil {
 		return fmt.Errorf("delete solely-associated reservations: %w", err)
 	}
-	if _, err := s.db.Exec(`UPDATE charity_reservations SET user_id=0 WHERE user_id=?`, id); err != nil {
+	if _, err := tx.Exec(`UPDATE charity_reservations SET user_id=0 WHERE user_id=?`, id); err != nil {
 		return fmt.Errorf("anonymize consumer reservations: %w", err)
 	}
-	if _, err := s.db.Exec(`UPDATE charity_reservations SET donor_user_id=NULL WHERE donor_user_id=?`, id); err != nil {
+	if _, err := tx.Exec(`UPDATE charity_reservations SET donor_user_id=NULL WHERE donor_user_id=?`, id); err != nil {
 		return fmt.Errorf("anonymize donor reservations: %w", err)
+	}
+
+	// Alerts bound to request logs share the log's retention/deletion fate.
+	if _, err := tx.Exec(
+		`DELETE FROM admin_alerts WHERE request_log_id IN (SELECT id FROM request_logs WHERE user_id=?)`, id,
+	); err != nil {
+		return fmt.Errorf("delete user alerts: %w", err)
+	}
+	// A normal user may be a reviewer in the level-based workflow. Preserve
+	// other users' applications but remove the dangling reviewer reference.
+	if _, err := tx.Exec(`UPDATE donation_applications SET reviewer_id=NULL WHERE reviewer_id=?`, id); err != nil {
+		return fmt.Errorf("anonymize application reviewer: %w", err)
 	}
 	for _, q := range []string{
 		`DELETE FROM sessions WHERE user_id=?`,
@@ -340,11 +369,22 @@ func (s *Store) DeleteUser(id int64) error {
 		`DELETE FROM request_logs WHERE user_id=?`,
 		`DELETE FROM donation_applications WHERE user_id=?`,
 		`UPDATE donations SET source_user_id=NULL, source_discord_id='', source_username='' WHERE source_user_id=?`,
-		`DELETE FROM users WHERE id=? AND is_admin=0`,
 	} {
-		if _, err := s.db.Exec(q, id); err != nil {
+		if _, err := tx.Exec(q, id); err != nil {
 			return fmt.Errorf("delete user: %w", err)
 		}
+	}
+	res, err := tx.Exec(`DELETE FROM users WHERE id=? AND is_admin=0`, id)
+	if err != nil {
+		return fmt.Errorf("delete user: %w", err)
+	}
+	if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+		return fmt.Errorf("delete user: %w", rowsErr)
+	} else if n != 1 {
+		return fmt.Errorf("delete user: user %d was not deleted", id)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("delete user: %w", err)
 	}
 	return nil
 }
