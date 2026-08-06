@@ -20,45 +20,13 @@ func (g *Gateway) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	filter, err := parseLogFilter(r)
+	if err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
 	q := r.URL.Query()
-
-	var filter db.LogFilter
-
-	if s := q.Get("user_id"); s != "" {
-		v, err := strconv.ParseInt(s, 10, 64)
-		if err != nil {
-			g.writeError(w, http.StatusBadRequest, "invalid_request", "user_id must be an integer")
-			return
-		}
-		filter.UserID = &v
-	}
-	filter.Service = q.Get("service")
-	filter.Model = strings.TrimSpace(q.Get("model"))
-
-	if s := q.Get("status"); s != "" {
-		if s != "success" && s != "error" {
-			g.writeError(w, http.StatusBadRequest, "invalid_request", "status must be 'success' or 'error'")
-			return
-		}
-		filter.Status = s
-	}
-
-	if s := q.Get("since"); s != "" {
-		v, err := strconv.ParseInt(s, 10, 64)
-		if err != nil {
-			g.writeError(w, http.StatusBadRequest, "invalid_request", "since must be a unix timestamp (integer)")
-			return
-		}
-		filter.Since = v
-	}
-	if s := q.Get("until"); s != "" {
-		v, err := strconv.ParseInt(s, 10, 64)
-		if err != nil {
-			g.writeError(w, http.StatusBadRequest, "invalid_request", "until must be a unix timestamp (integer)")
-			return
-		}
-		filter.Until = v
-	}
 
 	limit := 100
 	if s := q.Get("limit"); s != "" {
@@ -164,7 +132,12 @@ func (g *Gateway) handleAdminExportLogs(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	f := parseLogFilter(r)
+	f, err := parseLogFilter(r)
+	if err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
 	format := r.URL.Query().Get("format")
 	if format != "csv" {
 		format = "json"
@@ -273,30 +246,37 @@ func safeCSVCell(value string) string {
 	}
 }
 
-// handleAdminLogStats serves GET /api/admin/logs/stats with daily and
-// per-service aggregates for chart rendering.
+// handleAdminLogStats serves GET /api/admin/logs/stats with hourly aggregates
+// for chart rendering. Frontend merges hours into local days.
+// The endpoint accepts the same filter parameters as the list/export endpoints.
+// The "days" parameter is accepted for compatibility but ignored.
+// When "by_service=1" is passed, returns 501 Not Implemented.
 func (g *Gateway) handleAdminLogStats(w http.ResponseWriter, r *http.Request) {
 	if g.requireAdmin(r) == nil {
 		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
 
-	days := 7
-	if s := r.URL.Query().Get("days"); s != "" {
-		if v, err := strconv.Atoi(s); err == nil && v > 0 && v <= 90 {
-			days = v
-		}
+	q := r.URL.Query()
+
+	// Check for explicit by_service request.
+	if q.Get("by_service") == "1" {
+		g.writeError(w, http.StatusNotImplemented, "not_implemented", "service statistics are not implemented")
+		return
 	}
 
-	var since, until int64
-	if s := r.URL.Query().Get("since"); s != "" {
-		since, _ = strconv.ParseInt(s, 10, 64)
-	}
-	if s := r.URL.Query().Get("until"); s != "" {
-		until, _ = strconv.ParseInt(s, 10, 64)
+	// Accept "days" parameter for compatibility but ignore it.
+	// Stats now return all history within the 30-day retention window (or filtered range).
+	_ = q.Get("days")
+
+	// Parse and validate filter with strict semantics.
+	filter, err := parseLogFilter(r)
+	if err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
 	}
 
-	byDay, bySvc, err := g.Store.LogStats(days, since, until)
+	byHour, err := g.Store.LogStatsByHour(filter)
 	if err != nil {
 		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
@@ -304,30 +284,56 @@ func (g *Gateway) handleAdminLogStats(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"by_day":     byDay,
-		"by_service": bySvc,
+		"by_hour":    byHour,
+		"by_service": []interface{}{}, // Compatibility field, always empty
 	})
 }
 
-// parseLogFilter extracts the common log filter params from query string.
-func parseLogFilter(r *http.Request) db.LogFilter {
+// parseLogFilter extracts and validates the common log filter params from query string.
+// Returns an error if any parameter is invalid, ensuring strict validation semantics.
+// This is shared between list, export, and stats endpoints to guarantee consistent behavior.
+func parseLogFilter(r *http.Request) (db.LogFilter, error) {
 	q := r.URL.Query()
 	var f db.LogFilter
+
 	if s := q.Get("user_id"); s != "" {
-		if v, err := strconv.ParseInt(s, 10, 64); err == nil {
-			f.UserID = &v
+		v, err := strconv.ParseInt(s, 10, 64)
+		if err != nil || v <= 0 {
+			return db.LogFilter{}, fmt.Errorf("user_id must be a positive integer")
 		}
+		f.UserID = &v
 	}
+
 	f.Service = q.Get("service")
+
 	f.Model = strings.TrimSpace(q.Get("model"))
-	if s := q.Get("status"); s == "success" || s == "error" {
+
+	if s := q.Get("status"); s != "" {
+		if s != "success" && s != "error" {
+			return db.LogFilter{}, fmt.Errorf("status must be 'success' or 'error'")
+		}
 		f.Status = s
 	}
+
 	if s := q.Get("since"); s != "" {
-		f.Since, _ = strconv.ParseInt(s, 10, 64)
+		v, err := strconv.ParseInt(s, 10, 64)
+		if err != nil || v <= 0 {
+			return db.LogFilter{}, fmt.Errorf("since must be a positive unix timestamp")
+		}
+		f.Since = v
 	}
+
 	if s := q.Get("until"); s != "" {
-		f.Until, _ = strconv.ParseInt(s, 10, 64)
+		v, err := strconv.ParseInt(s, 10, 64)
+		if err != nil || v <= 0 {
+			return db.LogFilter{}, fmt.Errorf("until must be a positive unix timestamp")
+		}
+		f.Until = v
 	}
-	return f
+
+	if f.Since > 0 && f.Until > 0 && f.Since > f.Until {
+		return db.LogFilter{}, fmt.Errorf("since must be <= until")
+	}
+
+	return f, nil
 }

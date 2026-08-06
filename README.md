@@ -196,6 +196,7 @@ v1.2.0 的公益记账在**预留时**即扣减捐赠 `remaining_count` 与消�
 | 429 | `charity_overloaded`, `rate_limited`, `server_busy` | 公益、IP 或并发限流；可能附 `Retry-After` |
 | 4xx | 上游 code | Dify 4xx 原状态码透传，消息带 `[Dify]` |
 | 500 | `internal` | 网关内部错误 |
+| 501 | `not_implemented` | 接口存在但未实现（如 `by_service=1` 服务统计） |
 | 502 | `upstream_blocked`, `upstream_error` | 出站策略、Dify 5xx、响应超限或网络错误 |
 | 503 | `maintenance`, `service_unavailable` | 维护或无可用公益资源 |
 | 504 | `upstream_timeout` | Dify 超时，建议使用流式传输 |

@@ -304,3 +304,252 @@ func TestAddRequestLogFull_ReturnsID_AndAlertJoinUser(t *testing.T) {
 		}
 	}
 }
+
+func TestLogStatsByHour_AggregatesHourly(t *testing.T) {
+	st, _ := openTemp(t)
+	u, err := st.CreateUser("stats-user", "stats", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create logs spread across 3 hours within the retention window.
+	now := time.Now().Truncate(time.Hour) // align to hour boundaries
+	for i := 0; i < 3; i++ {
+		hourStart := now.Add(time.Duration(i) * time.Hour)
+		// Hour 0: 5 success, 2 error
+		for j := 0; j < 5; j++ {
+			if err := st.AddRequestLog(u.ID, "model-1", "service-a", hourStart.Add(time.Duration(j)*time.Minute), hourStart.Add(time.Duration(j)*time.Minute+time.Second), "success", ""); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for j := 0; j < 2; j++ {
+			if err := st.AddRequestLog(u.ID, "model-2", "service-b", hourStart.Add(time.Duration(5+j)*time.Minute), hourStart.Add(time.Duration(5+j)*time.Minute+time.Second), "error", "upstream_error"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	stats, err := st.LogStatsByHour(LogFilter{})
+	if err != nil {
+		t.Fatalf("LogStatsByHour: %v", err)
+	}
+
+	if len(stats) != 3 {
+		t.Fatalf("got %d hour buckets, want 3", len(stats))
+	}
+
+	// Verify each hour's counts.
+	for i, h := range stats {
+		if h.Total != 7 {
+			t.Errorf("hour %d: total=%d, want 7", i, h.Total)
+		}
+		if h.Success != 5 {
+			t.Errorf("hour %d: success=%d, want 5", i, h.Success)
+		}
+		if h.Error != 2 {
+			t.Errorf("hour %d: error=%d, want 2", i, h.Error)
+		}
+		if h.HourUnix <= 0 {
+			t.Errorf("hour %d: hour_unix=%d, want >0", i, h.HourUnix)
+		}
+	}
+}
+
+func TestLogStatsByHour_AppliesFilters(t *testing.T) {
+	st, _ := openTemp(t)
+	u1, _ := st.CreateUser("stats-user1", "stats1", "")
+	u2, _ := st.CreateUser("stats-user2", "stats2", "")
+
+	now := time.Now().Truncate(time.Hour)
+
+	// User 1: service-a, model-1, success
+	if err := st.AddRequestLog(u1.ID, "model-1", "service-a", now, now.Add(time.Second), "success", ""); err != nil {
+		t.Fatal(err)
+	}
+	// User 2: service-b, model-2, error
+	if err := st.AddRequestLog(u2.ID, "model-2", "service-b", now, now.Add(time.Second), "error", "upstream_error"); err != nil {
+		t.Fatal(err)
+	}
+	// User 1: service-b, model-2, error
+	if err := st.AddRequestLog(u1.ID, "model-2", "service-b", now.Add(time.Minute), now.Add(time.Minute+time.Second), "error", "upstream_error"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Filter by user_id
+	stats, err := st.LogStatsByHour(LogFilter{UserID: &u1.ID})
+	if err != nil {
+		t.Fatalf("LogStatsByHour with user filter: %v", err)
+	}
+	if len(stats) != 1 || stats[0].Total != 2 {
+		t.Fatalf("user filter: got total=%d, want 2", len(stats))
+	}
+
+	// Filter by service
+	stats, err = st.LogStatsByHour(LogFilter{Service: "service-a"})
+	if err != nil {
+		t.Fatalf("LogStatsByHour with service filter: %v", err)
+	}
+	if len(stats) != 1 || stats[0].Total != 1 {
+		t.Fatalf("service filter: got total=%d, want 1", stats[0].Total)
+	}
+
+	// Filter by model
+	stats, err = st.LogStatsByHour(LogFilter{Model: "model-2"})
+	if err != nil {
+		t.Fatalf("LogStatsByHour with model filter: %v", err)
+	}
+	if len(stats) != 1 || stats[0].Total != 2 {
+		t.Fatalf("model filter: got total=%d, want 2", stats[0].Total)
+	}
+
+	// Filter by status
+	stats, err = st.LogStatsByHour(LogFilter{Status: "error"})
+	if err != nil {
+		t.Fatalf("LogStatsByHour with status filter: %v", err)
+	}
+	if len(stats) != 1 || stats[0].Total != 2 {
+		t.Fatalf("status filter: got total=%d, want 2", stats[0].Total)
+	}
+
+	// Filter by since/until
+	later := now.Add(30 * time.Minute)
+	stats, err = st.LogStatsByHour(LogFilter{Since: later.Unix()})
+	if err != nil {
+		t.Fatalf("LogStatsByHour with since filter: %v", err)
+	}
+	if len(stats) != 0 {
+		t.Fatalf("since filter (no data): got %d buckets, want 0", len(stats))
+	}
+
+	// Combined filters
+	stats, err = st.LogStatsByHour(LogFilter{Service: "service-b", Status: "error"})
+	if err != nil {
+		t.Fatalf("LogStatsByHour with combined filters: %v", err)
+	}
+	if len(stats) != 1 || stats[0].Total != 2 {
+		t.Fatalf("combined filters: got total=%d, want 2", stats[0].Total)
+	}
+}
+
+func TestLogStatsByHour_EmptyResult(t *testing.T) {
+	st, _ := openTemp(t)
+	stats, err := st.LogStatsByHour(LogFilter{})
+	if err != nil {
+		t.Fatalf("LogStatsByHour on empty DB: %v", err)
+	}
+	if len(stats) != 0 {
+		t.Fatalf("got %d buckets on empty DB, want 0", len(stats))
+	}
+}
+
+func TestLogStatsByHour_HourUnixIsHourStart(t *testing.T) {
+	st, _ := openTemp(t)
+	u, _ := st.CreateUser("hour-utc", "hour-utc", "")
+
+	// Insert a log at a non-hour-aligned minute; the bucket must report the
+	// hour-start unix timestamp, not the log's own started_at. Using a fixed
+	// UTC time within the retention window.
+	known := time.Now().UTC().Truncate(time.Hour).Add(30 * time.Minute)
+	if err := st.AddRequestLog(u.ID, "m", "s", known, known.Add(time.Second), "success", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := st.LogStatsByHour(LogFilter{})
+	if err != nil {
+		t.Fatalf("LogStatsByHour: %v", err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("got %d buckets, want 1", len(stats))
+	}
+	want := known.Truncate(time.Hour).Unix()
+	if stats[0].HourUnix != want {
+		t.Errorf("hour_unix = %d, want %d (bucketed hour start)", stats[0].HourUnix, want)
+	}
+	// The bucket must be a whole-hour multiple.
+	if stats[0].HourUnix%3600 != 0 {
+		t.Errorf("hour_unix %d not divisible by 3600", stats[0].HourUnix)
+	}
+}
+
+func TestLogStatsByHour_CrossesUTCBoundary(t *testing.T) {
+	st, _ := openTemp(t)
+	u, _ := st.CreateUser("utc-boundary", "utc", "")
+
+	// Create logs that span a UTC day boundary.
+	// Use a recent time within the retention window.
+	utcMidnight := time.Now().UTC().Truncate(24 * time.Hour)
+
+	// 23:50 UTC (previous day) - 1 success
+	if err := st.AddRequestLog(u.ID, "model-1", "service-a", utcMidnight.Add(-10*time.Minute), utcMidnight.Add(-10*time.Minute+time.Second), "success", ""); err != nil {
+		t.Fatal(err)
+	}
+	// 00:10 UTC (next day) - 2 errors
+	if err := st.AddRequestLog(u.ID, "model-2", "service-b", utcMidnight.Add(10*time.Minute), utcMidnight.Add(10*time.Minute+time.Second), "error", "upstream_error"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddRequestLog(u.ID, "model-2", "service-b", utcMidnight.Add(10*time.Minute+time.Second), utcMidnight.Add(10*time.Minute+2*time.Second), "error", "upstream_error"); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := st.LogStatsByHour(LogFilter{})
+	if err != nil {
+		t.Fatalf("LogStatsByHour across UTC boundary: %v", err)
+	}
+
+	// Should have 2 hour buckets: 23:00 and 00:00
+	if len(stats) != 2 {
+		t.Fatalf("got %d hour buckets across UTC boundary, want 2", len(stats))
+	}
+
+	// Verify buckets are ordered by hour_unix
+	if stats[0].HourUnix >= stats[1].HourUnix {
+		t.Error("hour buckets not ordered by hour_unix")
+	}
+}
+
+func TestLogStatsByHour_RespectsRetentionWindow(t *testing.T) {
+	st, _ := openTemp(t)
+	u, _ := st.CreateUser("retention-stats", "retention", "")
+
+	now := time.Now()
+
+	// Old log outside retention window (31 days ago)
+	oldLog := now.Add(-31 * 24 * time.Hour)
+	if err := st.AddRequestLog(u.ID, "old-model", "old-service", oldLog, oldLog.Add(time.Second), "success", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// Recent log within retention window
+	recentLog := now.Add(-24 * time.Hour)
+	if err := st.AddRequestLog(u.ID, "recent-model", "recent-service", recentLog, recentLog.Add(time.Second), "error", "upstream_error"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Empty filter should apply retention cutoff and only return recent logs
+	stats, err := st.LogStatsByHour(LogFilter{})
+	if err != nil {
+		t.Fatalf("LogStatsByHour with retention: %v", err)
+	}
+
+	if len(stats) != 1 || stats[0].Total != 1 {
+		t.Fatalf("retention cutoff: got total=%d buckets, want 1 with 1 entry", len(stats))
+	}
+
+	// Explicit since should override retention
+	stats, err = st.LogStatsByHour(LogFilter{Since: oldLog.Unix()})
+	if err != nil {
+		t.Fatalf("LogStatsByHour with explicit since: %v", err)
+	}
+
+	if len(stats) != 2 || totalStats(stats) != 2 {
+		t.Fatalf("explicit since: got %d buckets with total=%d entries, want 2 entries", len(stats), totalStats(stats))
+	}
+}
+
+func totalStats(stats []LogHourStat) int {
+	total := 0
+	for _, h := range stats {
+		total += h.Total
+	}
+	return total
+}

@@ -266,8 +266,17 @@ type LogServiceStat struct {
 	Count   int    `json:"count"`
 }
 
+// LogHourStat is one hour's aggregated log counts (UTC hour bucket).
+type LogHourStat struct {
+	HourUnix int64 `json:"hour_unix"` // Unix timestamp of hour start (UTC)
+	Total    int   `json:"total"`
+	Success  int   `json:"success"`
+	Error    int   `json:"error"`
+}
+
 // LogStats returns daily and per-service aggregates for the last N days.
 // since/until narrow the window further (0 = no bound).
+// Deprecated: Use LogStatsByHour for new code.
 func (s *Store) LogStats(days int, since, until int64) ([]LogDayStat, []LogServiceStat, error) {
 	cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour).Unix()
 
@@ -345,6 +354,47 @@ func (s *Store) LogStats(days int, since, until int64) ([]LogDayStat, []LogServi
 		svcs = append(svcs, s)
 	}
 	return days_, svcs, rows2.Err()
+}
+
+// LogStatsByHour returns hourly aggregated log counts for stats API.
+// The filter accepts user_id, service, model, status, and time bounds.
+// An empty filter returns all history within the current 30-day retention window.
+func (s *Store) LogStatsByHour(f LogFilter) ([]LogHourStat, error) {
+	// If no explicit time bounds are provided, apply the 30-day retention cutoff.
+	// This ensures "all history" stays within the rolling retention window.
+	if f.Since <= 0 {
+		f.Since = time.Now().Add(-RequestLogRetention).Unix()
+	}
+
+	where, args := logFilterWhere(f)
+
+	// Hourly aggregation: use UTC hour buckets for consistent server-side grouping.
+	// The frontend will merge these into local days.
+	query := `SELECT strftime('%Y-%m-%d %H:00', l.started_at, 'unixepoch') AS hour_str,
+			CAST(strftime('%s', strftime('%Y-%m-%d %H:00', l.started_at, 'unixepoch')) AS INTEGER) AS hour_unix,
+			COUNT(*) AS total,
+			SUM(CASE WHEN l.status = 'success' THEN 1 ELSE 0 END) AS success,
+			SUM(CASE WHEN l.status = 'error' THEN 1 ELSE 0 END) AS error
+			FROM request_logs l` + where + `
+			GROUP BY hour_str
+			ORDER BY hour_unix ASC`
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stats []LogHourStat
+	for rows.Next() {
+		var hourStr string
+		var h LogHourStat
+		if err := rows.Scan(&hourStr, &h.HourUnix, &h.Total, &h.Success, &h.Error); err != nil {
+			return nil, err
+		}
+		stats = append(stats, h)
+	}
+	return stats, rows.Err()
 }
 
 // PurgeExpiredRequestLogs deletes every request log older than the rolling

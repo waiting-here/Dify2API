@@ -589,3 +589,303 @@ func TestAdminLogs_CSVFormulaInjectionAndSecretFields(t *testing.T) {
 		t.Fatalf("JSON semantics changed: %+v", got)
 	}
 }
+
+func TestAdminLogStats_ReturnsHourlyBuckets(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+
+	u, _ := store.CreateUser("42", "stats-user", "")
+	now := time.Now().Truncate(time.Hour)
+
+	// Create logs in 2 different hours
+	for i := 0; i < 3; i++ {
+		addTestLog(store, u.ID, "model-1", "general", "success", "", now.Add(time.Duration(i)*time.Minute), now.Add(time.Duration(i)*time.Minute+time.Second))
+	}
+	addTestLog(store, u.ID, "model-2", "custom", "error", "upstream_error", now.Add(time.Hour), now.Add(time.Hour+time.Second))
+
+	rec := adminGet(gw, adminCookie, "/api/admin/logs/stats")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		ByHour    []db.LogHourStat `json:"by_hour"`
+		ByService []interface{}    `json:"by_service"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// Should have 2 hour buckets
+	if len(resp.ByHour) != 2 {
+		t.Fatalf("got %d hour buckets, want 2", len(resp.ByHour))
+	}
+
+	// First hour: 3 success, 0 error
+	if resp.ByHour[0].Total != 3 || resp.ByHour[0].Success != 3 || resp.ByHour[0].Error != 0 {
+		t.Errorf("first hour: %+v, want total=3 success=3 error=0", resp.ByHour[0])
+	}
+
+	// Second hour: 0 success, 1 error
+	if resp.ByHour[1].Total != 1 || resp.ByHour[1].Success != 0 || resp.ByHour[1].Error != 1 {
+		t.Errorf("second hour: %+v, want total=1 success=0 error=1", resp.ByHour[1])
+	}
+
+	// Compatibility field must be empty array
+	if len(resp.ByService) != 0 {
+		t.Errorf("by_service = %v, want empty array", resp.ByService)
+	}
+}
+
+func TestAdminLogStats_ByServiceReturns501(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+
+	rec := adminGet(gw, adminCookie, "/api/admin/logs/stats?by_service=1")
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want 501; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var errResp struct {
+		Error struct {
+			Code    string `json:"code"`
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&errResp); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+
+	if errResp.Error.Code != "not_implemented" {
+		t.Errorf("error code = %q, want 'not_implemented'", errResp.Error.Code)
+	}
+}
+
+func TestAdminLogStats_AppliesFilters(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+
+	u1, _ := store.CreateUser("42", "alice", "")
+	u2, _ := store.CreateUser("99", "bob", "")
+	now := time.Now().Truncate(time.Hour)
+
+	addTestLog(store, u1.ID, "model-1", "general", "success", "", now, now.Add(time.Second))
+	addTestLog(store, u2.ID, "model-2", "custom", "error", "upstream_error", now.Add(time.Minute), now.Add(time.Minute+time.Second))
+	addTestLog(store, u1.ID, "model-2", "custom", "error", "upstream_error", now.Add(time.Minute*2), now.Add(time.Minute*2+time.Second))
+
+	// Filter by user_id
+	rec := adminGet(gw, adminCookie, fmt.Sprintf("/api/admin/logs/stats?user_id=%d", u1.ID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("user filter: status = %d", rec.Code)
+	}
+	var resp struct {
+		ByHour []db.LogHourStat `json:"by_hour"`
+	}
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if len(resp.ByHour) != 1 || resp.ByHour[0].Total != 2 {
+		t.Errorf("user filter: got total=%d, want 2", resp.ByHour[0].Total)
+	}
+
+	// Filter by service
+	rec = adminGet(gw, adminCookie, "/api/admin/logs/stats?service=general")
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if len(resp.ByHour) != 1 || resp.ByHour[0].Total != 1 {
+		t.Errorf("service filter: got total=%d, want 1", resp.ByHour[0].Total)
+	}
+
+	// Filter by status
+	rec = adminGet(gw, adminCookie, "/api/admin/logs/stats?status=error")
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if len(resp.ByHour) != 1 || resp.ByHour[0].Total != 2 {
+		t.Errorf("status filter: got total=%d, want 2", resp.ByHour[0].Total)
+	}
+}
+
+func TestAdminLogStats_StrictFilterValidation(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+
+	testCases := []struct {
+		param   string
+		value   string
+		wantMsg string
+	}{
+		{"user_id", "invalid", "[Dify2API] user_id must be a positive integer"},
+		{"user_id", "-1", "[Dify2API] user_id must be a positive integer"},
+		{"status", "invalid", "[Dify2API] status must be 'success' or 'error'"},
+		{"since", "invalid", "[Dify2API] since must be a positive unix timestamp"},
+		{"until", "invalid", "[Dify2API] until must be a positive unix timestamp"},
+		{"since", "-1", "[Dify2API] since must be a positive unix timestamp"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.param+"_"+tc.value, func(t *testing.T) {
+			url := fmt.Sprintf("/api/admin/logs/stats?%s=%s", tc.param, tc.value)
+			rec := adminGet(gw, adminCookie, url)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400", rec.Code)
+			}
+			var errResp struct {
+				Error struct {
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			json.NewDecoder(rec.Body).Decode(&errResp)
+			if errResp.Error.Message != tc.wantMsg {
+				t.Errorf("message = %q, want %q", errResp.Error.Message, tc.wantMsg)
+			}
+		})
+	}
+
+	// since > until should also fail
+	rec := adminGet(gw, adminCookie, "/api/admin/logs/stats?since=2000000000&until=1000000000")
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("since>until: status = %d, want 400", rec.Code)
+	}
+}
+
+func TestAdminLogStats_IgnoresDaysParameter(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+
+	u, _ := store.CreateUser("42", "stats-user", "")
+	now := time.Now().Truncate(time.Hour)
+
+	// Create logs across multiple hours
+	for i := 0; i < 5; i++ {
+		addTestLog(store, u.ID, "model-1", "general", "success", "", now.Add(time.Duration(i)*time.Hour), now.Add(time.Duration(i)*time.Hour+time.Second))
+	}
+
+	// Request with days parameter (should be ignored, return all within retention)
+	rec := adminGet(gw, adminCookie, "/api/admin/logs/stats?days=1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var resp struct {
+		ByHour []db.LogHourStat `json:"by_hour"`
+	}
+	json.NewDecoder(rec.Body).Decode(&resp)
+
+	// Should return all 5 hours (not just 1 day as days=1 would suggest)
+	if len(resp.ByHour) != 5 {
+		t.Errorf("with days=1: got %d buckets, want 5 (days parameter ignored)", len(resp.ByHour))
+	}
+}
+
+func TestAdminLogStats_EmptyResult(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+
+	rec := adminGet(gw, adminCookie, "/api/admin/logs/stats")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var resp struct {
+		ByHour []db.LogHourStat `json:"by_hour"`
+	}
+	json.NewDecoder(rec.Body).Decode(&resp)
+
+	if len(resp.ByHour) != 0 {
+		t.Errorf("empty DB: got %d buckets, want 0", len(resp.ByHour))
+	}
+}
+
+func TestAdminLogStats_ForbiddenForNonAdmin(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	u, _ := store.CreateUser("42", "tester", "")
+	token, _, _ := store.CreateSession(u.ID)
+	cookie := &http.Cookie{Name: auth.SessionCookieName, Value: token}
+
+	rec := adminGet(gw, cookie, "/api/admin/logs/stats")
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("non-admin: status = %d, want 403", rec.Code)
+	}
+}
+
+func TestAdminLogs_StrictFilterValidation(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+
+	testCases := []struct {
+		param   string
+		value   string
+		wantMsg string
+	}{
+		{"user_id", "abc", "[Dify2API] user_id must be a positive integer"},
+		{"status", "pending", "[Dify2API] status must be 'success' or 'error'"},
+		{"since", "not-a-number", "[Dify2API] since must be a positive unix timestamp"},
+		{"until", "not-a-number", "[Dify2API] until must be a positive unix timestamp"},
+		{"since", "0", "[Dify2API] since must be a positive unix timestamp"},
+		{"until", "-100", "[Dify2API] until must be a positive unix timestamp"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.param+"_"+tc.value, func(t *testing.T) {
+			url := fmt.Sprintf("/api/admin/logs?%s=%s", tc.param, tc.value)
+			rec := adminGet(gw, adminCookie, url)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400", rec.Code)
+			}
+			var errResp struct {
+				Error struct {
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			json.NewDecoder(rec.Body).Decode(&errResp)
+			if errResp.Error.Message != tc.wantMsg {
+				t.Errorf("message = %q, want %q", errResp.Error.Message, tc.wantMsg)
+			}
+		})
+	}
+
+	// since > until validation
+	rec := adminGet(gw, adminCookie, "/api/admin/logs?since=2000000000&until=1000000000")
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("since>until: status = %d, want 400", rec.Code)
+	}
+	var errResp struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	json.NewDecoder(rec.Body).Decode(&errResp)
+	if errResp.Error.Message != "[Dify2API] since must be <= until" {
+		t.Errorf("message = %q, want '[Dify2API] since must be <= until'", errResp.Error.Message)
+	}
+}
+
+func TestAdminLogsExport_StrictFilterValidation(t *testing.T) {
+	gw, _ := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+
+	// Export should also use strict parseLogFilter
+	testCases := []struct {
+		param   string
+		value   string
+		wantMsg string
+	}{
+		{"user_id", "invalid", "[Dify2API] user_id must be a positive integer"},
+		{"status", "invalid", "[Dify2API] status must be 'success' or 'error'"},
+		{"since", "invalid", "[Dify2API] since must be a positive unix timestamp"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.param+"_"+tc.value, func(t *testing.T) {
+			url := fmt.Sprintf("/api/admin/logs/export?%s=%s", tc.param, tc.value)
+			rec := adminGet(gw, adminCookie, url)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400", rec.Code)
+			}
+			var errResp struct {
+				Error struct {
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			json.NewDecoder(rec.Body).Decode(&errResp)
+			if errResp.Error.Message != tc.wantMsg {
+				t.Errorf("message = %q, want %q", errResp.Error.Message, tc.wantMsg)
+			}
+		})
+	}
+}
