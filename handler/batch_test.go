@@ -454,6 +454,36 @@ func TestBatchDonationStatus_ExpiredRejected(t *testing.T) {
 	}
 }
 
+func TestBatchDonationStatus_SQLFailureRollsBack(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	adminC := adminCookie(t, gw)
+	first := createInactiveDonation(t, store, "general", "status-rollback-1")
+	second := createInactiveDonation(t, store, "general", "status-rollback-2")
+	if err := store.SetDonationStatus(first, db.DonationActive); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetDonationStatus(second, db.DonationActive); err != nil {
+		t.Fatal(err)
+	}
+	trigger := fmt.Sprintf(`CREATE TRIGGER fail_status_second BEFORE UPDATE OF status ON donations
+		WHEN NEW.id=%d BEGIN SELECT RAISE(ABORT, 'injected status failure'); END`, second)
+	if _, err := store.RawExec(trigger); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+	rec := batchRequest(gw, adminC, http.MethodPost, "/api/admin/donations/status/batch", map[string]interface{}{
+		"ids": []int64{first, second}, "status": db.DonationInactive,
+	})
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	for _, id := range []int64{first, second} {
+		got, _ := store.GetDonation(id)
+		if got == nil || got.Status != db.DonationActive {
+			t.Errorf("donation %d partially updated: %+v", id, got)
+		}
+	}
+}
+
 // TestBatchDeleteDonations deletes multiple donations.
 func TestBatchDeleteDonations(t *testing.T) {
 	gw, store := setupAuthGateway(t, "x")
@@ -675,6 +705,34 @@ func TestBatchDeletePricing_HasDonation(t *testing.T) {
 	}
 }
 
+func TestBatchDeletePricing_SQLFailureRollsBack(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	adminC := adminCookie(t, gw)
+	for _, model := range []string{"rollback-p1", "rollback-p2"} {
+		if _, err := store.UpsertPricing("general", model, 10, ptr(5)); err != nil {
+			t.Fatalf("seed pricing: %v", err)
+		}
+	}
+	if _, err := store.RawExec(`CREATE TRIGGER fail_pricing_delete BEFORE DELETE ON charity_pricing
+		WHEN OLD.model='rollback-p2' BEGIN SELECT RAISE(ABORT, 'injected pricing failure'); END`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+	rec := batchRequest(gw, adminC, http.MethodPost, "/api/admin/pricing/delete/batch", map[string]interface{}{
+		"pairs": []map[string]string{
+			{"service": "general", "model": "rollback-p1"},
+			{"service": "general", "model": "rollback-p2"},
+		},
+	})
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	for _, model := range []string{"rollback-p1", "rollback-p2"} {
+		if got, _ := store.GetPricing("general", model); got == nil {
+			t.Errorf("pricing %s was partially deleted", model)
+		}
+	}
+}
+
 // --- 7.4 Bulletin batch delete ---
 
 // TestBatchDeleteBulletins_AllSuccess tests batch bulletin deletion.
@@ -747,6 +805,29 @@ func TestBatchDeleteBulletins_MissingID(t *testing.T) {
 	got, _ := store.GetBulletin(created.ID)
 	if got == nil {
 		t.Error("existing bulletin should NOT have been deleted")
+	}
+}
+
+func TestBatchDeleteBulletins_SQLFailureRollsBack(t *testing.T) {
+	gw, store := setupAuthGateway(t, "x")
+	adminC := adminCookie(t, gw)
+	first, _ := store.CreateBulletin(&db.Bulletin{Title: "rollback-1", Content: "x", Type: db.BulletinTypeInfo})
+	second, _ := store.CreateBulletin(&db.Bulletin{Title: "rollback-2", Content: "x", Type: db.BulletinTypeInfo})
+	trigger := fmt.Sprintf(`CREATE TRIGGER fail_bulletin_delete BEFORE DELETE ON bulletins
+		WHEN OLD.id=%d BEGIN SELECT RAISE(ABORT, 'injected bulletin failure'); END`, second.ID)
+	if _, err := store.RawExec(trigger); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+	rec := batchRequest(gw, adminC, http.MethodPost, "/api/admin/bulletins/delete/batch", map[string]interface{}{
+		"ids": []int64{first.ID, second.ID},
+	})
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	for _, id := range []int64{first.ID, second.ID} {
+		if got, _ := store.GetBulletin(id); got == nil {
+			t.Errorf("bulletin %d was partially deleted", id)
+		}
 	}
 }
 

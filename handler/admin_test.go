@@ -235,6 +235,74 @@ func TestSettings_CheckinParametersRoundtrip(t *testing.T) {
 	}
 }
 
+func TestSettingsPut_OmittedFieldsAndRollback(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+	for key, value := range map[string]string{
+		db.SettingGuildID:   "guild-old",
+		db.SettingRoleID:    "role-old",
+		db.SettingRPMLimitA: "6",
+		db.SettingRPMLimitB: "12",
+	} {
+		if err := store.SetSetting(key, value); err != nil {
+			t.Fatalf("seed %s: %v", key, err)
+		}
+	}
+	u, _ := store.CreateUser("settings-cache", "settings-cache", "")
+	_ = gw.effectiveRPMLimits(u.ID)
+
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	wrapped := gw.Wrap(mux)
+	put := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, "/api/admin/settings", strings.NewReader(body))
+		req.Host = gw.Config.Admin.AdminHost
+		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(adminCookie)
+		rec := httptest.NewRecorder()
+		wrapped.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := put(`{"checkin_min":8}`); rec.Code != http.StatusOK {
+		t.Fatalf("omitted-field PUT: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got, _ := store.GetSetting(db.SettingGuildID); got != "guild-old" {
+		t.Fatalf("guild_id cleared by omission: %q", got)
+	}
+	if got, _ := store.GetSetting(db.SettingRoleID); got != "role-old" {
+		t.Fatalf("role_id cleared by omission: %q", got)
+	}
+	if rec := put(`{"guild_id":"guild-new","rpm_limit_a":0}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("validation PUT: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got, _ := store.GetSetting(db.SettingGuildID); got != "guild-old" {
+		t.Fatalf("validation failure partially changed guild_id: %q", got)
+	}
+
+	// Refill the cache after the successful update, then force the second SQL
+	// statement in the next request to fail. Neither DB nor cache may change.
+	_ = gw.effectiveRPMLimits(u.ID)
+	if _, err := store.RawExec(`CREATE TRIGGER fail_settings_b BEFORE INSERT ON settings
+		WHEN NEW.key='rpm_limit_b' BEGIN SELECT RAISE(ABORT, 'injected settings failure'); END`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+	if rec := put(`{"rpm_limit_a":7,"rpm_limit_b":13}`); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("injected PUT: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	for key, want := range map[string]string{db.SettingRPMLimitA: "6", db.SettingRPMLimitB: "12"} {
+		if got, _ := store.GetSetting(key); got != want {
+			t.Errorf("%s=%q, want rollback to %q", key, got, want)
+		}
+	}
+	gw.limiter.limitCacheMu.RLock()
+	_, cached := gw.limiter.limitCache[u.ID]
+	gw.limiter.limitCacheMu.RUnlock()
+	if !cached {
+		t.Error("failed settings transaction invalidated RPM cache")
+	}
+}
+
 func TestBatchCredits_SetAddSub(t *testing.T) {
 	gw, store := setupAuthGateway(t, "s3cret")
 	adminCookie := loginCookie(t, gw, "root", "s3cret")
@@ -375,6 +443,80 @@ func TestBatchCredits_Validation(t *testing.T) {
 	rec = batchCreditsPost(gw, nil, []int64{1}, "set", 10)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("non-admin: status = %d, want 403", rec.Code)
+	}
+}
+
+func TestBatchBalances_RollbackOnMidBatchFailure(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string
+		post  func(*Gateway, *http.Cookie, []int64, string, int) *httptest.ResponseRecorder
+		read  func(*db.User) int
+	}{
+		{"credits", "credits", batchCreditsPost, func(u *db.User) int { return u.Credits }},
+		{"donation_credit", "donation_credit", batchDonationCreditPost, func(u *db.User) int { return u.DonationCredit }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gw, store := setupAuthGateway(t, "s3cret")
+			adminCookie := loginCookie(t, gw, "root", "s3cret")
+			first, _ := store.CreateUser(tt.name+"-1", "first", "")
+			second, _ := store.CreateUser(tt.name+"-2", "second", "")
+			trigger := fmt.Sprintf(`CREATE TRIGGER fail_second_balance BEFORE UPDATE OF %s ON users
+				WHEN NEW.id=%d BEGIN SELECT RAISE(ABORT, 'injected balance failure'); END`, tt.field, second.ID)
+			if _, err := store.RawExec(trigger); err != nil {
+				t.Fatalf("create trigger: %v", err)
+			}
+			rec := tt.post(gw, adminCookie, []int64{first.ID, second.ID}, "add", 9)
+			if rec.Code != http.StatusInternalServerError {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			gotFirst, _ := store.GetUserByID(first.ID)
+			gotSecond, _ := store.GetUserByID(second.ID)
+			if tt.read(gotFirst) != 0 || tt.read(gotSecond) != 0 {
+				t.Fatalf("partial balance update: first=%d second=%d", tt.read(gotFirst), tt.read(gotSecond))
+			}
+		})
+	}
+}
+
+func TestAntiAbuseBatch_RollbackKeepsCache(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+	invalid := batchRequest(gw, adminCookie, http.MethodPut, "/api/admin/anti-abuse", map[string]interface{}{
+		"configs": []map[string]interface{}{
+			{"service": "general", "mode": 2, "min_chars": 30, "penalty_deduct_credits": 1, "penalty_ban_hours": 2},
+			{"service": "sillytavern-main-trimmed", "mode": 9, "min_chars": 40, "penalty_deduct_credits": 1, "penalty_ban_hours": 2},
+		},
+	})
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("validation status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+	if stored, _ := store.GetAntiAbuseConfig("general"); stored == nil || stored.Mode != 0 {
+		t.Fatalf("validation failure partially changed general: %+v", stored)
+	}
+	if _, err := store.RawExec(`CREATE TRIGGER fail_anti_abuse_second BEFORE UPDATE ON service_anti_abuse
+		WHEN NEW.service='sillytavern-main-trimmed' BEGIN SELECT RAISE(ABORT, 'injected anti-abuse failure'); END`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+	rec := batchRequest(gw, adminCookie, http.MethodPut, "/api/admin/anti-abuse", map[string]interface{}{
+		"configs": []map[string]interface{}{
+			{"service": "general", "mode": 2, "min_chars": 30, "penalty_deduct_credits": 1, "penalty_ban_hours": 2},
+			{"service": "sillytavern-main-trimmed", "mode": 2, "min_chars": 40, "penalty_deduct_credits": 1, "penalty_ban_hours": 2},
+		},
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	for _, service := range []string{"general", "sillytavern-main-trimmed"} {
+		stored, _ := store.GetAntiAbuseConfig(service)
+		if stored == nil || stored.Mode != 0 {
+			t.Errorf("stored %s changed despite rollback: %+v", service, stored)
+		}
+		cached := gw.antiAbuseConfig(service)
+		if cached == nil || cached.Mode != 0 {
+			t.Errorf("cached %s changed despite rollback: %+v", service, cached)
+		}
 	}
 }
 

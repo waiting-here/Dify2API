@@ -1758,45 +1758,14 @@ func (g *Gateway) handleBatchDonationStatus(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Atomic all-or-nothing: validate all first.
-	for _, id := range req.IDs {
-		d, err := g.Store.GetDonation(id)
-		if err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+	if err := g.Store.BatchSetDonationStatus(req.IDs, req.Status); err != nil {
+		var statusErr *db.DonationStatusError
+		if errors.As(err, &statusErr) {
+			writeBatchDonationError(w, statusErr.Error(), statusErr.DonationID)
 			return
 		}
-		if d == nil {
-			writeBatchDonationError(w, fmt.Sprintf("捐赠条目 %d 不存在", id), id)
-			return
-		}
-		if d.Status == db.DonationExpired {
-			writeBatchDonationError(w,
-				fmt.Sprintf("已失效的捐赠条目 %d 不可更改状态", id), id)
-			return
-		}
-		// Switching to active: check pricing exists.
-		if req.Status == db.DonationActive {
-			pricing, pErr := g.Store.GetPricing(d.Service, d.Model)
-			if pErr != nil {
-				g.writeError(w, http.StatusInternalServerError, "internal", pErr.Error())
-				return
-			}
-			if pricing == nil {
-				writeBatchDonationError(w,
-					fmt.Sprintf("捐赠条目 %d 的模型 (%s, %s) 尚未设定价格，请先在定价表中添加该组合后再激活",
-						id, d.Service, d.Model), id)
-				return
-			}
-		}
-	}
-
-	// All passed: apply status.
-	for _, id := range req.IDs {
-		if err := g.Store.SetDonationStatus(id, req.Status); err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal",
-				fmt.Sprintf("设置捐赠条目 %d 状态失败: %v", id, err))
-			return
-		}
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")

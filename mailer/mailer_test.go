@@ -382,6 +382,47 @@ func TestRecordCallback_InvokedPerQueuedEvent(t *testing.T) {
 	}
 }
 
+func TestAlertCenterAndEmailGatesAreIndependent(t *testing.T) {
+	cfg := testSMTPConfig()
+	var recorded int
+	m := New(cfg, Options{
+		EmailEnabled: func(EventType) bool { return false },
+		Record: func(EventType, string) {
+			recorded++
+		},
+	})
+	m.UserAutoBanned("center-only", 1, time.Now(), 1, 1)
+	if recorded != 1 {
+		t.Fatalf("email off suppressed alert-center record: got %d", recorded)
+	}
+	m.mu.Lock()
+	queued := len(m.coolers)
+	m.mu.Unlock()
+	if queued != 0 {
+		t.Fatalf("email-off event was queued for delivery: coolers=%d", queued)
+	}
+
+	// A center sink that intentionally drops the event must not suppress email.
+	ms := &mockSender{}
+	m = New(cfg, Options{
+		EmailEnabled: func(EventType) bool { return true },
+		Record:       func(EventType, string) {},
+		CoolMinutes:  func() int { return 0 },
+	})
+	origCoolWindow := coolWindow
+	coolWindow = 30 * time.Millisecond
+	defer func() { coolWindow = origCoolWindow }()
+	m.sendFunc = ms.send
+	m.DonationInactive("general", "email-only", 2, 3)
+	time.Sleep(100 * time.Millisecond)
+	ms.mu.Lock()
+	sent := len(ms.mails)
+	ms.mu.Unlock()
+	if sent != 1 {
+		t.Fatalf("center-off behavior suppressed email: sent=%d", sent)
+	}
+}
+
 func TestCoolMinutesGetter_UsedForWindow(t *testing.T) {
 	cfg := testSMTPConfig()
 	minutes := 100

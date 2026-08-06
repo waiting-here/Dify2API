@@ -33,7 +33,7 @@ type Options struct {
 	CoolMinutes func() int
 	// EmailEnabled reports whether the category may send email.
 	EmailEnabled func(EventType) bool
-	// Record, when set, is invoked for every queued event so the gateway can
+	// Record, when set, is invoked for every event so the gateway can
 	// write an alert-center record (subject to its own show_in_center gate).
 	Record func(EventType, string)
 }
@@ -133,14 +133,13 @@ func (m *Mailer) AdminLoginLocked(ip string, lockUntil time.Time) {
 }
 
 func (m *Mailer) queue(et EventType, summary string) {
-	// Per-category email switch (admin alert prefs). Off categories are
-	// dropped entirely: no email, no record.
-	if m.emailEnabled != nil && !m.emailEnabled(et) {
-		return
-	}
 	// Alert-center record (its own show_in_center gate lives in the store).
 	if m.record != nil {
 		m.record(et, summary)
+	}
+	// The email gate is independent of alert-center recording.
+	if m.emailEnabled != nil && !m.emailEnabled(et) {
+		return
 	}
 	m.mu.Lock()
 	c, ok := m.coolers[et]

@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"time"
 )
 
@@ -26,6 +27,19 @@ type Bulletin struct {
 	IsSystem    bool
 	SystemKey   sql.NullString // non-nil for system-generated bulletins
 	Lang        string         // "zh" (default) or "en"
+}
+
+// BulletinDeleteError identifies an expected failed_id batch validation.
+type BulletinDeleteError struct {
+	ID       int64
+	IsSystem bool
+}
+
+func (e *BulletinDeleteError) Error() string {
+	if e.IsSystem {
+		return fmt.Sprintf("系统公告 %d 不可删除", e.ID)
+	}
+	return fmt.Sprintf("公告 %d 不存在", e.ID)
 }
 
 func scanBulletin(row interface{ Scan(...interface{}) error }) (*Bulletin, error) {
@@ -88,6 +102,37 @@ func (s *Store) UpdateBulletin(id int64, b *Bulletin) (*Bulletin, error) {
 func (s *Store) DeleteBulletin(id int64) error {
 	_, err := s.db.Exec(`DELETE FROM bulletins WHERE id=? AND is_system=0`, id)
 	return err
+}
+
+// DeleteBulletins validates and deletes an entire selection in one
+// transaction. SQL failures cannot leave a partially deleted batch.
+func (s *Store) DeleteBulletins(ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		var isSystem bool
+		if err := tx.QueryRow(`SELECT is_system FROM bulletins WHERE id=?`, id).Scan(&isSystem); err != nil {
+			if err == sql.ErrNoRows {
+				return &BulletinDeleteError{ID: id}
+			}
+			return err
+		}
+		if isSystem {
+			return &BulletinDeleteError{ID: id, IsSystem: true}
+		}
+	}
+	for _, id := range ids {
+		if _, err := tx.Exec(`DELETE FROM bulletins WHERE id=? AND is_system=0`, id); err != nil {
+			return fmt.Errorf("delete bulletin %d: %w", id, err)
+		}
+	}
+	return tx.Commit()
 }
 
 // GetBulletin fetches a bulletin by primary key. Returns (nil, nil) when absent.

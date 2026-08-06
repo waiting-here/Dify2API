@@ -16,6 +16,22 @@ type CharityPricing struct {
 	Enabled bool
 }
 
+// PricingPair identifies one pricing row in batch operations.
+type PricingPair struct {
+	Service string
+	Model   string
+}
+
+// PricingDeleteError identifies an expected batch conflict while retaining
+// the pair required by the existing failed_pair response.
+type PricingDeleteError struct {
+	Pair PricingPair
+}
+
+func (e *PricingDeleteError) Error() string {
+	return fmt.Sprintf("该 (%s, %s) 组合下存在捐赠条目，无法删除定价", e.Pair.Service, e.Pair.Model)
+}
+
 func scanPricing(row interface{ Scan(...interface{}) error }) (*CharityPricing, error) {
 	var p CharityPricing
 	var enabled int
@@ -123,6 +139,36 @@ func (s *Store) DeletePricing(service, model string) error {
 	}
 	_, err = s.db.Exec(`DELETE FROM charity_pricing WHERE service=? AND model=?`, service, model)
 	return err
+}
+
+// DeletePricingBatch validates donation references and deletes every pair in
+// one transaction. Duplicate and absent pairs preserve the old no-op behavior.
+func (s *Store) DeletePricingBatch(pairs []PricingPair) error {
+	if len(pairs) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, pair := range pairs {
+		var n int
+		if err := tx.QueryRow(
+			`SELECT COUNT(1) FROM donations WHERE service=? AND model=?`, pair.Service, pair.Model,
+		).Scan(&n); err != nil {
+			return err
+		}
+		if n > 0 {
+			return &PricingDeleteError{Pair: pair}
+		}
+	}
+	for _, pair := range pairs {
+		if _, err := tx.Exec(`DELETE FROM charity_pricing WHERE service=? AND model=?`, pair.Service, pair.Model); err != nil {
+			return fmt.Errorf("delete pricing (%s, %s): %w", pair.Service, pair.Model, err)
+		}
+	}
+	return tx.Commit()
 }
 
 // HasDonationsForPair checks whether the donations table contains any entry

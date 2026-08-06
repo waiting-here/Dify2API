@@ -202,35 +202,34 @@ func (g *Gateway) handleAdminPutSettings(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req struct {
-		GuildID             string `json:"guild_id"`
-		RoleID              string `json:"role_id"`
-		RPMLimitA           *int   `json:"rpm_limit_a"`
-		RPMLimitB           *int   `json:"rpm_limit_b"`
-		RPMLimitC           *int   `json:"rpm_limit_c"`
-		RPMViolationLimit   *int   `json:"rpm_violation_limit"`
-		RPMBanHours         *int   `json:"rpm_ban_hours"`
-		ProbeLimitPerUser   *int   `json:"probe_limit_per_user"`
-		CheckinMin          *int   `json:"checkin_min"`
-		CheckinMax          *int   `json:"checkin_max"`
-		CreditsCap          *int   `json:"credits_cap"`
-		DonationFailLimit   *int   `json:"donation_fail_limit"`
-		DonationReviewLimit *int   `json:"donation_review_limit"`
-		MailerCoolMinutes   *int   `json:"mailer_cool_minutes"`
-		DonationEnabled     *bool  `json:"donation_enabled"`
-		CharityEnabled      *bool  `json:"charity_enabled"`
-		MaintenanceMode     *bool  `json:"maintenance_mode"`
+		GuildID             *string `json:"guild_id"`
+		RoleID              *string `json:"role_id"`
+		RPMLimitA           *int    `json:"rpm_limit_a"`
+		RPMLimitB           *int    `json:"rpm_limit_b"`
+		RPMLimitC           *int    `json:"rpm_limit_c"`
+		RPMViolationLimit   *int    `json:"rpm_violation_limit"`
+		RPMBanHours         *int    `json:"rpm_ban_hours"`
+		ProbeLimitPerUser   *int    `json:"probe_limit_per_user"`
+		CheckinMin          *int    `json:"checkin_min"`
+		CheckinMax          *int    `json:"checkin_max"`
+		CreditsCap          *int    `json:"credits_cap"`
+		DonationFailLimit   *int    `json:"donation_fail_limit"`
+		DonationReviewLimit *int    `json:"donation_review_limit"`
+		MailerCoolMinutes   *int    `json:"mailer_cool_minutes"`
+		DonationEnabled     *bool   `json:"donation_enabled"`
+		CharityEnabled      *bool   `json:"charity_enabled"`
+		MaintenanceMode     *bool   `json:"maintenance_mode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
 		return
 	}
-	if err := g.Store.SetSetting(db.SettingGuildID, req.GuildID); err != nil {
-		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-		return
+	updates := make([]db.SettingUpdate, 0, 17)
+	if req.GuildID != nil {
+		updates = append(updates, db.SettingUpdate{Key: db.SettingGuildID, Value: *req.GuildID})
 	}
-	if err := g.Store.SetSetting(db.SettingRoleID, req.RoleID); err != nil {
-		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-		return
+	if req.RoleID != nil {
+		updates = append(updates, db.SettingUpdate{Key: db.SettingRoleID, Value: *req.RoleID})
 	}
 	// Optional RPM tunables: each must be >= 1 when present.
 	for _, f := range []struct {
@@ -251,10 +250,7 @@ func (g *Gateway) handleAdminPutSettings(w http.ResponseWriter, r *http.Request)
 			g.writeError(w, http.StatusBadRequest, "invalid_request", f.key+" must be >= 1")
 			return
 		}
-		if err := g.Store.SetSetting(f.key, strconv.Itoa(*f.val)); err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-			return
-		}
+		updates = append(updates, db.SettingUpdate{Key: f.key, Value: strconv.Itoa(*f.val)})
 	}
 	// Optional check-in tunables: each must be >= 1 when present.
 	for _, f := range []struct {
@@ -273,10 +269,7 @@ func (g *Gateway) handleAdminPutSettings(w http.ResponseWriter, r *http.Request)
 			g.writeError(w, http.StatusBadRequest, "invalid_request", f.key+" must be >= 1")
 			return
 		}
-		if err := g.Store.SetSetting(f.key, strconv.Itoa(*f.val)); err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-			return
-		}
+		updates = append(updates, db.SettingUpdate{Key: f.key, Value: strconv.Itoa(*f.val)})
 	}
 	// credits_cap may be 0 (check-in disabled).
 	if req.CreditsCap != nil {
@@ -284,10 +277,7 @@ func (g *Gateway) handleAdminPutSettings(w http.ResponseWriter, r *http.Request)
 			g.writeError(w, http.StatusBadRequest, "invalid_request", "credits_cap must be >= 0")
 			return
 		}
-		if err := g.Store.SetSetting(db.SettingCreditsCap, strconv.Itoa(*req.CreditsCap)); err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-			return
-		}
+		updates = append(updates, db.SettingUpdate{Key: db.SettingCreditsCap, Value: strconv.Itoa(*req.CreditsCap)})
 	}
 	// Donation review limit (optional, >= 0).
 	if req.DonationReviewLimit != nil {
@@ -295,10 +285,7 @@ func (g *Gateway) handleAdminPutSettings(w http.ResponseWriter, r *http.Request)
 			g.writeError(w, http.StatusBadRequest, "invalid_request", "donation_review_limit must be >= 0")
 			return
 		}
-		if err := g.Store.SetSetting(db.SettingDonationReviewLimit, strconv.Itoa(*req.DonationReviewLimit)); err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-			return
-		}
+		updates = append(updates, db.SettingUpdate{Key: db.SettingDonationReviewLimit, Value: strconv.Itoa(*req.DonationReviewLimit)})
 	}
 
 	// Donation enabled switch (optional bool).
@@ -307,10 +294,7 @@ func (g *Gateway) handleAdminPutSettings(w http.ResponseWriter, r *http.Request)
 		if *req.DonationEnabled {
 			val = "true"
 		}
-		if err := g.Store.SetSetting(db.SettingDonationEnabled, val); err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-			return
-		}
+		updates = append(updates, db.SettingUpdate{Key: db.SettingDonationEnabled, Value: val})
 	}
 
 	// Charity enabled switch (optional bool).
@@ -319,10 +303,7 @@ func (g *Gateway) handleAdminPutSettings(w http.ResponseWriter, r *http.Request)
 		if *req.CharityEnabled {
 			val = "true"
 		}
-		if err := g.Store.SetSetting(db.SettingCharityEnabled, val); err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-			return
-		}
+		updates = append(updates, db.SettingUpdate{Key: db.SettingCharityEnabled, Value: val})
 	}
 
 	// Maintenance mode switch (optional bool).
@@ -331,13 +312,15 @@ func (g *Gateway) handleAdminPutSettings(w http.ResponseWriter, r *http.Request)
 		if *req.MaintenanceMode {
 			val = "true"
 		}
-		if err := g.Store.SetSetting(db.SettingMaintenanceMode, val); err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-			return
-		}
+		updates = append(updates, db.SettingUpdate{Key: db.SettingMaintenanceMode, Value: val})
 	}
 
-	// Global limits may have changed — drop every cached per-user limit.
+	if err := g.Store.SetSettings(updates); err != nil {
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	// Invalidate only after the transaction commits, so a failed update cannot
+	// make the cache disagree with the database.
 	g.invalidateRPMCache(0)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
@@ -441,32 +424,10 @@ func (g *Gateway) handleAdminBatchCredits(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	updated := 0
-	for _, uid := range req.UserIDs {
-		u, err := g.Store.GetUserByID(uid)
-		if err != nil || u == nil || u.IsAdmin {
-			continue
-		}
-		switch req.Action {
-		case "set":
-			if err := g.Store.SetUserCredits(uid, req.Amount); err != nil {
-				g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-				return
-			}
-			updated++
-		case "add":
-			if _, err := g.Store.AdjustUserCredits(uid, req.Amount); err != nil {
-				g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-				return
-			}
-			updated++
-		case "sub":
-			if _, err := g.Store.AdjustUserCredits(uid, -req.Amount); err != nil {
-				g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-				return
-			}
-			updated++
-		}
+	updated, err := g.Store.BatchUpdateUserBalance(req.UserIDs, "credits", req.Action, req.Amount)
+	if err != nil {
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -502,32 +463,10 @@ func (g *Gateway) handleAdminBatchDonationCredit(w http.ResponseWriter, r *http.
 		return
 	}
 
-	updated := 0
-	for _, uid := range req.UserIDs {
-		u, err := g.Store.GetUserByID(uid)
-		if err != nil || u == nil || u.IsAdmin {
-			continue
-		}
-		switch req.Action {
-		case "set":
-			if err := g.Store.SetUserDonationCredit(uid, req.Amount); err != nil {
-				g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-				return
-			}
-			updated++
-		case "add":
-			if _, err := g.Store.AdjustUserDonationCredit(uid, req.Amount); err != nil {
-				g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-				return
-			}
-			updated++
-		case "sub":
-			if _, err := g.Store.AdjustUserDonationCredit(uid, -req.Amount); err != nil {
-				g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-				return
-			}
-			updated++
-		}
+	updated, err := g.Store.BatchUpdateUserBalance(req.UserIDs, "donation_credit", req.Action, req.Amount)
+	if err != nil {
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -728,28 +667,17 @@ func (g *Gateway) handleBatchDeletePricing(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Atomic all-or-nothing: validate all pairs first.
+	pairs := make([]db.PricingPair, 0, len(req.Pairs))
 	for _, pair := range req.Pairs {
-		has, err := g.Store.HasDonationsForPair(pair.Service, pair.Model)
-		if err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-			return
-		}
-		if has {
-			writeBatchPairError(w,
-				fmt.Sprintf("(%s, %s) 下存在捐赠条目，无法删除定价", pair.Service, pair.Model),
-				pair.Service, pair.Model)
-			return
-		}
+		pairs = append(pairs, db.PricingPair{Service: pair.Service, Model: pair.Model})
 	}
-
-	// All passed: delete each.
-	for _, pair := range req.Pairs {
-		if err := g.Store.DeletePricing(pair.Service, pair.Model); err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal",
-				fmt.Sprintf("删除定价 (%s, %s) 失败: %v", pair.Service, pair.Model, err))
+	if err := g.Store.DeletePricingBatch(pairs); err != nil {
+		if conflict, ok := err.(*db.PricingDeleteError); ok {
+			writeBatchPairError(w, conflict.Error(), conflict.Pair.Service, conflict.Pair.Model)
 			return
 		}
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -811,6 +739,7 @@ func (g *Gateway) handlePutAntiAbuse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	configUpdates := make([]db.AntiAbuseConfig, 0, len(req.Configs))
 	for _, c := range req.Configs {
 		if !translator.IsSupportedService(c.Service) {
 			g.writeError(w, http.StatusBadRequest, "invalid_request",
@@ -821,10 +750,15 @@ func (g *Gateway) handlePutAntiAbuse(w http.ResponseWriter, r *http.Request) {
 		if c.DonationSelectable != nil {
 			donationSelectable = *c.DonationSelectable
 		}
-		if _, err := g.Store.UpsertAntiAbuseConfig(c.Service, c.Mode, c.MinChars, c.PenaltyDeductCredits, c.PenaltyBanHours, donationSelectable); err != nil {
-			g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-			return
-		}
+		configUpdates = append(configUpdates, db.AntiAbuseConfig{
+			Service: c.Service, Mode: c.Mode, MinChars: c.MinChars,
+			PenaltyDeductCredits: c.PenaltyDeductCredits,
+			PenaltyBanHours:      c.PenaltyBanHours, DonationSelectable: donationSelectable,
+		})
+	}
+	if err := g.Store.UpsertAntiAbuseConfigs(configUpdates); err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
 	}
 
 	// Refresh cache so hot path sees the changes.

@@ -370,6 +370,15 @@ func TestAlertPrefsAPI(t *testing.T) {
 	if store.IsAlertShownInCenter("user_auto_banned") || store.IsAlertEmailEnabled("user_auto_banned") {
 		t.Error("expected show off, email off after PUT")
 	}
+	// Omitted switches retain their current value.
+	body = `{"prefs":[{"event_type":"user_auto_banned","email_enabled":true}]}`
+	req = httptest.NewRequest(http.MethodPut, "/api/admin/alert-prefs", strings.NewReader(body))
+	req.AddCookie(adminCookie)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || store.IsAlertShownInCenter("user_auto_banned") || !store.IsAlertEmailEnabled("user_auto_banned") {
+		t.Fatalf("partial preference update did not preserve center gate: status=%d body=%s", rec.Code, rec.Body.String())
+	}
 	// Other categories untouched.
 	if !store.IsAlertEmailEnabled("donation_inactive") {
 		t.Error("donation_inactive must stay enabled")
@@ -403,5 +412,36 @@ func TestAlertPrefsAPI(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("non-admin: status = %d, want 403", rec.Code)
+	}
+}
+
+func TestAlertPrefsPut_AtomicRollbackThroughGateway(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+	if _, err := store.RawExec(`CREATE TRIGGER fail_alert_pref_update BEFORE UPDATE ON alert_prefs
+		WHEN NEW.event_type='donation_inactive' BEGIN SELECT RAISE(ABORT, 'injected alert pref failure'); END`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	wrapped := gw.Wrap(mux)
+	body := `{"prefs":[
+		{"event_type":"user_auto_banned","show_in_center":false},
+		{"event_type":"donation_inactive","email_enabled":false}
+	]}`
+	req := httptest.NewRequest(http.MethodPut, "/api/admin/alert-prefs", strings.NewReader(body))
+	req.Host = gw.Config.Admin.AdminHost
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(adminCookie)
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !store.IsAlertShownInCenter("user_auto_banned") {
+		t.Error("first preference update survived failed batch")
+	}
+	if !store.IsAlertEmailEnabled("donation_inactive") {
+		t.Error("failing preference changed despite rollback")
 	}
 }

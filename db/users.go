@@ -289,6 +289,61 @@ func (s *Store) AdjustUserDonationCredit(userID int64, delta int) (int, error) {
 	return newVal, nil
 }
 
+// BatchUpdateUserBalance applies a set/add/sub operation to either credits or
+// donation_credit in one transaction. Missing users and administrators are
+// skipped to preserve the admin API's existing response semantics.
+func (s *Store) BatchUpdateUserBalance(userIDs []int64, field, action string, amount int) (int, error) {
+	if field != "credits" && field != "donation_credit" {
+		return 0, fmt.Errorf("unsupported balance field %q", field)
+	}
+	if action != "set" && action != "add" && action != "sub" {
+		return 0, fmt.Errorf("unsupported balance action %q", action)
+	}
+	if amount < 0 {
+		return 0, fmt.Errorf("amount must be >= 0")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	updated := 0
+	now := time.Now().Unix()
+	for _, userID := range userIDs {
+		var isAdmin bool
+		if err := tx.QueryRow(`SELECT is_admin FROM users WHERE id=?`, userID).Scan(&isAdmin); err != nil {
+			if err == sql.ErrNoRows {
+				continue
+			}
+			return 0, err
+		}
+		if isAdmin {
+			continue
+		}
+		var query string
+		value := amount
+		switch action {
+		case "set":
+			query = `UPDATE users SET ` + field + `=?, updated_at=? WHERE id=? AND is_admin=0`
+		case "add":
+			query = `UPDATE users SET ` + field + `=` + field + `+?, updated_at=? WHERE id=? AND is_admin=0`
+		case "sub":
+			query = `UPDATE users SET ` + field + `=` + field + `-?, updated_at=? WHERE id=? AND is_admin=0`
+		}
+		res, err := tx.Exec(query, value, now, userID)
+		if err != nil {
+			return 0, err
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			updated++
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return updated, nil
+}
+
 // UpdateUserProfile updates username and avatar for an existing user
 // (used to refresh Discord profile changes on re-login).
 func (s *Store) UpdateUserProfile(userID int64, username, avatar string) error {

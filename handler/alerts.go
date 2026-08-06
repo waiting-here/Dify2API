@@ -58,35 +58,20 @@ func (g *Gateway) handlePutAlertPrefs(w http.ResponseWriter, r *http.Request) {
 	for _, et := range alertPrefEventTypes() {
 		known[et] = true
 	}
+	updates := make([]db.AlertPrefUpdate, 0, len(req.Prefs))
 	for _, p := range req.Prefs {
 		if !known[p.EventType] {
 			g.writeError(w, http.StatusBadRequest, "invalid_request",
 				"unknown alert event type: "+p.EventType)
 			return
 		}
-		// Read the current row so unspecified switches stay unchanged.
-		prefs, err := g.Store.ListAlertPrefs()
-		if err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-			return
-		}
-		show, email := true, true
-		for _, cur := range prefs {
-			if cur.EventType == p.EventType {
-				show, email = cur.ShowInCenter, cur.EmailEnabled
-				break
-			}
-		}
-		if p.ShowInCenter != nil {
-			show = *p.ShowInCenter
-		}
-		if p.EmailEnabled != nil {
-			email = *p.EmailEnabled
-		}
-		if err := g.Store.SetAlertPref(p.EventType, show, email); err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-			return
-		}
+		updates = append(updates, db.AlertPrefUpdate{
+			EventType: p.EventType, ShowInCenter: p.ShowInCenter, EmailEnabled: p.EmailEnabled,
+		})
+	}
+	if err := g.Store.SetAlertPrefs(updates); err != nil {
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
 	}
 	prefs, err := g.Store.ListAlertPrefs()
 	if err != nil {

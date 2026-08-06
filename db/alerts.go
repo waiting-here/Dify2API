@@ -79,9 +79,14 @@ type AlertPref struct {
 // EnsureAlertPrefs seeds pref rows for the given event types with default
 // values (both switches on) and leaves existing rows untouched.
 func (s *Store) EnsureAlertPrefs(types []string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	now := time.Now().Unix()
 	for _, et := range types {
-		if _, err := s.db.Exec(
+		if _, err := tx.Exec(
 			`INSERT OR IGNORE INTO alert_prefs (event_type, show_in_center, email_enabled, updated_at)
 			 VALUES (?, 1, 1, ?)`,
 			et, now,
@@ -89,7 +94,7 @@ func (s *Store) EnsureAlertPrefs(types []string) error {
 			return fmt.Errorf("seed alert_prefs %q: %w", et, err)
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 // SetAlertPref updates both switches of one category.
@@ -112,6 +117,52 @@ func (s *Store) SetAlertPref(eventType string, showInCenter, emailEnabled bool) 
 		return fmt.Errorf("unknown alert event type %q", eventType)
 	}
 	return nil
+}
+
+// AlertPrefUpdate contains only the preference fields explicitly supplied by
+// a batch request. Nil fields retain their current values.
+type AlertPrefUpdate struct {
+	EventType    string
+	ShowInCenter *bool
+	EmailEnabled *bool
+}
+
+// SetAlertPrefs applies a preference batch atomically. Missing rows are
+// rejected so a typo cannot silently create a category with surprising
+// defaults. Repeated event types retain the historical request-order behavior.
+func (s *Store) SetAlertPrefs(updates []AlertPrefUpdate) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().Unix()
+	for _, update := range updates {
+		var show, email interface{}
+		if update.ShowInCenter != nil {
+			show = boolToInt(*update.ShowInCenter)
+		}
+		if update.EmailEnabled != nil {
+			email = boolToInt(*update.EmailEnabled)
+		}
+		res, err := tx.Exec(
+			`UPDATE alert_prefs
+			 SET show_in_center=COALESCE(?, show_in_center),
+			     email_enabled=COALESCE(?, email_enabled), updated_at=?
+			 WHERE event_type=?`,
+			show, email, now, update.EventType,
+		)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("unknown alert event type %q", update.EventType)
+		}
+	}
+	return tx.Commit()
 }
 
 // IsAlertShownInCenter reports whether events of the type are recorded in the

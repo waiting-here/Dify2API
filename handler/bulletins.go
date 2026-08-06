@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -331,30 +330,13 @@ func (g *Gateway) handleBatchDeleteBulletins(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Atomic all-or-nothing: validate all first.
-	for _, id := range req.IDs {
-		b, err := g.Store.GetBulletin(id)
-		if err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+	if err := g.Store.DeleteBulletins(req.IDs); err != nil {
+		if conflict, ok := err.(*db.BulletinDeleteError); ok {
+			writeBatchDonationError(w, conflict.Error(), conflict.ID)
 			return
 		}
-		if b == nil {
-			writeBatchDonationError(w, fmt.Sprintf("公告 %d 不存在", id), id)
-			return
-		}
-		if b.IsSystem {
-			writeBatchDonationError(w, fmt.Sprintf("系统公告 %d 不可删除", id), id)
-			return
-		}
-	}
-
-	// All passed: delete each.
-	for _, id := range req.IDs {
-		if err := g.Store.DeleteBulletin(id); err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal",
-				fmt.Sprintf("删除公告 %d 失败: %v", id, err))
-			return
-		}
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")

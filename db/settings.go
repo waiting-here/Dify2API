@@ -117,6 +117,34 @@ func (s *Store) SetSetting(key, value string) error {
 	return err
 }
 
+// SettingUpdate is one explicitly supplied setting value in an atomic update.
+type SettingUpdate struct {
+	Key   string
+	Value string
+}
+
+// SetSettings applies all explicitly supplied values in one transaction.
+// Callers must validate the complete request before calling this method.
+func (s *Store) SetSettings(updates []SettingUpdate) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, update := range updates {
+		if _, err := tx.Exec(
+			`INSERT INTO settings (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+			update.Key, update.Value,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // CountRecentErrors counts a user's request logs with the given error code
 // since the given time (used for the RPM-violation auto-ban rule).
 func (s *Store) CountRecentErrors(userID int64, errorCode string, since time.Time) (int, error) {

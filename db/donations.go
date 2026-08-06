@@ -210,6 +210,87 @@ func (s *Store) SetDonationStatus(id int64, status string) error {
 	return err
 }
 
+// DonationStatusError identifies an expected failed_id validation error in a
+// batch status update.
+type DonationStatusError struct {
+	DonationID    int64
+	NotFound      bool
+	Expired       bool
+	PricingAbsent bool
+	Service       string
+	Model         string
+}
+
+func (e *DonationStatusError) Error() string {
+	switch {
+	case e.NotFound:
+		return fmt.Sprintf("捐赠条目 %d 不存在", e.DonationID)
+	case e.Expired:
+		return fmt.Sprintf("已失效的捐赠条目 %d 不可更改状态", e.DonationID)
+	case e.PricingAbsent:
+		return fmt.Sprintf("捐赠条目 %d 的模型 (%s, %s) 尚未设定价格，请先在定价表中添加该组合后再激活",
+			e.DonationID, e.Service, e.Model)
+	default:
+		return fmt.Sprintf("捐赠条目 %d 状态不可更改", e.DonationID)
+	}
+}
+
+// BatchSetDonationStatus validates and updates a complete selection in one
+// transaction. Duplicate IDs retain request-order/count semantics; missing,
+// expired, or unpriced activation targets roll back the entire batch.
+func (s *Store) BatchSetDonationStatus(ids []int64, status string) error {
+	if status != DonationActive && status != DonationInactive {
+		return fmt.Errorf("status must be active or inactive")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		var current, service, model string
+		if err := tx.QueryRow(
+			`SELECT status, service, model FROM donations WHERE id=?`, id,
+		).Scan(&current, &service, &model); err != nil {
+			if err == sql.ErrNoRows {
+				return &DonationStatusError{DonationID: id, NotFound: true}
+			}
+			return err
+		}
+		if current == DonationExpired {
+			return &DonationStatusError{DonationID: id, Expired: true}
+		}
+		if status == DonationActive {
+			var pricingCount int
+			if err := tx.QueryRow(
+				`SELECT COUNT(1) FROM charity_pricing WHERE service=? AND model=?`, service, model,
+			).Scan(&pricingCount); err != nil {
+				return err
+			}
+			if pricingCount == 0 {
+				return &DonationStatusError{
+					DonationID: id, PricingAbsent: true, Service: service, Model: model,
+				}
+			}
+		}
+	}
+	now := time.Now().Unix()
+	for _, id := range ids {
+		var err error
+		if status == DonationActive {
+			_, err = tx.Exec(
+				`UPDATE donations SET status=?, consecutive_failures=0, updated_at=? WHERE id=?`, status, now, id,
+			)
+		} else {
+			_, err = tx.Exec(`UPDATE donations SET status=?, updated_at=? WHERE id=?`, status, now, id)
+		}
+		if err != nil {
+			return fmt.Errorf("set donation %d status: %w", id, err)
+		}
+	}
+	return tx.Commit()
+}
+
 // DeleteDonation removes a donation entry. Related request_logs and alerts
 // remain available until the same per-row 30-day retention cutoff as all
 // other request metadata; donation_id may therefore become temporarily orphaned.

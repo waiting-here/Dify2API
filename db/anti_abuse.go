@@ -107,20 +107,8 @@ func (s *Store) IsServiceDonationSelectable(service string) bool {
 
 // UpsertAntiAbuseConfig inserts or updates an anti-abuse config row.
 func (s *Store) UpsertAntiAbuseConfig(service string, mode, minChars, penaltyDeductCredits, penaltyBanHours, donationSelectable int) (*AntiAbuseConfig, error) {
-	if mode < 0 || mode > 2 {
-		return nil, fmt.Errorf("mode must be 0, 1, or 2, got %d", mode)
-	}
-	if minChars < 0 {
-		return nil, fmt.Errorf("min_chars must be >= 0, got %d", minChars)
-	}
-	if penaltyDeductCredits < 0 {
-		return nil, fmt.Errorf("penalty_deduct_credits must be >= 0, got %d", penaltyDeductCredits)
-	}
-	if penaltyBanHours < 0 {
-		return nil, fmt.Errorf("penalty_ban_hours must be >= 0, got %d", penaltyBanHours)
-	}
-	if donationSelectable != 0 && donationSelectable != 1 {
-		return nil, fmt.Errorf("donation_selectable must be 0 or 1, got %d", donationSelectable)
+	if err := validateAntiAbuseConfig(mode, minChars, penaltyDeductCredits, penaltyBanHours, donationSelectable); err != nil {
+		return nil, err
 	}
 
 	now := time.Now().Unix()
@@ -140,4 +128,55 @@ func (s *Store) UpsertAntiAbuseConfig(service string, mode, minChars, penaltyDed
 		return nil, fmt.Errorf("upsert anti_abuse: %w", err)
 	}
 	return s.GetAntiAbuseConfig(service)
+}
+
+func validateAntiAbuseConfig(mode, minChars, penaltyDeductCredits, penaltyBanHours, donationSelectable int) error {
+	if mode < 0 || mode > 2 {
+		return fmt.Errorf("mode must be 0, 1, or 2, got %d", mode)
+	}
+	if minChars < 0 {
+		return fmt.Errorf("min_chars must be >= 0, got %d", minChars)
+	}
+	if penaltyDeductCredits < 0 {
+		return fmt.Errorf("penalty_deduct_credits must be >= 0, got %d", penaltyDeductCredits)
+	}
+	if penaltyBanHours < 0 {
+		return fmt.Errorf("penalty_ban_hours must be >= 0, got %d", penaltyBanHours)
+	}
+	if donationSelectable != 0 && donationSelectable != 1 {
+		return fmt.Errorf("donation_selectable must be 0 or 1, got %d", donationSelectable)
+	}
+	return nil
+}
+
+// UpsertAntiAbuseConfigs validates and writes a complete batch atomically.
+func (s *Store) UpsertAntiAbuseConfigs(configs []AntiAbuseConfig) error {
+	for _, config := range configs {
+		if err := validateAntiAbuseConfig(config.Mode, config.MinChars, config.PenaltyDeductCredits, config.PenaltyBanHours, config.DonationSelectable); err != nil {
+			return err
+		}
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().Unix()
+	for _, config := range configs {
+		if _, err := tx.Exec(
+			`INSERT INTO service_anti_abuse (service, mode, min_chars, penalty_deduct_credits, penalty_ban_hours, donation_selectable, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(service) DO UPDATE SET
+			     mode=excluded.mode,
+			     min_chars=excluded.min_chars,
+			     penalty_deduct_credits=excluded.penalty_deduct_credits,
+			     penalty_ban_hours=excluded.penalty_ban_hours,
+			     donation_selectable=excluded.donation_selectable,
+			     updated_at=excluded.updated_at`,
+			config.Service, config.Mode, config.MinChars, config.PenaltyDeductCredits, config.PenaltyBanHours, config.DonationSelectable, now, now,
+		); err != nil {
+			return fmt.Errorf("upsert anti_abuse: %w", err)
+		}
+	}
+	return tx.Commit()
 }
