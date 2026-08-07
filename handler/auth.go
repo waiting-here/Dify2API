@@ -167,6 +167,7 @@ func (g *Gateway) handleMe(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusUnauthorized, "unauthorized", "not logged in")
 		return
 	}
+	level := g.resolveLevelView(u)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"id":              u.ID,
@@ -176,6 +177,10 @@ func (g *Gateway) handleMe(w http.ResponseWriter, r *http.Request) {
 		"credits":         u.Credits,
 		"donation_credit": u.DonationCredit,
 		"lang":            u.Lang,
+		"level":           level.Level,
+		"level_name":      level.Name,
+		"level_manual":    level.Manual,
+		"banner_text":     level.BannerText,
 	})
 }
 

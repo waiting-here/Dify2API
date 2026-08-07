@@ -39,10 +39,10 @@ func (g *Gateway) handleCheckinStatus(w http.ResponseWriter, r *http.Request) {
 
 	checkedIn := u.LastCheckinDay == today
 
-	// Capped: check-in would be refused at POST time (credits >= cap). Expose
-	// it so the client can disable the button proactively instead of only
-	// failing on click.
-	capped := !checkedIn && u.Credits >= creditsCap
+	// Capped: check-in would be refused at POST time (credits >= cap), unless
+	// the level-3 privilege applies. Expose it so the client can disable the
+	// button proactively instead of only failing on click.
+	capped := !checkedIn && u.Credits >= creditsCap && !g.checkinCapExempt(u)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -91,7 +91,9 @@ func (g *Gateway) handleCheckin(w http.ResponseWriter, r *http.Request) {
 		bonus = checkinMin + rand.Intn(checkinMax-checkinMin+1)
 	}
 
-	status, awarded, newCredits, err := g.Store.ApplyUserCheckin(u.ID, today, bonus, creditsCap)
+	// Level-3 privilege: with credits_cap > 0, effective level >= 3 bypasses
+	// the credits >= cap refusal; credits still accrue above the cap.
+	status, awarded, newCredits, err := g.Store.ApplyUserCheckin(u.ID, today, bonus, creditsCap, g.checkinCapExempt(u))
 	if err != nil {
 		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return

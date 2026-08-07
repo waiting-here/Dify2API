@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS users (
 	charity_enabled INTEGER NOT NULL DEFAULT 0,
 	lang            TEXT NOT NULL DEFAULT '',
 	created_at      INTEGER NOT NULL,
-	updated_at      INTEGER NOT NULL
+	updated_at      INTEGER NOT NULL,
+	level           INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -260,6 +261,14 @@ func Open(path, keyPath string) (*Store, error) {
 		if !strings.Contains(err.Error(), "duplicate column") {
 			sqldb.Close()
 			return nil, fmt.Errorf("migrate service_anti_abuse.donation_selectable: %w", err)
+		}
+	}
+	// R-A user levels: NULL = automatic, 1-5 = manual override. The automatic
+	// level is computed lazily from donation_credit + thresholds at read time.
+	if _, err := sqldb.Exec(`ALTER TABLE users ADD COLUMN level INTEGER`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			sqldb.Close()
+			return nil, fmt.Errorf("migrate users.level: %w", err)
 		}
 	}
 

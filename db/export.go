@@ -45,8 +45,14 @@ type ExportUser struct {
 	DonationCredit int    `json:"donation_credit"`
 	CharityEnabled bool   `json:"charity_enabled"`
 	Lang           string `json:"lang"`
-	CreatedAt      int64  `json:"created_at"`
-	UpdatedAt      int64  `json:"updated_at"`
+	// Level is the manual level override (null = automatic). EffectiveLevel
+	// is the lazily computed effective level 1-5; LevelManual reports whether
+	// it comes from a manual override rather than automatic computation.
+	Level          *int  `json:"level"`
+	EffectiveLevel int   `json:"effective_level"`
+	LevelManual    bool  `json:"level_manual"`
+	CreatedAt      int64 `json:"created_at"`
+	UpdatedAt      int64 `json:"updated_at"`
 }
 
 // ExportConfig mirrors one app_configs row with the Dify API key decrypted.
@@ -116,6 +122,8 @@ func (s *Store) ExportUserData(userID int64) (*ExportBundle, error) {
 		return nil, nil
 	}
 
+	level, levelManual := GetUserLevel(u, s.LevelThresholds())
+
 	bundle := &ExportBundle{
 		ExportedAt: time.Now(),
 		User: ExportUser{
@@ -136,6 +144,9 @@ func (s *Store) ExportUserData(userID int64) (*ExportBundle, error) {
 			DonationCredit: u.DonationCredit,
 			CharityEnabled: u.CharityEnabled,
 			Lang:           u.Lang,
+			Level:          u.Level,
+			EffectiveLevel: level,
+			LevelManual:    levelManual,
 			CreatedAt:      u.CreatedAt,
 			UpdatedAt:      u.UpdatedAt,
 		},

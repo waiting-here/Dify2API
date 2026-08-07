@@ -37,6 +37,9 @@ type User struct {
 	CharityEnabled bool `json:"charity_enabled"`
 	// Lang is the user's preferred UI language ("zh" or "en"). Empty means unset.
 	Lang string `json:"lang"`
+	// Level is the manual level override (1-5), nil when the level is
+	// automatic (computed lazily from donation_credit + thresholds).
+	Level *int `json:"level"`
 
 	CreatedAt int64
 	UpdatedAt int64
@@ -51,7 +54,8 @@ func IsBanned(u *User) bool {
 func scanUser(row interface{ Scan(...interface{}) error }) (*User, error) {
 	var u User
 	var isAdmin, disabled, autoBanned, charityEnabled int
-	err := row.Scan(&u.ID, &u.DiscordID, &u.Username, &u.Avatar, &isAdmin, &disabled, &u.BannedUntil, &autoBanned, &u.BanReason, &u.Credits, &u.LastCheckinDay, &u.RPMLimitA, &u.RPMLimitB, &u.RPMLimitC, &u.DonationCredit, &charityEnabled, &u.Lang, &u.CreatedAt, &u.UpdatedAt)
+	var level sql.NullInt64
+	err := row.Scan(&u.ID, &u.DiscordID, &u.Username, &u.Avatar, &isAdmin, &disabled, &u.BannedUntil, &autoBanned, &u.BanReason, &u.Credits, &u.LastCheckinDay, &u.RPMLimitA, &u.RPMLimitB, &u.RPMLimitC, &u.DonationCredit, &charityEnabled, &u.Lang, &u.CreatedAt, &u.UpdatedAt, &level)
 	if err != nil {
 		return nil, err
 	}
@@ -59,10 +63,14 @@ func scanUser(row interface{ Scan(...interface{}) error }) (*User, error) {
 	u.Disabled = disabled != 0
 	u.AutoBanned = autoBanned != 0
 	u.CharityEnabled = charityEnabled != 0
+	if level.Valid {
+		v := int(level.Int64)
+		u.Level = &v
+	}
 	return &u, nil
 }
 
-const userCols = "id, discord_id, username, avatar, is_admin, disabled, banned_until, auto_banned, ban_reason, credits, last_checkin_day, rpm_limit_a, rpm_limit_b, rpm_limit_c, donation_credit, charity_enabled, lang, created_at, updated_at"
+const userCols = "id, discord_id, username, avatar, is_admin, disabled, banned_until, auto_banned, ban_reason, credits, last_checkin_day, rpm_limit_a, rpm_limit_b, rpm_limit_c, donation_credit, charity_enabled, lang, created_at, updated_at, level"
 
 // GetUserByID fetches a user by primary key. Returns (nil, nil) when absent.
 func (s *Store) GetUserByID(id int64) (*User, error) {
@@ -214,8 +222,9 @@ const (
 // The award is NOT clamped to the cap: a check-in may push the balance
 // above credits_cap (e.g. 499 + 150 with cap 500). The cap only gates
 // check-in initiation: when credits >= cap the check-in is refused
-// (CheckinCapped) and no day is consumed.
-func (s *Store) ApplyUserCheckin(userID int64, day string, bonus, cap int) (status string, awarded, credits int, err error) {
+// (CheckinCapped) and no day is consumed. bypassCap skips the cap gate for
+// level-3+ users (the R-A privilege) while still applying the award.
+func (s *Store) ApplyUserCheckin(userID int64, day string, bonus, cap int, bypassCap bool) (status string, awarded, credits int, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return "", 0, 0, err
@@ -228,7 +237,7 @@ func (s *Store) ApplyUserCheckin(userID int64, day string, bonus, cap int) (stat
 	if lastDay == day {
 		return CheckinAlready, 0, credits, nil
 	}
-	if credits >= cap {
+	if !bypassCap && credits >= cap {
 		return CheckinCapped, 0, credits, nil
 	}
 	newCredits := credits + bonus
@@ -261,6 +270,16 @@ func (s *Store) SetUserRPMLimits(userID int64, a, b, c *int) error {
 	_, err := s.db.Exec(
 		`UPDATE users SET rpm_limit_a=?, rpm_limit_b=?, rpm_limit_c=?, updated_at=? WHERE id=? AND is_admin=0`,
 		va, vb, vc, time.Now().Unix(), userID,
+	)
+	return err
+}
+
+// SetUserLevel sets (1-5) or clears (nil, restoring automatic) the manual
+// level override. Administrators are excluded from the level system.
+func (s *Store) SetUserLevel(userID int64, level *int) error {
+	_, err := s.db.Exec(
+		`UPDATE users SET level=?, updated_at=? WHERE id=? AND is_admin=0`,
+		level, time.Now().Unix(), userID,
 	)
 	return err
 }

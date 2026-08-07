@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -386,4 +387,111 @@ func checkinPost(gw *Gateway, cookie *http.Cookie) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	return rec
+}
+
+// --- R-A level-3 check-in privilege ---
+
+// makeCheckinUser creates a non-admin user with a session cookie, at the
+// given credits/donation_credit (and optional manual level override).
+func makeCheckinUser(t *testing.T, store *db.Store, credits, donationCredit int, manualLevel *int) (*db.User, *http.Cookie) {
+	t.Helper()
+	u, _ := store.CreateUser(fmt.Sprintf("chk%d", time.Now().UnixNano()), "checkin_user", "")
+	store.SetUserCredits(u.ID, credits)
+	store.SetUserDonationCredit(u.ID, donationCredit)
+	if manualLevel != nil {
+		store.SetUserLevel(u.ID, manualLevel)
+	}
+	sess, _, _ := store.CreateSession(u.ID)
+	return u, &http.Cookie{Name: auth.SessionCookieName, Value: sess}
+}
+
+// TestCheckin_Level3BypassesCap verifies the frozen privilege: with
+// credits_cap > 0, an effective level >= 3 skips the credits >= cap refusal
+// and credits accrue above the cap.
+func TestCheckin_Level3BypassesCap(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	gw.Config.CheckinTZOffset = 8
+
+	u, cookie := makeCheckinUser(t, store, db.DefaultCreditsCap, 100 /* auto level 3 */, nil)
+	rec := checkinPost(gw, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("level-3 checkin at cap: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	got, _ := store.GetUserByID(u.ID)
+	if got.Credits <= db.DefaultCreditsCap {
+		t.Errorf("credits = %d, want above cap %d", got.Credits, db.DefaultCreditsCap)
+	}
+}
+
+// TestCheckin_Level2StillCapped verifies level < 3 keeps the existing cap.
+func TestCheckin_Level2StillCapped(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	gw.Config.CheckinTZOffset = 8
+
+	_, cookie := makeCheckinUser(t, store, db.DefaultCreditsCap, 50 /* auto level 2 */, nil)
+	rec := checkinPost(gw, cookie)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "credits_capped") {
+		t.Fatalf("level-2 checkin at cap: status %d, body %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestCheckin_ManualLevel5Bypasses verifies manual overrides count: a manual
+// level 5 bypasses even with zero donation credit.
+func TestCheckin_ManualLevel5Bypasses(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	gw.Config.CheckinTZOffset = 8
+
+	five := 5
+	u, cookie := makeCheckinUser(t, store, db.DefaultCreditsCap, 0, &five)
+	rec := checkinPost(gw, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("manual level-5 checkin at cap: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	got, _ := store.GetUserByID(u.ID)
+	if got.Credits <= db.DefaultCreditsCap {
+		t.Errorf("credits = %d, want above cap %d", got.Credits, db.DefaultCreditsCap)
+	}
+}
+
+// TestCheckin_CapZeroDisablesEvenForLevel3 verifies credits_cap=0 remains a
+// global check-in shutdown that outranks the level-3 privilege.
+func TestCheckin_CapZeroDisablesEvenForLevel3(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	gw.Config.CheckinTZOffset = 8
+	store.SetSetting(db.SettingCreditsCap, "0")
+
+	_, cookie := makeCheckinUser(t, store, 0, 100 /* auto level 3 */, nil)
+	rec := checkinPost(gw, cookie)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "checkin_disabled") {
+		t.Fatalf("level-3 checkin with cap=0: status %d, body %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestCheckinStatus_Level3NotCapped verifies the status endpoint reports
+// capped=false for level-3+ users so the client keeps the button enabled.
+func TestCheckinStatus_Level3NotCapped(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	gw.Config.CheckinTZOffset = 8
+
+	_, cookie := makeCheckinUser(t, store, db.DefaultCreditsCap, 100 /* auto level 3 */, nil)
+	rec := checkinStatusGet(gw, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: code %d, body %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		CheckedInToday bool `json:"checked_in_today"`
+		Capped         bool `json:"capped"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.Capped {
+		t.Error("expected capped=false for level-3 user at cap")
+	}
+
+	// Level 2 at the same balance stays capped.
+	_, cookie2 := makeCheckinUser(t, store, db.DefaultCreditsCap, 50 /* auto level 2 */, nil)
+	rec = checkinStatusGet(gw, cookie2)
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if !resp.Capped {
+		t.Error("expected capped=true for level-2 user at cap")
+	}
 }

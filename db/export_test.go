@@ -209,3 +209,61 @@ func TestExportBundle_ReviewerID(t *testing.T) {
 		t.Errorf("ReviewerID = %v, want %d", exported.ReviewerID, reviewer.ID)
 	}
 }
+
+// TestExportBundle_Level verifies the manual/automatic level semantics in the
+// user export: null level + effective level for automatic users, and the
+// manual override (level, effective_level, level_manual) once set.
+func TestExportBundle_Level(t *testing.T) {
+	st, _ := openTemp(t)
+	u, _ := st.CreateUser("779", "level_export_user", "")
+
+	// Automatic user with a donation credit of 250 -> effective level 3.
+	if err := st.SetUserDonationCredit(u.ID, 250); err != nil {
+		t.Fatalf("SetUserDonationCredit: %v", err)
+	}
+	bundle, err := st.ExportUserData(u.ID)
+	if err != nil || bundle == nil {
+		t.Fatalf("ExportUserData: %v", err)
+	}
+	if bundle.User.Level != nil {
+		t.Errorf("auto Level = %v, want nil", *bundle.User.Level)
+	}
+	if bundle.User.EffectiveLevel != 3 {
+		t.Errorf("auto EffectiveLevel = %d, want 3", bundle.User.EffectiveLevel)
+	}
+	if bundle.User.LevelManual {
+		t.Error("auto LevelManual = true, want false")
+	}
+
+	// Manual override to 5: export must carry the override and mark manual.
+	five := 5
+	if err := st.SetUserLevel(u.ID, &five); err != nil {
+		t.Fatalf("SetUserLevel: %v", err)
+	}
+	bundle, err = st.ExportUserData(u.ID)
+	if err != nil || bundle == nil {
+		t.Fatalf("ExportUserData 2: %v", err)
+	}
+	if bundle.User.Level == nil || *bundle.User.Level != 5 {
+		t.Errorf("manual Level = %v, want 5", bundle.User.Level)
+	}
+	if bundle.User.EffectiveLevel != 5 {
+		t.Errorf("manual EffectiveLevel = %d, want 5", bundle.User.EffectiveLevel)
+	}
+	if !bundle.User.LevelManual {
+		t.Error("manual LevelManual = false, want true")
+	}
+
+	// Threshold changes recompute the automatic level immediately (lazy).
+	if err := st.SetUserLevel(u.ID, nil); err != nil {
+		t.Fatalf("clear level: %v", err)
+	}
+	st.SetSetting(SettingLevelThreshold3, "1000")
+	bundle, err = st.ExportUserData(u.ID)
+	if err != nil || bundle == nil {
+		t.Fatalf("ExportUserData 3: %v", err)
+	}
+	if bundle.User.EffectiveLevel != 2 {
+		t.Errorf("recomputed EffectiveLevel = %d, want 2 (250 < new t3=1000)", bundle.User.EffectiveLevel)
+	}
+}

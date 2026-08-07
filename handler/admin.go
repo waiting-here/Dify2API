@@ -109,8 +109,10 @@ func (g *Gateway) handleAdminListUsers(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
+	th := g.Store.LevelThresholds()
 	out := make([]map[string]interface{}, 0, len(users))
 	for _, u := range users {
+		level, manual := db.GetUserLevel(u, th)
 		out = append(out, map[string]interface{}{
 			"id":              u.ID,
 			"rpm_limit_a":     nullableInt(u.RPMLimitA),
@@ -124,6 +126,8 @@ func (g *Gateway) handleAdminListUsers(w http.ResponseWriter, r *http.Request) {
 			"disabled":        u.Disabled,
 			"banned_until":    u.BannedUntil,
 			"banned":          db.IsBanned(u),
+			"level":           level,
+			"level_manual":    manual,
 			"created_at":      u.CreatedAt,
 		})
 	}
@@ -322,6 +326,142 @@ func (g *Gateway) handleAdminPutSettings(w http.ResponseWriter, r *http.Request)
 	// Invalidate only after the transaction commits, so a failed update cannot
 	// make the cache disagree with the database.
 	g.invalidateRPMCache(0)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+}
+
+// --- GET /api/admin/level-settings ---
+// Returns the nine R-A level settings (3 thresholds + 5 names + banner) with
+// built-in defaults. Dedicated endpoint: the generic settings PUT must not
+// touch level keys (it could clear guild/role or leave half-written
+// thresholds).
+func (g *Gateway) handleAdminGetLevelSettings(w http.ResponseWriter, r *http.Request) {
+	if g.requireAdmin(r) == nil {
+		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(g.levelSettingsJSON())
+}
+
+// --- PUT /api/admin/level-settings ---
+// Body: all nine fields {"threshold_2": int, "threshold_3": int,
+// "threshold_4": int, "name_1".."name_5": string, "banner_text": string}.
+// Full validation first (0 <= t2 < t3 < t4, bounded names/banner, no control
+// characters), then a single transaction writes all nine keys — a rejected
+// request can never leave a partial threshold set behind.
+func (g *Gateway) handleAdminPutLevelSettings(w http.ResponseWriter, r *http.Request) {
+	if g.requireAdmin(r) == nil {
+		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
+		return
+	}
+	var req struct {
+		Threshold2 *int    `json:"threshold_2"`
+		Threshold3 *int    `json:"threshold_3"`
+		Threshold4 *int    `json:"threshold_4"`
+		Name1      *string `json:"name_1"`
+		Name2      *string `json:"name_2"`
+		Name3      *string `json:"name_3"`
+		Name4      *string `json:"name_4"`
+		Name5      *string `json:"name_5"`
+		BannerText *string `json:"banner_text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", t(g.resolveLang(r), "无效的 JSON 请求体", "invalid JSON body"))
+		return
+	}
+	lang := g.resolveLang(r)
+	if req.Threshold2 == nil || req.Threshold3 == nil || req.Threshold4 == nil ||
+		req.Name1 == nil || req.Name2 == nil || req.Name3 == nil || req.Name4 == nil || req.Name5 == nil ||
+		req.BannerText == nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request",
+			t(lang, "必须提供全部 9 个分级设置字段", "all 9 level-setting fields are required"))
+		return
+	}
+	// Thresholds: 0 <= t2 < t3 < t4 (t2 may be 0 so every non-negative
+	// donation credit is level 2+).
+	if *req.Threshold2 < 0 || *req.Threshold2 >= *req.Threshold3 || *req.Threshold3 >= *req.Threshold4 {
+		g.writeError(w, http.StatusBadRequest, "invalid_request",
+			t(lang, "门槛必须满足 0 <= threshold_2 < threshold_3 < threshold_4", "thresholds must satisfy 0 <= threshold_2 < threshold_3 < threshold_4"))
+		return
+	}
+	for i, name := range []string{*req.Name1, *req.Name2, *req.Name3, *req.Name4, *req.Name5} {
+		if err := validateLevelText(fmt.Sprintf("level_name_%d", i+1), name, maxLevelNameLen); err != nil {
+			g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+	}
+	if err := validateLevelText("banner_text", *req.BannerText, maxLevelBannerLen); err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	updates := []db.SettingUpdate{
+		{Key: db.SettingLevelThreshold2, Value: strconv.Itoa(*req.Threshold2)},
+		{Key: db.SettingLevelThreshold3, Value: strconv.Itoa(*req.Threshold3)},
+		{Key: db.SettingLevelThreshold4, Value: strconv.Itoa(*req.Threshold4)},
+		{Key: db.SettingLevelName1, Value: *req.Name1},
+		{Key: db.SettingLevelName2, Value: *req.Name2},
+		{Key: db.SettingLevelName3, Value: *req.Name3},
+		{Key: db.SettingLevelName4, Value: *req.Name4},
+		{Key: db.SettingLevelName5, Value: *req.Name5},
+		{Key: db.SettingLevelBannerText, Value: *req.BannerText},
+	}
+	if err := g.Store.SetSettings(updates); err != nil {
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+}
+
+// --- PUT /api/admin/users/{id}/level ---
+// Body: {"level": 1..5} to set a manual override, or {"level": null} to
+// restore automatic level determination. The level field is required; an
+// omitted field is rejected rather than silently clearing the override.
+func (g *Gateway) handleAdminSetUserLevel(w http.ResponseWriter, r *http.Request) {
+	if g.requireAdmin(r) == nil {
+		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid user id")
+		return
+	}
+	target, err := g.Store.GetUserByID(id)
+	if err != nil || target == nil || target.IsAdmin {
+		g.writeError(w, http.StatusNotFound, "not_found", "user not found")
+		return
+	}
+	var req struct {
+		Level json.RawMessage `json:"level"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	if len(req.Level) == 0 {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "level is required (1-5, or null to restore automatic)")
+		return
+	}
+	var level *int
+	if string(req.Level) != "null" {
+		var v int
+		if err := json.Unmarshal(req.Level, &v); err != nil {
+			g.writeError(w, http.StatusBadRequest, "invalid_request", "level must be an integer between 1 and 5, or null")
+			return
+		}
+		if v < 1 || v > 5 {
+			g.writeError(w, http.StatusBadRequest, "invalid_request", "level must be an integer between 1 and 5, or null")
+			return
+		}
+		level = &v
+	}
+	if err := g.Store.SetUserLevel(id, level); err != nil {
+		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 }

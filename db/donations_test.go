@@ -347,12 +347,12 @@ func TestApplyUserCheckin_AntiReplayAndCap(t *testing.T) {
 	st, _ := openTemp(t)
 	u, _ := st.CreateUser("333", "charlie", "")
 
-	status, awarded, credits, err := st.ApplyUserCheckin(u.ID, "2026-07-24", 15, 25)
+	status, awarded, credits, err := st.ApplyUserCheckin(u.ID, "2026-07-24", 15, 25, false)
 	if err != nil || status != CheckinApplied || awarded != 15 || credits != 15 {
 		t.Fatalf("first check-in: status=%s awarded=%d credits=%d err=%v", status, awarded, credits, err)
 	}
 
-	status, _, credits, err = st.ApplyUserCheckin(u.ID, "2026-07-24", 5, 25)
+	status, _, credits, err = st.ApplyUserCheckin(u.ID, "2026-07-24", 5, 25, false)
 	if err != nil || status != CheckinAlready || credits != 15 {
 		t.Fatalf("duplicate check-in: status=%s credits=%d err=%v", status, credits, err)
 	}
@@ -360,13 +360,18 @@ func TestApplyUserCheckin_AntiReplayAndCap(t *testing.T) {
 	// The next award is incremental and NOT clamped: a check-in may push the
 	// balance above the cap (499 + 150 with cap 500 → 649). The cap only
 	// refuses check-in initiation when the balance is already at/above it.
-	status, awarded, credits, err = st.ApplyUserCheckin(u.ID, "2026-07-25", 12, 25)
+	status, awarded, credits, err = st.ApplyUserCheckin(u.ID, "2026-07-25", 12, 25, false)
 	if err != nil || status != CheckinApplied || awarded != 12 || credits != 27 {
 		t.Fatalf("over-cap check-in: status=%s awarded=%d credits=%d err=%v", status, awarded, credits, err)
 	}
-	status, _, _, err = st.ApplyUserCheckin(u.ID, "2026-07-26", 1, 25)
+	status, _, _, err = st.ApplyUserCheckin(u.ID, "2026-07-26", 1, 25, false)
 	if err != nil || status != CheckinCapped {
 		t.Fatalf("at cap: status=%s err=%v", status, err)
+	}
+	// Level-3 privilege: bypassCap skips the cap gate and still awards.
+	status, awarded, credits, err = st.ApplyUserCheckin(u.ID, "2026-07-27", 10, 25, true)
+	if err != nil || status != CheckinApplied || awarded != 10 || credits != 37 {
+		t.Fatalf("bypass-cap check-in: status=%s awarded=%d credits=%d err=%v", status, awarded, credits, err)
 	}
 }
 

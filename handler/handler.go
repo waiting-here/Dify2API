@@ -177,6 +177,9 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/users/{id}/export", g.handleAdminExportUser)
 	mux.HandleFunc("GET /api/admin/settings", g.handleAdminGetSettings)
 	mux.HandleFunc("PUT /api/admin/settings", g.handleAdminPutSettings)
+	mux.HandleFunc("GET /api/admin/level-settings", g.handleAdminGetLevelSettings)
+	mux.HandleFunc("PUT /api/admin/level-settings", g.handleAdminPutLevelSettings)
+	mux.HandleFunc("PUT /api/admin/users/{id}/level", g.handleAdminSetUserLevel)
 
 	// Alert center (admin)
 	mux.HandleFunc("GET /api/admin/alerts", g.handleListAlerts)

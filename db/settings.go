@@ -32,6 +32,18 @@ const (
 	SettingDonationReviewLimit = "donation_review_limit" // pending application cap per user (default 3)
 	// alpha.4 — maintenance mode.
 	SettingMaintenanceMode = "maintenance_mode" // site-wide maintenance toggle (default false)
+	// R-A user levels: donation-credit thresholds (lower-closed) and the
+	// five custom level names plus the level-2 banner text. Empty names fall
+	// back to the numeric level; an empty banner renders no banner.
+	SettingLevelThreshold2 = "level_threshold_2"
+	SettingLevelThreshold3 = "level_threshold_3"
+	SettingLevelThreshold4 = "level_threshold_4"
+	SettingLevelName1      = "level_name_1"
+	SettingLevelName2      = "level_name_2"
+	SettingLevelName3      = "level_name_3"
+	SettingLevelName4      = "level_name_4"
+	SettingLevelName5      = "level_name_5"
+	SettingLevelBannerText = "level_banner_text"
 )
 
 // Global defaults for the three-class RPM system (alpha.3 F4).
@@ -58,6 +70,16 @@ const (
 	DefaultDonationFailLimit   = 10 // consecutive failures before auto-inactive
 	DefaultDonationReviewLimit = 3  // pending donation application cap per user
 	DefaultMailerCoolMinutes   = 10 // email aggregation window in minutes
+)
+
+// Global defaults for the R-A level thresholds (lower-closed intervals):
+// < t2 -> level 1; [t2, t3) -> 2; [t3, t4) -> 3; >= t4 -> 4. Level 5 is
+// manual-only. t2 may be 0 (every non-negative credit is level 2+), so the
+// getter must permit zero.
+const (
+	DefaultLevelThreshold2 = 1
+	DefaultLevelThreshold3 = 100
+	DefaultLevelThreshold4 = 500
 )
 
 // GetSettingInt returns the setting parsed as a positive integer, falling
