@@ -961,8 +961,14 @@ function applyUserFilter() {
   let list = _allAdminUsers;
   if (q) {
     if (/^\d+$/.test(q)) {
-      // Pure digits: exact numeric user id match.
-      list = _allAdminUsers.filter((u) => String(u.id) === q);
+      // Pure digits: match the numeric DB id (exact) OR a Discord id
+      // (also all digits, exact). Discord-id is matched exactly to stay
+      // consistent with resolveLogUserFilter and avoid fragment ambiguity
+      // with numeric db ids.
+      list = _allAdminUsers.filter((u) =>
+        String(u.id) === q ||
+        (u.discord_id || "") === q
+      );
     } else {
       list = _allAdminUsers.filter((u) =>
         (u.username || "").toLowerCase().includes(q) ||
