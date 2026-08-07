@@ -19,6 +19,13 @@ func (g *Gateway) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
+	g.serveAllLogs(w, r, false)
+}
+
+// serveAllLogs serves the site-wide request-log listing with optional
+// filters and pagination. public=true applies the R-B user-view sanitizer
+// to error_detail (level-5 all-logs); the admin view keeps the raw text.
+func (g *Gateway) serveAllLogs(w http.ResponseWriter, r *http.Request, public bool) {
 
 	filter, err := parseLogFilter(r)
 	if err != nil {
@@ -51,6 +58,12 @@ func (g *Gateway) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
+	}
+	if public {
+		// Never reuse the admin export or the raw stored error text: the
+		// level-5 user view goes through the same display boundary as the
+		// user-site /api/logs (R-B).
+		logs = sanitizePublicAdminRequestLogs(logs, g.resolveLang(r))
 	}
 
 	// Enrich logs with donation source_display.
@@ -256,6 +269,13 @@ func (g *Gateway) handleAdminLogStats(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
+	g.serveLogStats(w, r)
+}
+
+// serveLogStats serves the hourly log-stats contract; shared by the admin
+// and the level-5 all-logs endpoints. The payload contains only counts, no
+// per-request fields, so no sanitization is needed.
+func (g *Gateway) serveLogStats(w http.ResponseWriter, r *http.Request) {
 
 	q := r.URL.Query()
 

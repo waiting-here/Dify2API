@@ -621,6 +621,12 @@ func (g *Gateway) handleListPricing(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
+	g.serveListPricing(w, r)
+}
+
+// serveListPricing returns all pricing entries; shared by the admin and the
+// level-5 charity co-admin endpoints.
+func (g *Gateway) serveListPricing(w http.ResponseWriter, r *http.Request) {
 	list, err := g.Store.ListPricing()
 	if err != nil {
 		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
@@ -640,6 +646,12 @@ func (g *Gateway) handleUpsertPricing(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
+	g.serveUpsertPricing(w, r)
+}
+
+// serveUpsertPricing creates or replaces a pricing entry; shared by the
+// admin and the level-5 charity co-admin endpoints.
+func (g *Gateway) serveUpsertPricing(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Service string `json:"service"`
 		Model   string `json:"model"`
@@ -689,6 +701,12 @@ func (g *Gateway) handlePatchPricing(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
+	g.servePatchPricing(w, r)
+}
+
+// servePatchPricing partially updates a pricing entry; shared by the admin
+// and the level-5 charity co-admin endpoints.
+func (g *Gateway) servePatchPricing(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Service string `json:"service"`
 		Model   string `json:"model"`
@@ -769,6 +787,12 @@ func (g *Gateway) handleDeletePricing(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
+	g.serveDeletePricing(w, r)
+}
+
+// serveDeletePricing deletes a pricing entry; shared by the admin and the
+// level-5 charity co-admin endpoints.
+func (g *Gateway) serveDeletePricing(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Service string `json:"service"`
 		Model   string `json:"model"`
@@ -791,6 +815,12 @@ func (g *Gateway) handleBatchDeletePricing(w http.ResponseWriter, r *http.Reques
 		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
+	g.serveBatchDeletePricing(w, r)
+}
+
+// serveBatchDeletePricing atomically deletes multiple pricing entries;
+// shared by the admin and the level-5 charity co-admin endpoints.
+func (g *Gateway) serveBatchDeletePricing(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		Pairs []struct {

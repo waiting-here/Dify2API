@@ -158,6 +158,12 @@ func (g *Gateway) handleCreateDonation(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
+	g.serveCreateDonation(w, r, admin)
+}
+
+// serveCreateDonation creates a donation entry; shared by the admin and the
+// level-5 charity co-admin endpoints (operator drives the App probe).
+func (g *Gateway) serveCreateDonation(w http.ResponseWriter, r *http.Request, operator *db.User) {
 
 	var req struct {
 		Service      string `json:"service"`
@@ -298,7 +304,7 @@ func (g *Gateway) handleCreateDonation(w http.ResponseWriter, r *http.Request) {
 		keyPlain = "(decrypt error)"
 	}
 
-	validation := g.validateDonationApp(r.Context(), admin.ID, created.Service, created.DifyBaseURL, keyPlain)
+	validation := g.validateDonationApp(r.Context(), operator.ID, created.Service, created.DifyBaseURL, keyPlain)
 
 	w.Header().Set("Content-Type", "application/json")
 	resp := map[string]interface{}{
@@ -318,6 +324,12 @@ func (g *Gateway) handleListDonations(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
+	g.serveListDonations(w, r)
+}
+
+// serveListDonations lists all donations; shared by the admin and the
+// level-5 charity co-admin endpoints.
+func (g *Gateway) serveListDonations(w http.ResponseWriter, r *http.Request) {
 
 	// Keep the persisted status in sync even if the background sweep has not
 	// reached a deadline yet (or the process was just started). Routing also
@@ -375,6 +387,12 @@ func (g *Gateway) handleDonationStatus(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
+	g.serveDonationStatus(w, r)
+}
+
+// serveDonationStatus toggles a donation between active/inactive; shared by
+// the admin and the level-5 charity co-admin endpoints.
+func (g *Gateway) serveDonationStatus(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid donation id")
@@ -444,6 +462,12 @@ func (g *Gateway) handleDeleteDonation(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
+	g.serveDeleteDonation(w, r)
+}
+
+// serveDeleteDonation deletes one donation; shared by the admin and the
+// level-5 charity co-admin endpoints.
+func (g *Gateway) serveDeleteDonation(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid donation id")
@@ -476,6 +500,12 @@ func (g *Gateway) handlePatchDonation(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
+	g.servePatchDonation(w, r, admin)
+}
+
+// servePatchDonation partially updates a donation; shared by the admin and
+// the level-5 charity co-admin endpoints (operator drives the App probe).
+func (g *Gateway) servePatchDonation(w http.ResponseWriter, r *http.Request, operator *db.User) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid donation id")
@@ -683,7 +713,7 @@ func (g *Gateway) handlePatchDonation(w http.ResponseWriter, r *http.Request) {
 				"message":    fmt.Sprintf("密钥解密失败: %v", decErr),
 			}
 		} else {
-			validation = g.validateDonationApp(r.Context(), admin.ID, updated.Service, newBaseURL, keyPlain)
+			validation = g.validateDonationApp(r.Context(), operator.ID, updated.Service, newBaseURL, keyPlain)
 		}
 	}
 
@@ -1396,6 +1426,12 @@ func (g *Gateway) handleListPendingApplications(w http.ResponseWriter, r *http.R
 		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
+	g.serveListPendingApplications(w, r)
+}
+
+// serveListPendingApplications lists pending donation applications; shared
+// by the admin and the level-4 co-admin review endpoints.
+func (g *Gateway) serveListPendingApplications(w http.ResponseWriter, r *http.Request) {
 
 	apps, err := g.Store.ListPendingApplications()
 	if err != nil {
@@ -1449,13 +1485,18 @@ func (g *Gateway) handleAdminListApplications(w http.ResponseWriter, r *http.Req
 
 // POST /api/admin/donations/{id}/approve — approve an application.
 func (g *Gateway) handleApproveApplication(w http.ResponseWriter, r *http.Request) {
-	if g.requireAdmin(r) == nil {
+	admin := g.requireAdmin(r)
+	if admin == nil {
 		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
+	g.serveApproveApplication(w, r, admin)
+}
 
-	adminUser := g.currentUser(r)
-
+// serveApproveApplication approves one pending application. operator is
+// recorded as reviewer_id (administrator or level-4 co-admin share the
+// users table, so the audit trail stays distinguishable).
+func (g *Gateway) serveApproveApplication(w http.ResponseWriter, r *http.Request, operator *db.User) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid application id")
@@ -1521,7 +1562,7 @@ func (g *Gateway) handleApproveApplication(w http.ResponseWriter, r *http.Reques
 		RpmLimit:    req.RpmLimit,
 	}
 
-	app, donation, err := g.Store.ApproveApplication(id, adminUser.ID, modified, strings.TrimSpace(req.ReviewNote))
+	app, donation, err := g.Store.ApproveApplication(id, operator.ID, modified, strings.TrimSpace(req.ReviewNote))
 	if err != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
@@ -1550,7 +1591,7 @@ func (g *Gateway) handleApproveApplication(w http.ResponseWriter, r *http.Reques
 	// beta.2: validate Dify App parameters.
 	keyPlain, decErr := g.Store.Decrypt(donation.DifyAPIKeyEnc)
 	if decErr == nil {
-		resp["validation"] = g.validateDonationApp(r.Context(), adminUser.ID, donation.Service, donation.DifyBaseURL, keyPlain)
+		resp["validation"] = g.validateDonationApp(r.Context(), operator.ID, donation.Service, donation.DifyBaseURL, keyPlain)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -1558,13 +1599,17 @@ func (g *Gateway) handleApproveApplication(w http.ResponseWriter, r *http.Reques
 
 // POST /api/admin/donations/{id}/reject — reject an application.
 func (g *Gateway) handleRejectApplication(w http.ResponseWriter, r *http.Request) {
-	if g.requireAdmin(r) == nil {
+	admin := g.requireAdmin(r)
+	if admin == nil {
 		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
+	g.serveRejectApplication(w, r, admin)
+}
 
-	adminUser := g.currentUser(r)
-
+// serveRejectApplication rejects one pending application; operator is
+// recorded as reviewer_id (same audit semantics as approval).
+func (g *Gateway) serveRejectApplication(w http.ResponseWriter, r *http.Request, operator *db.User) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid application id")
@@ -1579,7 +1624,7 @@ func (g *Gateway) handleRejectApplication(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	app, err := g.Store.RejectApplication(id, adminUser.ID, strings.TrimSpace(req.ReviewNote))
+	app, err := g.Store.RejectApplication(id, operator.ID, strings.TrimSpace(req.ReviewNote))
 	if err != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
@@ -1628,11 +1673,17 @@ func writeBatchPairError(w http.ResponseWriter, msg string, service, model strin
 
 // POST /api/admin/donations/approve/batch — batch approve pending applications.
 func (g *Gateway) handleBatchApproveApplications(w http.ResponseWriter, r *http.Request) {
-	if g.requireAdmin(r) == nil {
+	admin := g.requireAdmin(r)
+	if admin == nil {
 		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
-	adminUser := g.currentUser(r)
+	g.serveBatchApproveApplications(w, r, admin)
+}
+
+// serveBatchApproveApplications atomically approves multiple pending
+// applications; shared by the admin and the level-4 co-admin endpoints.
+func (g *Gateway) serveBatchApproveApplications(w http.ResponseWriter, r *http.Request, operator *db.User) {
 
 	var req struct {
 		IDs        []int64 `json:"ids"`
@@ -1673,7 +1724,7 @@ func (g *Gateway) handleBatchApproveApplications(w http.ResponseWriter, r *http.
 		}
 	}
 
-	if err := g.Store.ApproveApplications(req.IDs, adminUser.ID, strings.TrimSpace(req.ReviewNote)); err != nil {
+	if err := g.Store.ApproveApplications(req.IDs, operator.ID, strings.TrimSpace(req.ReviewNote)); err != nil {
 		var stateErr *db.ApplicationReviewError
 		if errors.As(err, &stateErr) {
 			writeBatchDonationError(w, err.Error(), stateErr.ApplicationID)
@@ -1697,11 +1748,17 @@ func (g *Gateway) handleBatchApproveApplications(w http.ResponseWriter, r *http.
 
 // POST /api/admin/donations/reject/batch — batch reject pending applications.
 func (g *Gateway) handleBatchRejectApplications(w http.ResponseWriter, r *http.Request) {
-	if g.requireAdmin(r) == nil {
+	admin := g.requireAdmin(r)
+	if admin == nil {
 		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
-	adminUser := g.currentUser(r)
+	g.serveBatchRejectApplications(w, r, admin)
+}
+
+// serveBatchRejectApplications atomically rejects multiple pending
+// applications; shared by the admin and the level-4 co-admin endpoints.
+func (g *Gateway) serveBatchRejectApplications(w http.ResponseWriter, r *http.Request, operator *db.User) {
 
 	var req struct {
 		IDs        []int64 `json:"ids"`
@@ -1734,7 +1791,7 @@ func (g *Gateway) handleBatchRejectApplications(w http.ResponseWriter, r *http.R
 		}
 	}
 
-	if err := g.Store.RejectApplications(req.IDs, adminUser.ID, strings.TrimSpace(req.ReviewNote)); err != nil {
+	if err := g.Store.RejectApplications(req.IDs, operator.ID, strings.TrimSpace(req.ReviewNote)); err != nil {
 		var stateErr *db.ApplicationReviewError
 		if errors.As(err, &stateErr) {
 			writeBatchDonationError(w, err.Error(), stateErr.ApplicationID)
@@ -1759,6 +1816,12 @@ func (g *Gateway) handleBatchDonationStatus(w http.ResponseWriter, r *http.Reque
 		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
+	g.serveBatchDonationStatus(w, r)
+}
+
+// serveBatchDonationStatus atomically toggles donation status; shared by
+// the admin and the level-5 charity co-admin endpoints.
+func (g *Gateway) serveBatchDonationStatus(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		IDs    []int64 `json:"ids"`
@@ -1806,6 +1869,12 @@ func (g *Gateway) handleBatchDeleteDonations(w http.ResponseWriter, r *http.Requ
 		g.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
+	g.serveBatchDeleteDonations(w, r)
+}
+
+// serveBatchDeleteDonations atomically deletes multiple donations; shared
+// by the admin and the level-5 charity co-admin endpoints.
+func (g *Gateway) serveBatchDeleteDonations(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		IDs []int64 `json:"ids"`

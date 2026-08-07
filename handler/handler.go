@@ -245,6 +245,30 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/me/checkin/status", g.handleCheckinStatus)
 	mux.HandleFunc("PUT /api/me/lang", g.handleSetLang)
 
+	// R-A level-gated user-site endpoints (v1.3.0): level 4 review,
+	// level 5 charity co-admin + all-site logs. Only reachable on the user
+	// host (hostSeparation allowlists /api/me exactly); the admin host
+	// returns 404 for these by design.
+	mux.HandleFunc("GET /api/me/review/pending", g.handleMeReviewPending)
+	mux.HandleFunc("POST /api/me/review/{id}/approve", g.handleMeReviewApprove)
+	mux.HandleFunc("POST /api/me/review/{id}/reject", g.handleMeReviewReject)
+	mux.HandleFunc("POST /api/me/review/approve/batch", g.handleMeReviewBatchApprove)
+	mux.HandleFunc("POST /api/me/review/reject/batch", g.handleMeReviewBatchReject)
+	mux.HandleFunc("GET /api/me/charity-admin/donations", g.handleMeCharityListDonations)
+	mux.HandleFunc("POST /api/me/charity-admin/donations", g.handleMeCharityCreateDonation)
+	mux.HandleFunc("PATCH /api/me/charity-admin/donations/{id}", g.handleMeCharityPatchDonation)
+	mux.HandleFunc("POST /api/me/charity-admin/donations/{id}/status", g.handleMeCharityDonationStatus)
+	mux.HandleFunc("DELETE /api/me/charity-admin/donations/{id}", g.handleMeCharityDeleteDonation)
+	mux.HandleFunc("POST /api/me/charity-admin/donations/status/batch", g.handleMeCharityBatchDonationStatus)
+	mux.HandleFunc("POST /api/me/charity-admin/donations/delete/batch", g.handleMeCharityBatchDeleteDonations)
+	mux.HandleFunc("GET /api/me/charity-admin/pricing", g.handleMePricingList)
+	mux.HandleFunc("PUT /api/me/charity-admin/pricing", g.handleMePricingUpsert)
+	mux.HandleFunc("PATCH /api/me/charity-admin/pricing", g.handleMePricingPatch)
+	mux.HandleFunc("DELETE /api/me/charity-admin/pricing", g.handleMePricingDelete)
+	mux.HandleFunc("POST /api/me/charity-admin/pricing/delete/batch", g.handleMePricingBatchDelete)
+	mux.HandleFunc("GET /api/me/all-logs", g.handleMeAllLogs)
+	mux.HandleFunc("GET /api/me/all-logs/stats", g.handleMeAllLogsStats)
+
 	// Admin batch credits & donation-credit operations
 	mux.HandleFunc("POST /api/admin/users/credits", g.handleAdminBatchCredits)
 	mux.HandleFunc("POST /api/admin/users/donation_credit", g.handleAdminBatchDonationCredit)

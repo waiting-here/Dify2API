@@ -351,6 +351,28 @@ func (g *Gateway) requireAdmin(r *http.Request) *db.User {
 	return u
 }
 
+// requireLevel resolves the session and demands a user whose effective level
+// is at least min. Administrators pass through unconditionally (they keep
+// every capability and are not part of the level system). The effective level
+// is computed lazily from the donation credit and thresholds, so a manual
+// downgrade or credit change takes effect on the very next request. Returns
+// nil when the user is missing, banned, or below the level — callers must
+// distinguish "not logged in" (401) from "insufficient level" (403).
+func (g *Gateway) requireLevel(r *http.Request, min int) *db.User {
+	u := g.currentUser(r)
+	if u == nil {
+		return nil
+	}
+	if u.IsAdmin {
+		return u
+	}
+	level, _ := db.GetUserLevel(u, g.Store.LevelThresholds())
+	if level < min {
+		return nil
+	}
+	return u
+}
+
 // issueSession creates a session and sets the cookie.
 func (g *Gateway) issueSession(w http.ResponseWriter, u *db.User) {
 	token, expiresAt, err := g.Store.CreateSession(u.ID)
