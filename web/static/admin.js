@@ -6,6 +6,32 @@ let _adminLogCharts = [];
 let _adminLogStats = null;
 let _adminLogChartGeneration = 0;
 
+/* R-A (v1.3.0): the donation/pricing/review panel code is shared between
+ * the admin site (/api/admin/...) and the level-4/5 user site
+ * (/api/me/...). _coAdminMode selects the endpoint prefix; the user site
+ * sets it to "me" when its co-admin tab renders. The all-logs tab is
+ * similarly shared with the level-5 user view (/api/me/all-logs), which
+ * has no export. */
+let _coAdminMode = "admin";
+function coAdminPath(p) {
+  if (_coAdminMode !== "me") return p;
+  if (p === "/api/admin/donations/pending") return "/api/me/review/pending";
+  if (p.startsWith("/api/admin/donations/") && (p.includes("/approve") || p.includes("/reject"))) {
+    // /api/admin/donations/{id}/approve|reject and */approve|reject/batch
+    return "/api/me/review/" + p.slice("/api/admin/donations/".length);
+  }
+  return p.replace("/api/admin/", "/api/me/charity-admin/");
+}
+let _allLogsMode = "admin";
+function allLogsPath(p) {
+  return _allLogsMode === "me" ? p.replace("/api/admin/logs", "/api/me/all-logs") : p;
+}
+
+// R-A level settings cache: thresholds/names/banner. Loaded once with the
+// common admin data so the users tab can render level names; kept fresh by
+// the levels tab after saving.
+let _levelSettings = null;
+
 function loadChartJS() {
   if (typeof window.Chart === "function") return Promise.resolve(window.Chart);
   if (_chartJSLoadPromise) return _chartJSLoadPromise;
@@ -49,8 +75,10 @@ function hideAdminLogCharts() {
 }
 
 function adminLogsTabVisible() {
-  const tab = $("#tab-logs");
-  return !!tab && tab.style.display !== "none";
+  const adminTab = $("#tab-logs");
+  if (adminTab) return adminTab.style.display !== "none";
+  const userTab = $("#utab-alllogs");
+  return !!userTab && userTab.style.display !== "none";
 }
 
 function resizeAdminLogCharts() {
@@ -107,11 +135,13 @@ function renderAdminLogin() {
 let _adminCommonData = null;
 async function loadAdminCommonData() {
   if (_adminCommonData) return _adminCommonData;
-  const [{ users }, { services }] = await Promise.all([
+  const [{ users }, { services }, levelSettings] = await Promise.all([
     api("/api/admin/users"),
     api("/api/services"),
+    api("/api/admin/level-settings"),
   ]);
   _adminCommonData = { users: users || [], services: services || [] };
+  _levelSettings = levelSettings || {};
   adminLogUsers = _adminCommonData.users;
   return _adminCommonData;
 }
@@ -130,6 +160,7 @@ function switchAdminTab(tab) {
   if (!_adminTabLoaded[tab]) {
     const inits = {
       users: initAdminUsersTab,
+      levels: initAdminLevelsTab,
       logs: initAdminLogsTab,
       donations: initAdminDonationsTab,
       alerts: initAdminAlertsTab,
@@ -164,14 +195,54 @@ async function initAdminUsersTab() {
   await loadAdminUsers();
 }
 
+// R-A levels tab: loads the nine level settings into the form (names,
+// thresholds, banner). Save sends the full field set through the dedicated
+// atomic endpoint; validation errors surface the backend message verbatim.
+async function initAdminLevelsTab() {
+  const data = await api("/api/admin/level-settings");
+  _levelSettings = data || {};
+  const f = $("#level-settings-form");
+  f.threshold_2.value = data.threshold_2 != null ? data.threshold_2 : 1;
+  f.threshold_3.value = data.threshold_3 != null ? data.threshold_3 : 100;
+  f.threshold_4.value = data.threshold_4 != null ? data.threshold_4 : 500;
+  for (let i = 1; i <= 5; i++) f["name_" + i].value = data["name_" + i] || "";
+  f.banner_text.value = data.banner_text || "";
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const msg = $("#level-settings-msg");
+    msg.innerHTML = `<p class="muted">${T('loading')}</p>`;
+    const body = {
+      threshold_2: parseInt(f.threshold_2.value, 10),
+      threshold_3: parseInt(f.threshold_3.value, 10),
+      threshold_4: parseInt(f.threshold_4.value, 10),
+      name_1: f.name_1.value.trim(),
+      name_2: f.name_2.value.trim(),
+      name_3: f.name_3.value.trim(),
+      name_4: f.name_4.value.trim(),
+      name_5: f.name_5.value.trim(),
+      banner_text: f.banner_text.value.trim(),
+    };
+    try {
+      await api("/api/admin/level-settings", { method: "PUT", body });
+      _levelSettings = { ...body };
+      msg.innerHTML = `<div class="note ok">${T('settingsSaved')}</div>`;
+      toast(T('settingsSaved'));
+    } catch (err) {
+      msg.innerHTML = `<div class="note err">${T('error').replace("{msg}", esc(err.message))}</div>`;
+    }
+  };
+}
+
 async function initAdminLogsTab() {
   const data = await loadAdminCommonData();
-  $("#alf-user-list").innerHTML = data.users.map(adminUserOption).join("");
+  const userList = $("#alf-user-list");
+  if (userList) userList.innerHTML = data.users.map(adminUserOption).join("");
   let svcOpts = `<option value="">${T('adminLogsAllServices')}</option>`;
   data.services.forEach((s) => { svcOpts += `<option value="${esc(s.name)}">${esc(s.name)}</option>`; });
   $("#alf-service").innerHTML = svcOpts;
   $("#alf-query").onclick = () => { adminLogPager.page = 1; loadAdminLogs(); loadAdminLogStats(); };
-  $("#alf-export").onclick = onExportLogs;
+  const exportBtn = $("#alf-export");
+  if (exportBtn) exportBtn.onclick = onExportLogs;
   await loadAdminLogStats();
   await loadAdminLogs();
 }
@@ -221,13 +292,16 @@ function initAdminBulletinsTab() {
 async function renderAdminDashboard() {
   destroyAdminLogCharts();
   _adminLogStats = null;
+  _coAdminMode = "admin";
+  _allLogsMode = "admin";
   $("#nav-user").innerHTML = `${esc(state.me.username)} · <a href="#" id="logout">${T('logout')}</a>`;
   bindLogout("#logout");
 
   // Tab navigation bar
-  const tabs = ["settings", "antiabuse", "users", "logs", "donations", "alerts", "bulletins"];
+  const tabs = ["settings", "antiabuse", "users", "levels", "logs", "donations", "alerts", "bulletins"];
   const tabLabels = {
     settings: T('adminTabSettings'), antiabuse: T('adminTabAntiAbuse'), users: T('adminTabUsers'),
+    levels: T('adminTabLevels'),
     logs: T('adminTabLogs'), donations: T('adminTabDonations'), alerts: T('adminTabAlerts'),
     bulletins: T('adminTabBulletins'),
   };
@@ -344,8 +418,38 @@ async function renderAdminDashboard() {
           <input id="batch-amount" type="number" min="0" placeholder="${T('batchAmount')}" style="width:6rem;margin-bottom:0">
           <button id="batch-submit" class="secondary" style="width:auto;margin-bottom:0">${T('batchSubmit')}</button>
         </div>
-        <div class="table-wrap"><table><thead><tr><th><input type="checkbox" id="select-all" title="${T('selectAll')}"></th><th>${T('thUserId')}</th><th>${T('thUser')}</th><th>${T('thCredits')}</th><th>${T('thDonationCredit')}</th><th>${T('thRPM')}</th><th>${T('thCreated')}</th><th>${T('thStatus')}</th><th>${T('thActions')}</th></tr></thead><tbody id="user-rows"></tbody></table></div>
+        <div class="table-wrap"><table><thead><tr><th><input type="checkbox" id="select-all" title="${T('selectAll')}"></th><th>${T('thUserId')}</th><th>${T('thUser')}</th><th>${T('levelTh')}</th><th>${T('thCredits')}</th><th>${T('thDonationCredit')}</th><th>${T('thRPM')}</th><th>${T('thCreated')}</th><th>${T('thStatus')}</th><th>${T('thActions')}</th></tr></thead><tbody id="user-rows"></tbody></table></div>
         <div class="row-actions" id="user-pager" style="margin-top:.5rem"></div>
+      </section>
+    </div>
+
+    <!-- Levels tab (R-A) -->
+    <div id="tab-levels" class="admin-tab-content" style="display:none">
+      <section class="card">
+        <h3>${T('adminTabLevels')}</h3>
+        <form id="level-settings-form">
+          <fieldset>
+            <legend>${T('levelThresholds')}</legend>
+            <div style="display:flex;flex-wrap:wrap;gap:.75rem">
+              <label style="flex:1 1 10rem">${T('levelThresholdTpl').replace('{n}', '2')}<input name="threshold_2" type="number" min="0" required></label>
+              <label style="flex:1 1 10rem">${T('levelThresholdTpl').replace('{n}', '3')}<input name="threshold_3" type="number" min="0" required></label>
+              <label style="flex:1 1 10rem">${T('levelThresholdTpl').replace('{n}', '4')}<input name="threshold_4" type="number" min="0" required></label>
+            </div>
+            <p class="muted" style="font-size:.85em;margin:.5rem 0 0">${T('levelThresholdsHint')}</p>
+          </fieldset>
+          <fieldset>
+            <legend>${T('levelNames')}</legend>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));gap:.75rem">
+              ${[1, 2, 3, 4, 5].map((n) => `<label>Lv.${n}<input name="name_${n}" maxlength="20" placeholder="${T('levelNames')}"></label>`).join("")}
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>${T('levelBanner')}</legend>
+            <label>${T('levelBannerHint')}<textarea name="banner_text" rows="2" maxlength="200"></textarea></label>
+          </fieldset>
+          <div id="level-settings-msg"></div>
+          <button type="submit">${T('save')}</button>
+        </form>
       </section>
     </div>
 
@@ -647,6 +751,11 @@ function repositionOpenDropdownMenus() {
   });
 }
 
+// R-A: resolve a level name from the cached settings (fallback: number).
+function levelNameFor(n) {
+  return (_levelSettings && _levelSettings["name_" + n]) || String(n);
+}
+
 function userRow(u) {
   const fmtLim = (v) => (v == null ? "" : String(v));
   const rpm = `
@@ -657,11 +766,25 @@ function userRow(u) {
       <button class="secondary u-rpm-save" data-id="${u.id}" style="padding:.3rem .5rem;font-size:.8rem">${T('rpmSave')}</button>
     </span>`;
   const titleTxt = esc(`${u.username}（${u.discord_id}）`);
+  // R-A level column: default/auto shows "default · name" (tooltip explains
+  // auto mode), manual shows the name plus a manual marker. Inline controls
+  // set a manual override (1-5) or restore automatic (null).
+  const lvlName = levelNameFor(u.level);
+  const lvlText = u.level_manual
+    ? `${esc(lvlName)} <span class="badge warn">${T('levelManual')}</span>`
+    : `<span title="${T('levelAuto')}">${T('levelDefault')} · ${esc(lvlName)}</span>`;
+  const lvlOpts = [1, 2, 3, 4, 5].map((n) => `<option value="${n}">${esc(levelNameFor(n))}</option>`).join("");
   return `
     <tr data-id="${u.id}">
       <td><input type="checkbox" class="user-chk" data-id="${u.id}"></td>
       <td class="mono muted">${u.id}</td>
       <td style="max-width:10rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${titleTxt}">${esc(u.username)} <span class="id-badge mono" data-copy-id="${esc(u.discord_id)}" title="${T('clickToCopy')}: ${esc(u.discord_id)}" style="cursor:pointer">(${esc(u.discord_id)})</span></td>
+      <td class="wrap"><div>${lvlText}</div>
+        <div class="row-actions" style="margin-top:.15rem">
+          <select class="u-level-set" data-id="${u.id}" title="${T('levelSet')}" style="width:auto;margin:0;padding:.15rem .3rem;font-size:.75rem"><option value="">—</option>${lvlOpts}</select>
+          <button class="secondary outline u-level-reset" data-id="${u.id}" title="${T('levelReset')}" style="padding:.15rem .5rem;font-size:.75rem;width:auto;margin:0">${T('levelReset')}</button>
+        </div>
+      </td>
       <td class="mono">${u.credits != null ? String(u.credits) : "0"}</td>
       <td class="mono">${u.donation_credit != null ? String(u.donation_credit) : "0"}</td>
       <td>${rpm}</td>
@@ -708,6 +831,28 @@ function bindUserRowActions() {
     const id = e.target.closest("tr").dataset.id;
     await api(`/api/admin/users/${id}/unban`, { method: "POST" });
     await loadAdminUsers();
+  }));
+  // R-A: manual level override (select 1-5) / restore automatic (null).
+  document.querySelectorAll(".u-level-set").forEach((sel) => (sel.onchange = async () => {
+    const id = sel.dataset.id;
+    const v = sel.value;
+    try {
+      await api(`/api/admin/users/${id}/level`, { method: "PUT", body: { level: v ? parseInt(v, 10) : null } });
+      toast(T('settingsSaved'));
+      await loadAdminUsers();
+    } catch (err) {
+      toast(T('error').replace("{msg}", err.message), 3000);
+    }
+  }));
+  document.querySelectorAll(".u-level-reset").forEach((b) => (b.onclick = async () => {
+    const id = b.dataset.id;
+    try {
+      await api(`/api/admin/users/${id}/level`, { method: "PUT", body: { level: null } });
+      toast(T('settingsSaved'));
+      await loadAdminUsers();
+    } catch (err) {
+      toast(T('error').replace("{msg}", err.message), 3000);
+    }
   }));
   document.querySelectorAll(".u-key").forEach((b) => (b.onclick = async (e) => {
     if (!confirm(T('resetUserKeyConfirm'))) return;
@@ -828,7 +973,7 @@ function applyUserFilter() {
   userPager.data = list;
   userPager.page = 1;
   userPager.afterRender = () => { bindUserRowActions(); bindIdBadgeClicks(); };
-  renderPaged(userPager, "#user-rows", "#user-pager", 8);
+  renderPaged(userPager, "#user-rows", "#user-pager", 10);
 }
 
 async function loadAdminUsers() {
@@ -871,12 +1016,14 @@ function adminLogRow(l) {
 
 async function loadAdminLogs() {
   const params = new URLSearchParams();
+  // The level-5 all-logs tab (user site) has no user filter input.
+  const userEl = $("#alf-user");
   // When jumping from an alert, use the alert's user id directly: the
   // server-side user_id filter works for deleted users too, while the
   // client-side resolver only knows live users.
   const resolved = alertJump && alertJump.userId
     ? { id: Number(alertJump.userId) }
-    : resolveLogUserFilter($("#alf-user").value);
+    : userEl ? resolveLogUserFilter(userEl.value) : { id: null };
   if (resolved.error) {
     $("#alf-rows").innerHTML = `<tr><td colspan="12" class="muted">${esc(resolved.error)}</td></tr>`;
     $("#alf-pager").innerHTML = "";
@@ -900,7 +1047,7 @@ async function loadAdminLogs() {
   params.set("offset", String((adminLogPager.page - 1) * size));
 
   try {
-    const data = await api(`/api/admin/logs?${params.toString()}`);
+    const data = await api(`${allLogsPath("/api/admin/logs")}?${params.toString()}`);
     renderAdminLogs(data);
   } catch (err) {
     $("#alf-rows").innerHTML = `<tr><td colspan="12" class="muted">${T('error').replace("{msg}", err.message)}</td></tr>`;
@@ -957,7 +1104,8 @@ function renderAdminLogs(data) {
 
 async function onExportLogs() {
   const params = new URLSearchParams();
-  const resolved = resolveLogUserFilter($("#alf-user").value);
+  const userEl = $("#alf-user");
+  const resolved = userEl ? resolveLogUserFilter(userEl.value) : { id: null };
   if (resolved.id !== null) params.set("user_id", String(resolved.id));
   const svc = $("#alf-service").value; if (svc) params.set("service", svc);
   const model = $("#alf-model").value.trim(); if (model) params.set("model", model);
@@ -1033,7 +1181,8 @@ async function loadAdminLogStats() {
   // follow the exact same filter semantics as the table, and a bad filter
   // must not silently fall back to the full dataset.
   const params = new URLSearchParams();
-  const resolved = resolveLogUserFilter($("#alf-user").value);
+  const userEl = $("#alf-user");
+  const resolved = userEl ? resolveLogUserFilter(userEl.value) : { id: null };
   if (resolved.error) {
     _adminLogStats = null;
     hideAdminLogCharts();
@@ -1056,7 +1205,7 @@ async function loadAdminLogStats() {
   const request = ++_adminLogStatsRequest;
   let data;
   try {
-    data = await api(`/api/admin/logs/stats?${params.toString()}`);
+    data = await api(`${allLogsPath("/api/admin/logs/stats")}?${params.toString()}`);
   } catch {
     if (request !== _adminLogStatsRequest) return;
     _adminLogStats = null;
@@ -1417,7 +1566,7 @@ let _donFilterBound = false;
 
 async function loadAdminDonations() {
   try {
-    const data = await api("/api/admin/donations");
+    const data = await api(coAdminPath("/api/admin/donations"));
     _allDonations = data.donations || [];
     bindDonationFilters();
     applyDonationFilters();
@@ -1441,7 +1590,8 @@ function bindDonationFilters() {
     $(sel).onchange = applyDonationFilters;
   });
   $("#don-filter-q").oninput = applyDonationFilters;
-  $("#don-filter-user").oninput = applyDonationFilters;
+  const userFilter = $("#don-filter-user");
+  if (userFilter) userFilter.oninput = applyDonationFilters;
 }
 
 // Client-side filter over the fully loaded donation list (same mechanism as
@@ -1452,7 +1602,8 @@ function applyDonationFilters() {
   const status = $("#don-filter-status").value;
   const svc = $("#don-filter-service").value;
   const q = ($("#don-filter-q").value || "").trim().toLowerCase();
-  const userText = $("#don-filter-user").value.trim();
+  const userFilter = $("#don-filter-user");
+  const userText = (userFilter ? userFilter.value : "").trim();
   let list = _allDonations;
   if (status) list = list.filter((d) => d.status === status);
   if (svc) list = list.filter((d) => d.service === svc);
@@ -1484,7 +1635,7 @@ function applyDonationFilters() {
 
 async function loadPricing() {
   try {
-    const data = await api("/api/admin/pricing");
+    const data = await api(coAdminPath("/api/admin/pricing"));
     pricingData = data.pricing || [];
     renderPricingRows();
     // Populate pricing service dropdown from existing donations' services.
@@ -1530,7 +1681,7 @@ function renderPricingRows() {
       const mdl = tgl.dataset.model;
       const wantOn = tgl.checked;
       try {
-        await api("/api/admin/pricing", { method: "PATCH", body: { service: svc, model: mdl, enabled: wantOn } });
+        await api(coAdminPath("/api/admin/pricing"), { method: "PATCH", body: { service: svc, model: mdl, enabled: wantOn } });
         // Update local state.
         const p = pricingData.find((x) => x.service === svc && x.model === mdl);
         if (p) p.enabled = wantOn;
@@ -1554,7 +1705,7 @@ function renderPricingRows() {
       const mdl = btn.dataset.model;
       if (!confirm(T('deleteConfirm'))) return;
       try {
-        await api("/api/admin/pricing", { method: "DELETE", body: { service: svc, model: mdl } });
+        await api(coAdminPath("/api/admin/pricing"), { method: "DELETE", body: { service: svc, model: mdl } });
         pricingData = pricingData.filter((x) => !(x.service === svc && x.model === mdl));
         renderPricingRows();
         toast(T('charityDeleted'), 2000);
@@ -1605,7 +1756,7 @@ async function showPricingEditDialog(svc, mdl, curPrice, curReward) {
     const msg = $("#pricing-edit-msg");
     msg.innerHTML = `<span class="muted">${T('loading')}</span>`;
     try {
-      const resp = await api("/api/admin/pricing", { method: "PUT", body: { service: svc, model: mdl, price, reward } });
+      const resp = await api(coAdminPath("/api/admin/pricing"), { method: "PUT", body: { service: svc, model: mdl, price, reward } });
       // Update local data.
       const idx = pricingData.findIndex((x) => x.service === svc && x.model === mdl);
       if (idx >= 0) {
@@ -1633,7 +1784,7 @@ async function onPricingSubmit(e) {
   const note = $("#pricing-note");
   note.innerHTML = `<span class="muted">${T('loading')}</span>`;
   try {
-    const resp = await api("/api/admin/pricing", { method: "PUT", body: { service: svc, model: mdl, price, reward } });
+    const resp = await api(coAdminPath("/api/admin/pricing"), { method: "PUT", body: { service: svc, model: mdl, price, reward } });
     // Update local data (upsert).
     const idx = pricingData.findIndex((x) => x.service === svc && x.model === mdl);
     if (idx >= 0) {
@@ -1653,8 +1804,10 @@ async function onPricingSubmit(e) {
 async function onDonationSubmit(e) {
   e.preventDefault();
   const f = e.target;
-  // Resolve source user from text+<datalist>.
-  const userText = $("#don-source-user").value.trim();
+  // Resolve source user from text+<datalist> (admin site only; the user
+  // site co-admin form has no source-user picker).
+  const srcEl = $("#don-source-user");
+  const userText = srcEl ? srcEl.value.trim() : "";
   let sourceUserId = null;
   if (userText) {
     const m = userText.match(/^(.*)（([^（）]*)）$/);
@@ -1681,10 +1834,10 @@ async function onDonationSubmit(e) {
   const note = $("#don-note");
   note.innerHTML = `<p class="muted">${T('loading')}</p>`;
   try {
-    await api("/api/admin/donations", { method: "POST", body });
+    await api(coAdminPath("/api/admin/donations"), { method: "POST", body });
     note.innerHTML = `<div class="note ok">${T('charityCreated')}</div>`;
     f.reset();
-    $("#don-source-user").value = "";
+    if (srcEl) srcEl.value = "";
     await loadAdminDonations();
   } catch (err) {
     note.innerHTML = `<div class="note err">${T('error').replace("{msg}", esc(err.message))}</div>`;
@@ -1693,12 +1846,20 @@ async function onDonationSubmit(e) {
 
 /* ---------------- admin donation review ---------------- */
 
+// Refresh the donation list after review actions. Level-4 co-admins have
+// no donations panel, so the list endpoint is out of reach for them; the
+// admin site and level-5 co-admins always reload.
+function coAdminReloadDonations() {
+  if (_coAdminMode === "me" && (state.me?.level || 0) < 5) return Promise.resolve();
+  return loadAdminDonations();
+}
+
 async function renderAdminDonationReview() {
   const container = $("#donation-review-content");
   if (!container) return;
 
   try {
-    const resp = await api("/api/admin/donations/pending");
+    const resp = await api(coAdminPath("/api/admin/donations/pending"));
     const apps = resp.applications || [];
 
     if (apps.length === 0) {
@@ -1808,13 +1969,13 @@ function showReviewDialog(app) {
     const msg = $("#review-msg");
     msg.innerHTML = `<span class="muted">${T('loading')}</span>`;
     try {
-      await api(`/api/admin/donations/${app.id}/reject`, { method: "POST", body: { review_note: note } });
+      await api(coAdminPath(`/api/admin/donations/${app.id}/reject`), { method: "POST", body: { review_note: note } });
       toast(T('donationReviewRejected'));
       close();
       // Refresh both the pending list, history and the donation table.
       await renderAdminDonationReview();
       await loadDonationAppHistory();
-      await loadAdminDonations();
+      await coAdminReloadDonations();
     } catch (err) {
       msg.innerHTML = `<span class="note err">${T('error').replace("{msg}", err.message)}</span>`;
     }
@@ -1837,12 +1998,12 @@ function showReviewDialog(app) {
     const msg = $("#review-msg");
     msg.innerHTML = `<span class="muted">${T('loading')}</span>`;
     try {
-      await api(`/api/admin/donations/${app.id}/approve`, { method: "POST", body });
+      await api(coAdminPath(`/api/admin/donations/${app.id}/approve`), { method: "POST", body });
       toast(T('donationReviewApproved'));
       close();
       await renderAdminDonationReview();
       await loadDonationAppHistory();
-      await loadAdminDonations();
+      await coAdminReloadDonations();
     } catch (err) {
       msg.innerHTML = `<span class="note err">${T('error').replace("{msg}", err.message)}</span>`;
     }
@@ -2002,7 +2163,7 @@ async function showDonationEditDialog(d) {
     const msg = $("#don-edit-msg");
     msg.innerHTML = `<span class="muted">${T('loading')}</span>`;
     try {
-      const resp = await api(`/api/admin/donations/${d.id}`, { method: "PATCH", body });
+      const resp = await api(coAdminPath(`/api/admin/donations/${d.id}`), { method: "PATCH", body });
       if (resp.validation && !resp.validation.compatible) {
         toast(T('donationSavedInvalid').replace("{msg}", esc(resp.validation.message || "")), 3000);
       } else {
@@ -2294,7 +2455,7 @@ document.addEventListener("click", async (ev) => {
     const id = btn.dataset.id;
     const status = btn.dataset.status;
     try {
-      await api(`/api/admin/donations/${id}/status`, { method: "POST", body: { status } });
+      await api(coAdminPath(`/api/admin/donations/${id}/status`), { method: "POST", body: { status } });
       toast(T('charityStatusChanged'));
       await loadAdminDonations();
     } catch (err) {
@@ -2307,7 +2468,7 @@ document.addEventListener("click", async (ev) => {
     if (!confirm(T('charityDeleteWarn'))) return;
     const id = delBtn.dataset.id;
     try {
-      await api(`/api/admin/donations/${id}`, { method: "DELETE" });
+      await api(coAdminPath(`/api/admin/donations/${id}`), { method: "DELETE" });
       toast(T('charityDeleted'));
       await loadAdminDonations();
     } catch (err) {
@@ -2331,12 +2492,12 @@ document.addEventListener("click", async (ev) => {
     const ids = getBatchIds(".review-chk");
     if (ids.length === 0) { toast(T('batchNoSelection'), 2200); return; }
     try {
-      await api("/api/admin/donations/approve/batch", { method: "POST", body: { ids } });
+      await api(coAdminPath("/api/admin/donations/approve/batch"), { method: "POST", body: { ids } });
       toast(T('donationReviewApproved'), 2200);
       clearBatchSelection("#review-select-all", ".review-chk", "don-review-batch-bar");
       await renderAdminDonationReview();
       await loadDonationAppHistory();
-      await loadAdminDonations();
+      await coAdminReloadDonations();
     } catch (err) { toast(T('error').replace("{msg}", err.message), 3000); }
     return;
   }
@@ -2347,12 +2508,12 @@ document.addEventListener("click", async (ev) => {
     const ids = getBatchIds(".review-chk");
     if (ids.length === 0) { toast(T('batchNoSelection'), 2200); return; }
     try {
-      await api("/api/admin/donations/reject/batch", { method: "POST", body: { ids } });
+      await api(coAdminPath("/api/admin/donations/reject/batch"), { method: "POST", body: { ids } });
       toast(T('donationReviewRejected'), 2200);
       clearBatchSelection("#review-select-all", ".review-chk", "don-review-batch-bar");
       await renderAdminDonationReview();
       await loadDonationAppHistory();
-      await loadAdminDonations();
+      await coAdminReloadDonations();
     } catch (err) { toast(T('error').replace("{msg}", err.message), 3000); }
     return;
   }
@@ -2363,7 +2524,7 @@ document.addEventListener("click", async (ev) => {
     const ids = getBatchIds(".don-chk");
     if (ids.length === 0) { toast(T('batchNoSelection'), 2200); return; }
     try {
-      await api("/api/admin/donations/status/batch", { method: "POST", body: { ids, status: "active" } });
+      await api(coAdminPath("/api/admin/donations/status/batch"), { method: "POST", body: { ids, status: "active" } });
       toast(T('charityStatusChanged'), 2200);
       clearBatchSelection("#don-select-all", ".don-chk", "don-batch-bar");
       await loadAdminDonations();
@@ -2377,7 +2538,7 @@ document.addEventListener("click", async (ev) => {
     const ids = getBatchIds(".don-chk");
     if (ids.length === 0) { toast(T('batchNoSelection'), 2200); return; }
     try {
-      await api("/api/admin/donations/status/batch", { method: "POST", body: { ids, status: "inactive" } });
+      await api(coAdminPath("/api/admin/donations/status/batch"), { method: "POST", body: { ids, status: "inactive" } });
       toast(T('charityStatusChanged'), 2200);
       clearBatchSelection("#don-select-all", ".don-chk", "don-batch-bar");
       await loadAdminDonations();
@@ -2392,7 +2553,7 @@ document.addEventListener("click", async (ev) => {
     if (ids.length === 0) { toast(T('batchNoSelection'), 2200); return; }
     if (!confirm(T('batchConfirmDelete').replace("{n}", String(ids.length)))) return;
     try {
-      await api("/api/admin/donations/delete/batch", { method: "POST", body: { ids } });
+      await api(coAdminPath("/api/admin/donations/delete/batch"), { method: "POST", body: { ids } });
       toast(T('charityDeleted'), 2200);
       clearBatchSelection("#don-select-all", ".don-chk", "don-batch-bar");
       await loadAdminDonations();
@@ -2407,11 +2568,11 @@ document.addEventListener("click", async (ev) => {
     if (pairs.length === 0) { toast(T('batchNoSelection'), 2200); return; }
     if (!confirm(T('batchConfirmDelete').replace("{n}", String(pairs.length)))) return;
     try {
-      await api("/api/admin/pricing/delete/batch", { method: "POST", body: { pairs } });
+      await api(coAdminPath("/api/admin/pricing/delete/batch"), { method: "POST", body: { pairs } });
       toast(T('charityDeleted'), 2200);
       clearBatchSelection("#pricing-select-all", ".pricing-chk", "pricing-batch-bar");
       // Reload pricing data.
-      const data = await api("/api/admin/pricing");
+      const data = await api(coAdminPath("/api/admin/pricing"));
       pricingData = data.pricing || [];
       renderPricingRows();
     } catch (err) { toast(T('error').replace("{msg}", err.message), 3000); }

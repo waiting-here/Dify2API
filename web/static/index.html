@@ -69,6 +69,14 @@
   /* Key + data cards above user tabs: side-by-side on small screens. */
   .user-top-cards { display: flex; flex-wrap: wrap; gap: 1.25rem; }
   .user-top-cards > .card { flex: 1 1 16rem; margin-bottom: 1.25rem; }
+  /* R-A: level badge (everyone) + level-2+ banner. Banner is plain text
+     with a lightweight CSS gradient shift (GPU-composited background
+     position, no canvas / JS loop), not closable. */
+  #level-area { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; margin-bottom: .75rem; }
+  .level-badge { display: inline-flex; align-items: center; padding: .15rem .7rem; border-radius: 1rem; background: var(--pico-primary); color: var(--pico-primary-inverse); font-size: .85rem; font-weight: 600; line-height: 1.5; }
+  .level-banner { flex: 1 1 100%; padding: .6rem 1rem; border-radius: .4rem; border: 1px solid rgba(74,125,219,.45); background: linear-gradient(90deg, rgba(74,125,219,.10) 0%, rgba(74,125,219,.22) 50%, rgba(74,125,219,.10) 100%); background-size: 200% 100%; animation: levelBannerShift 8s linear infinite; font-weight: 600; }
+  @keyframes levelBannerShift { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
+  @media (prefers-reduced-motion: reduce) { .level-banner { animation: none; } }
   /* Admin logs filter grid layout — 3 rows. */
   #admin-logs-filter { display: grid; grid-template-columns: 1fr 1fr auto; gap: .5rem .75rem; align-items: center; }
   #admin-logs-filter label { margin-bottom: 0; }
@@ -82,6 +90,13 @@
   #admin-logs-filter .afl-until  { grid-column: 2; grid-row: 3; }
   #admin-logs-filter .afl-actions { grid-column: 3; grid-row: 1 / 4; align-self: center; display: flex; flex-direction: column; gap: .5rem; }
   #admin-logs-filter .afl-actions button { width: auto; margin: 0; }
+  /* User-site all-logs filter has no user field: fill the grid without the hole. */
+  #admin-logs-filter.alf-no-user .afl-svc    { grid-column: 1; grid-row: 1; }
+  #admin-logs-filter.alf-no-user .afl-status { grid-column: 2; grid-row: 1; }
+  #admin-logs-filter.alf-no-user .afl-model  { grid-column: 1; grid-row: 2; }
+  #admin-logs-filter.alf-no-user .afl-since  { grid-column: 2; grid-row: 2; }
+  #admin-logs-filter.alf-no-user .afl-until  { grid-column: 1; grid-row: 3; }
+  #admin-logs-filter.alf-no-user .afl-actions { grid-column: 2; grid-row: 3; flex-direction: row; }
   /* Admin donation filter: 2×2 grid on wide screens, single column on narrow
      (media query below). Labels share a uniform width inside their cells. */
   #don-filter { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem .75rem; align-items: end; margin-bottom: .75rem; }
@@ -91,6 +106,10 @@
   @media (max-width: 800px) {
     #admin-logs-filter { grid-template-columns: 1fr; }
     #admin-logs-filter .afl-actions { grid-column: 1; grid-row: auto; flex-direction: row; }
+    /* The alf-no-user placement rules above must collapse too. */
+    #admin-logs-filter.alf-no-user .afl-svc, #admin-logs-filter.alf-no-user .afl-status,
+    #admin-logs-filter.alf-no-user .afl-model, #admin-logs-filter.alf-no-user .afl-since,
+    #admin-logs-filter.alf-no-user .afl-until, #admin-logs-filter.alf-no-user .afl-actions { grid-column: 1; grid-row: auto; }
     #don-filter { grid-template-columns: 1fr; }
   }
   /* ---- Mobile / tablet adaptation ----
@@ -123,9 +142,9 @@
        column order — see AGENTS.md §4 #5; update if a table's columns change.
        Scoped via :has(tbody#id) / container id so only the intended table is
        affected. :has() is supported in all modern browsers (2022+). */
-    /* admin user table: RPM (col 5 — leading checkbox is col 1) */
-    table:has(tbody#user-rows) th:nth-child(5),
-    table:has(tbody#user-rows) td:nth-child(5) { display: none; }
+    /* admin user table: RPM (col 7 — leading checkbox is col 1, level col 4) */
+    table:has(tbody#user-rows) th:nth-child(7),
+    table:has(tbody#user-rows) td:nth-child(7) { display: none; }
     /* admin request-log table: error code + error detail (col 8 & 9) */
     table:has(tbody#alf-rows) th:nth-child(8),
     table:has(tbody#alf-rows) td:nth-child(8),

@@ -34,7 +34,7 @@
 </nav>
 <main class="container">
 <h1>Privacy Policy</h1>
-<p><strong>Last Updated: July 31, 2026</strong></p>
+<p><strong>Last Updated: August 6, 2026</strong></p>
 
 <h2>1. Overview</h2>
 <p>__SITE_NAME__ ("we," "the Service") is committed to protecting your privacy. This Privacy Policy explains how we collect, use, store, and share your personal information, as well as your rights regarding that information.</p>
@@ -67,6 +67,14 @@
   <li><strong>Abuse Prevention</strong>: Request-frequency-based rate limiting and anomaly detection to protect service stability.</li>
   <li><strong>Operational Improvement</strong>: Analyze aggregated usage data to improve the Service.</li>
 </ul>
+
+<h3>3.1 Tiered Moderation and Data Visibility</h3>
+<p>The Service uses a user-level system (levels 1–5, see Terms §2.1) under which some users (moderators) gain visibility into other users' data, as follows:</p>
+<ul>
+  <li><strong>Level 4 users</strong>: May view and review pending charity donation applications, including the applicant's submitted service, model, base URL, requested count, deadline, and notes, and may write review notes.</li>
+  <li><strong>Level 5 users (moderators)</strong>: In addition to the above, they may view the <strong>site-wide request log</strong> (metadata of all users' API calls: time, model, service, status, error code, and error detail) and its statistics charts. Error details are sanitized (addresses, domains, IPs, and secrets are removed) and <strong>no export is provided</strong>. Level 5 moderators may also manage charity resources and pricing (including viewing each donation entry's source user / source text).</li>
+</ul>
+<p>This means that part of your data (donation application information and request-log metadata) is visible to moderators who reach the corresponding level. Levels are configured and managed by the Operator; we recommend granting elevated levels only to trusted individuals. Moderators operate on the user site (Discord login) and do not receive administrator-site privileges.</p>
 
 <h2>4. Data Storage and Security</h2>
 <ul>

@@ -165,6 +165,36 @@ v1.2.0 的公益记账在**预留时**即扣减捐赠 `remaining_count` 与消�
 - **法律页面**：`/privacy`、`/terms` 支持 `?lang=en|zh` 或用户语言偏好；未登录默认中文，
   不直接按页面请求的 `Accept-Language` 切换。部署前必须审核模板并配置真实举报邮箱。
 
+## 用户分级与协管（R-A）
+
+普通用户按 1–5 级提供差异化能力；等级在读取时惰性计算，门槛或公益积分（`donation_credit`）
+的调整即时生效。
+
+- **自动等级**：`donation_credit ≥ level_threshold_2/3/4`（默认 1/100/500）分别达到
+  2/3/4 级，低于 t2 为 1 级；**5 级只能手动设定**（自动判定永不返回 5）。
+- **手动设定**：管理员在「用户管理」tab 为单个用户设定 1–5 级或恢复自动（`default`）；
+  被手动设定的用户不再自动升降级。
+- **特权**（高等级包含所有低等级特权）：2 级用户站顶部横幅（纯文本，不可关闭）；3 级签到
+  无视 `credits_cap` 上限（`credits_cap=0` 的全局关闭仍优先）；4 级用户站公益审批；5 级
+  公益资源/定价管理 + 全站请求日志（列表与统计，**无导出**，`error_detail` 按用户视角脱敏）。
+- **等级设置**（管理台「用户分级」tab，共 9 个键，专用原子接口）：
+  `level_threshold_2..4`（校验 `0 ≤ t2 < t3 < t4`）、`level_name_1..5`（留空回退数字等级，
+  名称 ≤ 20 字）、`level_banner_text`（2 级及以上顶部横幅，≤ 200 字，拒绝控制字符）；
+  PUT 全 9 字段必填，单事务写入。
+- **新端点**（仅用户站可达，管理员站 404；`/api/admin/*` 仍仅管理员）：
+
+  | 等级 | 端点 | 说明 |
+  |---|---|---|
+  | 4 | `GET /api/me/review/pending` | 待审核捐赠申请列表 |
+  | 4 | `POST /api/me/review/{id}/approve` / `reject` | 单条审批/驳回 |
+  | 4 | `POST /api/me/review/approve|reject/batch` | 批量审批/驳回 |
+  | 5 | `GET\|POST /api/me/charity-admin/donations`、`PATCH …/{id}`、`POST …/{id}/status`、`DELETE …/{id}`、`POST …/status|delete/batch` | 公益资源 CRUD/状态/批量 |
+  | 5 | `GET\|PUT\|PATCH\|DELETE /api/me/charity-admin/pricing`、`POST …/delete/batch` | 定价管理 |
+  | 5 | `GET /api/me/all-logs`、`GET /api/me/all-logs/stats` | 全站日志列表 + 统计（同 R-C 小时聚合契约） |
+
+- **升级说明**：无手工迁移 —— `users.level` 列（NULL=自动，1–5=手动）在启动时幂等创建，
+  旧数据默认按自动模式计算等级。
+
 ## SMTP 提醒
 
 配置 `SMTP_HOST` 后启用；为空时静默关闭。支持 587 STARTTLS 与 465 implicit TLS。

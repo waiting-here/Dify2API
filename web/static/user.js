@@ -66,16 +66,31 @@ async function renderUserDashboard() {
   $("#nav-user").innerHTML = `${esc(T('welcome').replace("{name}", state.me.username))} · <a href="#" id="logout">${T('logout')}</a>`;
   bindLogout("#logout");
 
+  const me = state.me;
+  // R-A: level-gated tabs. 4+ users get the co-admin panel (review at 4,
+  // + resources/pricing at 5); 5-only users get the all-site logs tab.
   const tabs = ["configs", "credits", "charity", "logs", "debug"];
+  if (me.level >= 4) tabs.splice(tabs.indexOf("charity") + 1, 0, "coadmin");
+  if (me.level >= 5) tabs.splice(tabs.indexOf("logs") + 1, 0, "alllogs");
   const tabLabels = {
     configs: T('userTabConfigs'), credits: T('userTabCredits'), charity: T('userTabCharity'),
     logs: T('userTabLogs'), debug: T('userTabDebug'),
+    coadmin: T('tabCharityCoAdmin'), alllogs: T('tabAllLogs'),
   };
   const tabNav = tabs.map((t, i) =>
     `<button class="user-tab${i === 0 ? " active" : ""}" data-tab="${t}">${tabLabels[t]}</button>`
   ).join("");
 
+  // R-A: level badge for everyone + level-2+ banner (plain text, not
+  // closable). The badge name falls back to the numeric level server-side.
+  const levelBadge = `<span class="level-badge" title="${T('levelBadge')}: ${esc(me.level_name)}" aria-label="${T('levelBadge')}: ${esc(me.level_name)}">Lv.${me.level} · ${esc(me.level_name)}</span>`;
+  const levelBanner = (me.level >= 2 && me.banner_text)
+    ? `<div class="level-banner" role="note" aria-label="${T('levelBanner')}">${esc(me.banner_text)}</div>`
+    : "";
+
   $("#app").innerHTML = `
+    <!-- Level badge + banner (above everything; banner only for level 2+) -->
+    <div id="level-area">${levelBadge}${levelBanner}</div>
     <!-- Above-tab area: bulletin, key, data cards (always visible) -->
     <section class="card" id="bulletin-board"></section>
     <div class="user-top-cards">
@@ -150,6 +165,104 @@ async function renderUserDashboard() {
       </section>
     </div>
 
+    <!-- Charity co-admin tab (level >= 4; R-A). Reuses the admin
+         donation/pricing panel ids and interaction patterns — the shared
+         handlers in admin.js map /api/admin/* to /api/me/* via coAdminPath. -->
+    <div id="utab-coadmin" class="user-tab-content" style="display:none">
+      <div id="donation-review-section" style="margin-bottom:1.5rem;padding:.75rem;border:1px solid var(--pico-muted-border-color);border-radius:4px">
+        <h4>${T('donationReviewSection')}</h4>
+        <div id="donation-review-content"></div>
+      </div>
+      <div id="coadmin-level5" style="display:none">
+        <section class="card" id="pricing-panel">
+          <h3>${T('pricingTitle')}</h3>
+          <form id="pricing-form">
+            <div style="display:grid;grid-template-columns:${isNarrowScreen()?'1fr':'1fr 1fr 1fr 1fr'};gap:.5rem;align-items:end">
+              <label>${T('pricingThService')}<select name="service" id="pricing-service"></select></label>
+              <label>${T('pricingThModel')}<input name="model" placeholder="${T('fieldBackend')}" required></label>
+              <label>${T('pricingThPrice')}<input name="price" type="number" min="0" value="0" required></label>
+              <label>${T('pricingThReward')}<input name="reward" type="number" min="0" placeholder="自动"></label>
+            </div>
+            <small class="muted" style="margin-top:.25rem">${T('pricingRewardHint')}</small>
+            <div id="pricing-note"></div>
+            <button type="submit">${T('pricingAdd')}</button>
+          </form>
+          <div id="pricing-batch-bar" style="display:none;gap:.5rem;align-items:center;margin-bottom:.5rem;margin-top:1rem">
+            <button class="secondary batch-pricing-del" style="width:auto;margin:0">${T('batchDelete')}</button>
+          </div>
+          <div class="table-wrap"><table><thead><tr>
+            <th><input type="checkbox" id="pricing-select-all" title="${T('batchSelectAll')}"></th>
+            <th>${T('pricingThService')}</th><th>${T('pricingThModel')}</th>
+            <th>${T('pricingThPrice')}</th><th>${T('pricingThReward')}</th>
+            <th>${T('pricingThEnabled')}</th><th>${T('thActions')}</th>
+          </tr></thead><tbody id="pricing-rows"></tbody></table></div>
+        </section>
+        <section class="card">
+          <h3>${T('charityTitle')}</h3>
+          <form id="donation-form">
+            <div style="display:grid;grid-template-columns:${isNarrowScreen()?'1fr':'auto 1fr'};gap:.5rem;align-items:end">
+              <label>${T('thService')}<select name="service" id="don-service"></select></label>
+              <label>${T('thModel')}<input name="model" placeholder="${T('fieldBackend')}" required></label>
+            </div>
+            <label>${T('fieldBaseURL')}<input name="dify_base_url" placeholder="https://api.dify.ai/v1" required></label>
+            <label>${T('fieldAPIKey')}<input name="dify_api_key" placeholder="app-…" required></label>
+            <label>${T('charitySourceText')}<input name="source_text" placeholder="${T('charitySourceTextPlaceholder')}"></label>
+            <div style="display:grid;grid-template-columns:${isNarrowScreen()?'1fr':'1fr 1fr 1fr'};gap:.5rem">
+              <label>${T('charityDeadline')}<input name="deadline" type="datetime-local" required></label>
+              <label>${T('charityTotalCount')}<input name="total_count" type="number" min="1" required></label>
+              <label>${T('rpmLimitLabel')}<input name="rpm_limit" type="number" min="1" value="10" placeholder="${T('rpmLimitHint')}"></label>
+            </div>
+            <label>${T('charityNote')}<input name="note" placeholder="${T('charityNote')}"></label>
+            <div id="don-note"></div>
+            <button type="submit">${T('charitySubmit')}</button>
+          </form>
+          <div id="don-batch-bar" style="display:none;gap:.5rem;align-items:center;margin-bottom:.5rem;margin-top:1.5rem">
+            <button class="secondary batch-don-activate" style="width:auto;margin:0">${T('batchActivate')}</button>
+            <button class="secondary batch-don-deactivate" style="width:auto;margin:0">${T('batchDeactivate')}</button>
+            <button class="contrast outline batch-don-delete" style="width:auto;margin:0">${T('batchDelete')}</button>
+          </div>
+          <div id="don-filter">
+            <label>${T('charityThStatus')}<select id="don-filter-status"><option value="">${T('donationAppStatusAll')}</option><option value="active">${T('charityStatusActive')}</option><option value="inactive">${T('charityStatusInactive')}</option><option value="expired">${T('charityStatusExpired')}</option></select></label>
+            <label>${T('thService')}<select id="don-filter-service"><option value="">${T('adminLogsAllServices')}</option></select></label>
+            <label>${T('donFilterKeyword')}<input id="don-filter-q" placeholder="${T('donFilterKeywordPlaceholder')}" autocomplete="off"></label>
+          </div>
+          <div class="table-wrap"><table><thead><tr>
+            <th><input type="checkbox" id="don-select-all" title="${T('batchSelectAll')}"></th>
+            <th>${T('charityThService')}</th><th>${T('charityThModel')}</th><th>${T('charityThSource')}</th>
+            <th>Key</th>
+            <th>${T('charityThStatus')}</th><th>${T('charityThRemaining')}</th><th>RPM</th><th>${T('charityThDeadline')}</th>
+            <th>${T('thNote')}</th><th>${T('adminReviewNote')}</th><th>${T('thActions')}</th>
+          </tr></thead><tbody id="don-rows"></tbody></table></div>
+          <div class="row-actions" id="don-pager" style="margin-top:.5rem"></div>
+        </section>
+      </div>
+    </div>
+
+    <!-- All-site logs tab (level 5; R-A). List + stats, no export. -->
+    <div id="utab-alllogs" class="user-tab-content" style="display:none">
+      <section class="card">
+        <h3>${T('tabAllLogs')}</h3>
+        <div id="admin-logs-filter" class="alf-no-user" style="margin-bottom:.8rem">
+          <label class="afl-svc">${T('thService')}<select id="alf-service"><option value="">${T('adminLogsAllServices')}</option></select></label>
+          <label class="afl-status">${T('thStatus')}<select id="alf-status"><option value="">${T('adminLogsAllStatus')}</option><option value="success">${T('adminLogsSuccess')}</option><option value="error">${T('adminLogsError')}</option></select></label>
+          <label class="afl-model">${T('adminLogsModel')}<input id="alf-model" placeholder="[公益][general]x"></label>
+          <label class="afl-since">${T('adminLogsSince')}<input id="alf-since" type="datetime-local"></label>
+          <label class="afl-until">${T('adminLogsUntil')}<input id="alf-until" type="datetime-local"></label>
+          <div class="afl-actions">
+            <button id="alf-query">${T('adminLogsQuery')}</button>
+          </div>
+        </div>
+        <div id="alf-chart-area" style="display:none;margin-bottom:.8rem">
+          <div class="admin-log-chart" id="alf-day-chart-wrap">
+            <canvas id="alf-day-chart" role="img" aria-label="${esc(T('adminLogsDailyChartAria'))}" aria-describedby="alf-chart-summary">${esc(T('adminLogsDailyChartAria'))}</canvas>
+          </div>
+          <p id="alf-chart-summary" class="sr-only" aria-live="polite"></p>
+        </div>
+        <div class="table-wrap"><table><thead><tr><th>${T('thTime')}</th><th>${T('thUser')}</th><th>${T('thModel')}</th><th>${T('thService')}</th><th>${T('thDuration')}</th><th>${T('thStatus')}</th><th>${T('thHTTPStatus')}</th><th>${T('thErrorCode')}</th><th>${T('thErrorDetail')}</th><th>${T('thCreditsConsumed')}</th><th>${T('thAntiAbuse')}</th><th>${T('thDonationSource')}</th></tr></thead><tbody id="alf-rows"></tbody></table></div>
+        <div class="row-actions" id="alf-pager" style="margin-top:.5rem"></div>
+      </section>
+    </div>
+
     <!-- Debug tab -->
     <div id="utab-debug" class="user-tab-content" style="display:none">
       <section class="card" id="debug-section">
@@ -166,6 +279,10 @@ async function renderUserDashboard() {
   // Reset tab lazy-load state for fresh render.
   for (const k of Object.keys(_userTabLoaded)) delete _userTabLoaded[k];
   _userTabLoaded.configs = true;
+  // Defensive: the shared co-admin/all-logs endpoint mappers in admin.js
+  // always point at the admin site unless the user-site tabs set them.
+  if (typeof _coAdminMode !== "undefined") _coAdminMode = "admin";
+  if (typeof _allLogsMode !== "undefined") _allLogsMode = "admin";
 
   // Bind key-card events.
   $("#copy-key").onclick = copyKey;
@@ -238,6 +355,8 @@ function switchUserTab(tab) {
       case "charity": renderCharityCard(); renderMyDonations(); break;
       case "logs": initUserLogsTab(); break;
       case "debug": initUserDebugTab(); break;
+      case "coadmin": initUserCoAdminTab(); break;
+      case "alllogs": initUserAllLogsTab(); break;
     }
   }
 }
@@ -1155,4 +1274,46 @@ async function loadLogs() {
   const { logs } = await api("/api/logs");
   logPager.data = logs || [];
   renderPaged(logPager, "#log-rows", "#log-pager", 8);
+}
+
+/* ---------------- R-A: charity co-admin tab (level >= 4) ---------------- */
+// Level 4: donation-application review panel only. Level 5 additionally
+// gets charity resource + pricing management. All data flows through
+// /api/me/* endpoints (the admin.js panel code maps them via coAdminPath);
+// /api/admin/* is never called from the user site.
+async function initUserCoAdminTab() {
+  _coAdminMode = "me";
+  const level5 = (state.me.level || 0) >= 5;
+  const five = $("#coadmin-level5");
+  if (five) five.style.display = level5 ? "" : "none";
+  if (level5) {
+    try {
+      const { services } = await api("/api/services");
+      const svcOpts = (services || []).map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("");
+      const donSvc = $("#don-service");
+      if (donSvc) donSvc.innerHTML = svcOpts;
+      const pricingSvc = $("#pricing-service");
+      if (pricingSvc) pricingSvc.innerHTML = svcOpts;
+    } catch { /* keep dropdowns empty; forms still fail server-side */ }
+    $("#donation-form").onsubmit = onDonationSubmit;
+    $("#pricing-form").onsubmit = onPricingSubmit;
+  }
+  await renderAdminDonationReview();
+  if (level5) {
+    await loadAdminDonations();
+    await loadPricing();
+  }
+}
+
+/* ---------------- R-A: all-site logs tab (level 5, no export) ---------------- */
+async function initUserAllLogsTab() {
+  _allLogsMode = "me";
+  try {
+    const { services } = await api("/api/services");
+    $("#alf-service").innerHTML = `<option value="">${T('adminLogsAllServices')}</option>` +
+      (services || []).map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("");
+  } catch { /* keep "all services" */ }
+  $("#alf-query").onclick = () => { adminLogPager.page = 1; loadAdminLogs(); loadAdminLogStats(); };
+  await loadAdminLogStats();
+  await loadAdminLogs();
 }

@@ -115,7 +115,11 @@ async function init() {
     if (logo) logo.textContent = siteName;
   }
   updateThemeButton();
-  state.mode = location.hostname === state.site.admin_host ? "admin" : "user";
+  // Port-agnostic host comparison: on a non-standard-port deployment the
+  // configured ADMIN_HOST carries the port while location.hostname does
+  // not. The server-side isAdminHost strips ports the same way.
+  const stripPort = (h) => { const i = h.lastIndexOf(":"); return i > 0 && h.indexOf(":") === i ? h.slice(0, i) : h; };
+  state.mode = stripPort(location.hostname) === stripPort(state.site.admin_host) ? "admin" : "user";
   try {
     state.me = await api("/api/me");
     syncLangFromServer();
