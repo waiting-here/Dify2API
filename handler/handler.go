@@ -397,9 +397,9 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	// Global in-flight cap (backpressure): acquire BEFORE reading the body
 	// so that attackers cannot pile up memory-hungry requests waiting for
-	// the semaphore.  With the default config (MaxChatInFlight=64,
+	// the semaphore.  With the default config (MaxChatInFlight=32,
 	// MaxRequestBodyMB=10) the worst-case memory footprint for request
-	// bodies is 640 MB.
+	// bodies is 320 MB.
 	select {
 	case g.chatSem <- struct{}{}:
 		defer func() { <-g.chatSem }()

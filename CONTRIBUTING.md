@@ -70,7 +70,7 @@ This is the [Developer Certificate of Origin (DCO)](https://developercertificate
 
 ## Code Style
 
-- `go fmt` is non-negotiable — CI will reject unformatted code.
+- `go fmt` is non-negotiable — unformatted code will be rejected during review.
 - Comments and user-facing strings are in **Chinese** (简体中文) by
   convention, but English is accepted for code identifiers and technical
   documentation.
@@ -82,9 +82,9 @@ The maintainer reviews PRs on a best-effort basis.  To help move things along:
 
 - Keep PRs small and focused.
 - Link to the issue you are addressing.
-- Make sure CI passes (build + vet + test).
+- Make sure the mandatory local checks pass (build + vet + test).
 - Respond to review comments promptly.
 
 ## Questions?
 
-Open a [GitHub Discussion](https://github.com/your-org/dify2api/discussions) in the repository.
+Open a [GitHub issue](https://github.com/waiting-here/Dify2API/issues) in the repository.
