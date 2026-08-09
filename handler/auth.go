@@ -141,7 +141,11 @@ func (g *Gateway) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusInternalServerError, "internal", "internal error")
 		return
 	}
-	g.issueSession(w, adminUser)
+	if err := g.issueSession(w, adminUser); err != nil {
+		log.Printf("[ERROR] create admin session: %v", err)
+		g.writeError(w, http.StatusInternalServerError, "internal", "internal error")
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 }
@@ -338,7 +342,11 @@ func (g *Gateway) handleDiscordCallback(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	g.issueSession(w, user)
+	if err := g.issueSession(w, user); err != nil {
+		log.Printf("[ERROR] create Discord session for user %d: %v", user.ID, err)
+		fail("服务器内部错误，请稍后重试。")
+		return
+	}
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
@@ -374,11 +382,11 @@ func (g *Gateway) requireLevel(r *http.Request, min int) *db.User {
 }
 
 // issueSession creates a session and sets the cookie.
-func (g *Gateway) issueSession(w http.ResponseWriter, u *db.User) {
+func (g *Gateway) issueSession(w http.ResponseWriter, u *db.User) error {
 	token, expiresAt, err := g.Store.CreateSession(u.ID)
 	if err != nil {
-		log.Printf("[ERROR] create session: %v", err)
-		return
+		return err
 	}
 	auth.SetSessionCookie(w, token, expiresAt, g.Config.Admin.SiteBaseURL)
+	return nil
 }

@@ -54,7 +54,7 @@ func (g *Gateway) registerWebRoutes(mux *http.ServeMux) {
 		donationEnabled := g.Store.GetSettingString(db.SettingDonationEnabled, "") == "true"
 		charityEnabled := g.Store.GetSettingString(db.SettingCharityEnabled, "") == "true"
 		maintenanceMode := g.Store.GetSettingString(db.SettingMaintenanceMode, "") == "true"
-		donationReviewLimit := g.Store.GetSettingInt(db.SettingDonationReviewLimit, db.DefaultDonationReviewLimit)
+		donationReviewLimit := g.Store.GetSettingIntAllowZero(db.SettingDonationReviewLimit, db.DefaultDonationReviewLimit)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"site_host":             g.Config.Admin.SiteHost,

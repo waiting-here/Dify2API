@@ -82,6 +82,41 @@ func TestBan_PermanentAndLapse(t *testing.T) {
 	}
 }
 
+func TestAdminResetUserKeyRotatesWithoutReturningPlaintext(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	adminSession := loginCookie(t, gw, "root", "s3cret")
+	user, err := store.CreateUser("reset-key-user", "tester", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldKey, err := store.SetCallerKey(user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := adminPost(gw, adminSession, fmt.Sprintf("/api/admin/users/%d/reset-key", user.ID), `{}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reset status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var response map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode reset response: %v", err)
+	}
+	if response["ok"] != true || len(response) != 1 {
+		t.Errorf("reset response = %v, want only ok:true", response)
+	}
+	newKey, err := store.GetCallerKeyPlain(user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newKey == "" || newKey == oldKey {
+		t.Errorf("caller key was not rotated: old=%q new=%q", oldKey, newKey)
+	}
+	if strings.Contains(rec.Body.String(), newKey) || strings.Contains(rec.Body.String(), db.CallerKeyPrefix) {
+		t.Errorf("admin reset response exposed caller key: %s", rec.Body.String())
+	}
+}
+
 func TestDeleteUser_RecordsClearedAndReregisterAllowed(t *testing.T) {
 	gw, store := setupAuthGateway(t, "s3cret")
 	adminCookie := loginCookie(t, gw, "root", "s3cret")

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"dify2api/config"
 	"dify2api/db"
@@ -504,9 +505,15 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			if g.mailer != nil {
 				g.mailer.UserAutoBanned(user.Username, user.ID, until, banHours, violations)
 			}
-			g.writeError(w, http.StatusForbidden, "rpm_exceeded",
-				fmt.Sprintf(t(g.resolveLang(r), "已超出类别 %s 每分钟上限（%d 次/分），且因 24 小时内累计 %d 次超限，账号已被自动封禁 %d 小时", "Exceeded class %s RPM limit (%d/min); account auto-banned for %d hours due to %d violations in 24 hours"),
-					classLabel(violated), limits[violated], violations, banHours))
+			lang := g.resolveLang(r)
+			messageTemplate := t(lang, "已超出类别 %s 每分钟上限（%d 次/分），且因 24 小时内累计 %d 次超限，账号已被自动封禁 %d 小时", "Exceeded class %s RPM limit (%d/min); account auto-banned for %d hours due to %d violations in 24 hours")
+			var message string
+			if lang == "en" {
+				message = fmt.Sprintf(messageTemplate, classLabel(violated), limits[violated], banHours, violations)
+			} else {
+				message = fmt.Sprintf(messageTemplate, classLabel(violated), limits[violated], violations, banHours)
+			}
+			g.writeError(w, http.StatusForbidden, "rpm_exceeded", message)
 			return
 		}
 		g.writeError(w, http.StatusForbidden, "rpm_exceeded",
@@ -1390,7 +1397,7 @@ func (g *Gateway) checkAntiAbuse(messages []openai.Message, model string, userID
 				message: "消息包含不支持的角色类型，仅支持 system、user、assistant。",
 			}
 		}
-		totalChars += len(m.Content)
+		totalChars += utf8.RuneCountInString(string(m.Content))
 	}
 
 	// For charity models, use the actual service (strip [公益] prefix).

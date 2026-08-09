@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,16 @@ func userCookie(t *testing.T, gw *Gateway, store *db.Store) *http.Cookie {
 	return &http.Cookie{Name: auth.SessionCookieName, Value: token}
 }
 
+func assertCallerKeyNoStore(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+	if got := rec.Header().Get("Pragma"); got != "no-cache" {
+		t.Errorf("Pragma = %q, want no-cache", got)
+	}
+}
+
 func TestCallerKey_GetAndReset(t *testing.T) {
 	gw, store := setupAuthGateway(t, "x")
 	cookie := userCookie(t, gw, store)
@@ -36,6 +47,7 @@ func TestCallerKey_GetAndReset(t *testing.T) {
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
+	assertCallerKeyNoStore(t, rec)
 	var r1 struct {
 		Key *string `json:"key"`
 	}
@@ -49,6 +61,7 @@ func TestCallerKey_GetAndReset(t *testing.T) {
 	req.AddCookie(cookie)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
+	assertCallerKeyNoStore(t, rec)
 	var r2 struct {
 		Key string `json:"key"`
 	}
@@ -66,6 +79,7 @@ func TestCallerKey_GetAndReset(t *testing.T) {
 	req.AddCookie(cookie)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
+	assertCallerKeyNoStore(t, rec)
 	var r3 struct {
 		Key string `json:"key"`
 	}
@@ -78,6 +92,7 @@ func TestCallerKey_GetAndReset(t *testing.T) {
 	req.AddCookie(cookie)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
+	assertCallerKeyNoStore(t, rec)
 	var r4 struct {
 		Key string `json:"key"`
 	}
@@ -88,6 +103,65 @@ func TestCallerKey_GetAndReset(t *testing.T) {
 	if u, _ := store.GetUserByCallerKey(r2.Key); u != nil {
 		t.Error("old key should stop working after reset")
 	}
+}
+
+func TestCallerKey_NoStoreOnUnauthorizedAndInternalErrors(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	gw, store := setupAuthGatewayAt(t, "x", dbPath, filepath.Join(dir, "test.key"))
+	cookie := userCookie(t, gw, store)
+	user, err := store.GetUserByDiscordID("42")
+	if err != nil || user == nil {
+		t.Fatalf("get caller-key user: user=%v err=%v", user, err)
+	}
+	key, err := store.SetCallerKey(user.ID)
+	if err != nil {
+		t.Fatalf("set caller key: %v", err)
+	}
+	if !strings.HasPrefix(key, db.CallerKeyPrefix) {
+		t.Fatalf("unexpected caller key: %q", key)
+	}
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	for _, endpoint := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/caller-key"},
+		{http.MethodPost, "/api/caller-key/reset"},
+	} {
+		req := httptest.NewRequest(endpoint.method, endpoint.path, nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s %s status = %d, want 401", endpoint.method, endpoint.path, rec.Code)
+		}
+		assertCallerKeyNoStore(t, rec)
+	}
+
+	execTestSQLite(t, dbPath, `UPDATE caller_keys SET key_enc='invalid ciphertext'`)
+	req := httptest.NewRequest(http.MethodGet, "/api/caller-key", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("GET internal failure status = %d, want 500; body: %s", rec.Code, rec.Body.String())
+	}
+	assertCallerKeyNoStore(t, rec)
+
+	execTestSQLite(t, dbPath, `CREATE TRIGGER fail_caller_key_write
+		BEFORE INSERT ON caller_keys BEGIN
+			SELECT RAISE(FAIL, 'caller key write sentinel');
+		END`)
+	req = httptest.NewRequest(http.MethodPost, "/api/caller-key/reset", nil)
+	req.AddCookie(cookie)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("reset internal failure status = %d, want 500; body: %s", rec.Code, rec.Body.String())
+	}
+	assertCallerKeyNoStore(t, rec)
 }
 
 func TestListLogs_SnakeCaseKeys(t *testing.T) {

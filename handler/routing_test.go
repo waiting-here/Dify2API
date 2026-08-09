@@ -331,6 +331,68 @@ func TestRouting_AntiAbuseInfo(t *testing.T) {
 	}
 }
 
+func TestRouting_AntiAbuseCountsUnicodeCodePoints(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{name: "ASCII", content: "abcd"},
+		{name: "Chinese", content: "中文测试"},
+		{name: "emoji", content: "😀😃😄😁"},
+		{name: "mixed", content: "a中😀b"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var captured map[string]interface{}
+			srv := mockDifyApp(t, &captured)
+			defer srv.Close()
+			gw, key, uid := setupRoutedUser(t, srv.URL, "[general]unicode-count")
+
+			if _, err := gw.Store.UpsertAntiAbuseConfig("general", 2, 4, 0, 0, 1); err != nil {
+				t.Fatalf("set boundary config: %v", err)
+			}
+			gw.refreshAntiAbuseCache()
+			body := fmt.Sprintf(`{"model":"[general]unicode-count","messages":[{"role":"user","content":%q}]}`, tt.content)
+			rec := chatRequest(gw, key, body)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("four-code-point boundary status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+			}
+
+			captured = nil
+			if _, err := gw.Store.UpsertAntiAbuseConfig("general", 2, 5, 0, 0, 1); err != nil {
+				t.Fatalf("set rejecting config: %v", err)
+			}
+			gw.refreshAntiAbuseCache()
+			rec = chatRequest(gw, key, body)
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "content_too_short") {
+				t.Fatalf("five-code-point minimum status = %d, want content_too_short 400; body: %s", rec.Code, rec.Body.String())
+			}
+			if captured != nil {
+				t.Error("rejected Unicode content must not be forwarded")
+			}
+
+			logs, err := gw.Store.ListRequestLogs(uid, 10)
+			if err != nil {
+				t.Fatalf("list request logs: %v", err)
+			}
+			wantDetail := "total chars 4 < min 5 (service general, mode 2)"
+			found := false
+			for _, requestLog := range logs {
+				if requestLog.ErrorCode == "content_too_short" {
+					found = true
+					if requestLog.ErrorDetail != wantDetail {
+						t.Errorf("logged count detail = %q, want %q", requestLog.ErrorDetail, wantDetail)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("content_too_short request log not found")
+			}
+		})
+	}
+}
+
 func TestRouting_ModelNotFound(t *testing.T) {
 	var captured map[string]interface{}
 	srv := mockDifyApp(t, &captured)

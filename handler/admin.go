@@ -191,7 +191,7 @@ func (g *Gateway) handleAdminGetSettings(w http.ResponseWriter, r *http.Request)
 		"checkin_max":           g.Store.GetSettingInt(db.SettingCheckinMax, db.DefaultCheckinMax),
 		"credits_cap":           g.Store.GetSettingIntAllowZero(db.SettingCreditsCap, db.DefaultCreditsCap),
 		"donation_fail_limit":   g.Store.GetSettingInt(db.SettingDonationFailLimit, db.DefaultDonationFailLimit),
-		"donation_review_limit": g.Store.GetSettingInt(db.SettingDonationReviewLimit, db.DefaultDonationReviewLimit),
+		"donation_review_limit": g.Store.GetSettingIntAllowZero(db.SettingDonationReviewLimit, db.DefaultDonationReviewLimit),
 		"mailer_cool_minutes":   g.Store.GetSettingInt(db.SettingMailerCoolMinutes, db.DefaultMailerCoolMinutes),
 		"donation_enabled":      g.Store.GetSettingString(db.SettingDonationEnabled, "") == "true",
 		"charity_enabled":       g.Store.GetSettingString(db.SettingCharityEnabled, "") == "true",

@@ -302,6 +302,73 @@ func TestRPM_AutoBanAfterConfiguredViolations(t *testing.T) {
 	}
 }
 
+func TestRPM_AutoBanMessageLocalizedValues(t *testing.T) {
+	tests := []struct {
+		lang string
+		want string
+	}{
+		{
+			lang: "zh",
+			want: "[Dify2API] 已超出类别 C（请求接收） 每分钟上限（1 次/分），且因 24 小时内累计 2 次超限，账号已被自动封禁 7 小时",
+		},
+		{
+			lang: "en",
+			want: "[Dify2API] Exceeded class C（请求接收） RPM limit (1/min); account auto-banned for 7 hours due to 2 violations in 24 hours",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.lang, func(t *testing.T) {
+			var captured map[string]interface{}
+			srv := mockDifyApp(t, &captured)
+			defer srv.Close()
+			gw, key, _ := setupRoutedUser(t, srv.URL, "[general]localized-ban")
+			setRPMSettings(t, gw, 100, 100, 1)
+			if err := gw.Store.SetSetting(db.SettingRPMViolationLimit, "2"); err != nil {
+				t.Fatal(err)
+			}
+			if err := gw.Store.SetSetting(db.SettingRPMBanHours, "7"); err != nil {
+				t.Fatal(err)
+			}
+
+			body := `{"model":"[general]localized-ban","messages":[{"role":"user","content":"long enough content"}]}`
+			request := func() *httptest.ResponseRecorder {
+				mux := http.NewServeMux()
+				gw.RegisterRoutes(mux)
+				req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?lang="+tt.lang, strings.NewReader(body))
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Authorization", "Bearer "+key)
+				rec := httptest.NewRecorder()
+				mux.ServeHTTP(rec, req)
+				return rec
+			}
+
+			if rec := request(); rec.Code != http.StatusOK {
+				t.Fatalf("first request status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+			}
+			if rec := request(); rec.Code != http.StatusForbidden {
+				t.Fatalf("first violation status = %d, want 403; body: %s", rec.Code, rec.Body.String())
+			}
+			rec := request()
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("auto-ban status = %d, want 403; body: %s", rec.Code, rec.Body.String())
+			}
+			var response struct {
+				Error struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+				t.Fatalf("decode auto-ban response: %v", err)
+			}
+			if response.Error.Code != "rpm_exceeded" || response.Error.Message != tt.want {
+				t.Errorf("auto-ban error = %+v, want message %q", response.Error, tt.want)
+			}
+		})
+	}
+}
+
 // --- admin settings & per-user override API ----------------------------------
 
 func TestAdminSettings_RPMTunablesRoundtrip(t *testing.T) {

@@ -9,6 +9,8 @@ import (
 // Returns the session user's caller key (full value — this endpoint backs the
 // UI's copy-to-clipboard button; the key is never rendered into HTML).
 func (g *Gateway) handleGetCallerKey(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
 	u := g.currentUser(r)
 	if u == nil {
 		g.writeError(w, http.StatusUnauthorized, "unauthorized", "not logged in")
@@ -30,6 +32,8 @@ func (g *Gateway) handleGetCallerKey(w http.ResponseWriter, r *http.Request) {
 // --- POST /api/caller-key/reset ---
 // Generates a fresh caller key (invalidating the previous one) and returns it.
 func (g *Gateway) handleResetCallerKey(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
 	u := g.currentUser(r)
 	if u == nil {
 		g.writeError(w, http.StatusUnauthorized, "unauthorized", "not logged in")

@@ -1226,7 +1226,7 @@ func (g *Gateway) handleCreateDonationApp(w http.ResponseWriter, r *http.Request
 
 	// The pending cap is enforced by the same SQLite statement that inserts
 	// the application, avoiding a concurrent count-then-insert race.
-	limit := g.Store.GetSettingInt(db.SettingDonationReviewLimit, db.DefaultDonationReviewLimit)
+	limit := g.Store.GetSettingIntAllowZero(db.SettingDonationReviewLimit, db.DefaultDonationReviewLimit)
 
 	var req struct {
 		Service     string `json:"service"`

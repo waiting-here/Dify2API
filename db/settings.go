@@ -97,7 +97,7 @@ func (s *Store) GetSettingInt(key string, fallback int) int {
 }
 
 // GetSettingIntAllowZero is like GetSettingInt but permits 0 as a valid
-// value (used for credits_cap, where 0 means "check-in disabled").
+// value for settings where zero has an explicit meaning.
 func (s *Store) GetSettingIntAllowZero(key string, fallback int) int {
 	v, err := s.GetSetting(key)
 	if err != nil || v == "" {

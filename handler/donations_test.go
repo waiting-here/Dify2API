@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1612,6 +1613,77 @@ func TestCreateDonationApplication_PendingLimit(t *testing.T) {
 	if !strings.Contains(rec2.Body.String(), "too_many_pending") {
 		t.Errorf("want too_many_pending, got: %s", rec2.Body.String())
 	}
+}
+
+func TestCreateDonationApplication_ZeroReviewLimitPersistsAndStopsFirstSubmission(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	keyPath := filepath.Join(dir, "test.key")
+	gw, store := setupAuthGatewayAt(t, "x", dbPath, keyPath)
+	adminSession := loginCookie(t, gw, "root", "x")
+	userSession := appUserCookie(t, gw, store)
+
+	rec := adminPut(gw, adminSession, "/api/admin/settings", `{"donation_enabled":true,"donation_review_limit":0}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT settings: status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	assertZeroLimit := func(t *testing.T, current *Gateway) {
+		t.Helper()
+		adminRec := adminGet(current, adminSession, "/api/admin/settings")
+		if adminRec.Code != http.StatusOK {
+			t.Fatalf("GET admin settings: status = %d, body: %s", adminRec.Code, adminRec.Body.String())
+		}
+		var adminSettings map[string]interface{}
+		if err := json.NewDecoder(adminRec.Body).Decode(&adminSettings); err != nil {
+			t.Fatalf("decode admin settings: %v", err)
+		}
+		if got := adminSettings["donation_review_limit"]; got != float64(0) {
+			t.Errorf("admin donation_review_limit = %v, want 0", got)
+		}
+
+		mux := http.NewServeMux()
+		current.RegisterRoutes(mux)
+		siteReq := httptest.NewRequest(http.MethodGet, "/api/site-info", nil)
+		siteRec := httptest.NewRecorder()
+		mux.ServeHTTP(siteRec, siteReq)
+		if siteRec.Code != http.StatusOK {
+			t.Fatalf("GET site-info: status = %d, body: %s", siteRec.Code, siteRec.Body.String())
+		}
+		var siteInfo map[string]interface{}
+		if err := json.NewDecoder(siteRec.Body).Decode(&siteInfo); err != nil {
+			t.Fatalf("decode site-info: %v", err)
+		}
+		if got := siteInfo["donation_review_limit"]; got != float64(0) {
+			t.Errorf("site donation_review_limit = %v, want 0", got)
+		}
+
+		body := map[string]interface{}{
+			"service":       "general",
+			"model":         "first-while-paused",
+			"dify_base_url": "https://dify.example.com/v1",
+			"dify_api_key":  "app-test-key",
+			"deadline":      time.Now().Add(48 * time.Hour).Unix(),
+			"total_count":   100,
+		}
+		appRec := donationRequest(current, userSession, http.MethodPost, "/api/me/donations", body)
+		if appRec.Code != http.StatusBadRequest || !strings.Contains(appRec.Body.String(), "too_many_pending") {
+			t.Fatalf("first submission with zero limit: status = %d, body: %s", appRec.Code, appRec.Body.String())
+		}
+	}
+
+	assertZeroLimit(t, gw)
+	if err := store.Close(); err != nil {
+		t.Fatalf("close database before reopen: %v", err)
+	}
+	reopened, err := db.Open(dbPath, keyPath)
+	if err != nil {
+		t.Fatalf("reopen database: %v", err)
+	}
+	t.Cleanup(func() { reopened.Close() })
+	restarted := NewGateway(testConfig(), reopened)
+	disableAntiAbuseForTest(t, restarted)
+	assertZeroLimit(t, restarted)
 }
 
 // TestCreateDonationApplication_Validation tests various validation rejections.

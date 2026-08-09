@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -20,7 +22,12 @@ import (
 func setupAuthGateway(t *testing.T, adminPassword string) (*Gateway, *db.Store) {
 	t.Helper()
 	dir := t.TempDir()
-	store, err := db.Open(dir+"/test.db", dir+"/test.key")
+	return setupAuthGatewayAt(t, adminPassword, filepath.Join(dir, "test.db"), filepath.Join(dir, "test.key"))
+}
+
+func setupAuthGatewayAt(t *testing.T, adminPassword, dbPath, keyPath string) (*Gateway, *db.Store) {
+	t.Helper()
+	store, err := db.Open(dbPath, keyPath)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -58,6 +65,27 @@ func setupAuthGateway(t *testing.T, adminPassword string) (*Gateway, *db.Store) 
 	gw := NewGateway(cfg, store)
 	disableAntiAbuseForTest(t, gw)
 	return gw, store
+}
+
+func execTestSQLite(t *testing.T, dbPath, statement string) {
+	t.Helper()
+	testDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open test sqlite connection: %v", err)
+	}
+	defer testDB.Close()
+	if _, err := testDB.Exec(statement); err != nil {
+		t.Fatalf("execute test sqlite statement: %v", err)
+	}
+}
+
+func assertNoSessionCookie(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == auth.SessionCookieName {
+			t.Fatalf("unexpected session cookie: %+v", cookie)
+		}
+	}
 }
 
 func loginCookie(t *testing.T, gw *Gateway, username, password string) *http.Cookie {
@@ -99,6 +127,42 @@ func TestAdminLogin_WrongPassword(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestAdminLogin_SessionFailureReturnsInternalError(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	gw, _ := setupAuthGatewayAt(t, "s3cret", dbPath, filepath.Join(dir, "test.key"))
+	execTestSQLite(t, dbPath, `CREATE TRIGGER fail_session_insert
+		BEFORE INSERT ON sessions BEGIN
+			SELECT RAISE(FAIL, 'session insert sentinel');
+		END`)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/admin/login", strings.NewReader(`{"username":"root","password":"s3cret"}`))
+	rec := httptest.NewRecorder()
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body: %s", rec.Code, rec.Body.String())
+	}
+	assertNoSessionCookie(t, rec)
+	var body struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Error.Code != "internal" || body.Error.Message != "[Dify2API] internal error" {
+		t.Errorf("error = %+v, want safe internal envelope", body.Error)
+	}
+	if strings.Contains(rec.Body.String(), "session insert sentinel") || strings.Contains(rec.Body.String(), `"ok":true`) {
+		t.Errorf("response leaked failure details or reported success: %s", rec.Body.String())
 	}
 }
 
@@ -252,6 +316,47 @@ func TestDiscordCallback_RegisterWithRole(t *testing.T) {
 	}
 	if !found {
 		t.Error("no session cookie on successful login")
+	}
+}
+
+func TestDiscordCallback_SessionFailureUsesSafeFailureRedirect(t *testing.T) {
+	stub := discordStub(t, nil, 200)
+	withDiscordStub(t, stub)
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	gw, store := setupAuthGatewayAt(t, "x", dbPath, filepath.Join(dir, "test.key"))
+	if _, err := store.CreateUser("42", "tester", "a1"); err != nil {
+		t.Fatalf("create existing Discord user: %v", err)
+	}
+	execTestSQLite(t, dbPath, `CREATE TRIGGER fail_session_insert
+		BEFORE INSERT ON sessions BEGIN
+			SELECT RAISE(FAIL, 'session insert sentinel');
+		END`)
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	state, err := gw.newOAuthState(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := callbackRequest(gw, mux, "code", state, state)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302; body: %s", rec.Code, rec.Body.String())
+	}
+	assertNoSessionCookie(t, rec)
+	location, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse failure redirect: %v", err)
+	}
+	if location.Path != "/403" {
+		t.Fatalf("redirect path = %q, want /403", location.Path)
+	}
+	reason := location.Query().Get("reason")
+	if reason != "服务器内部错误，请稍后重试。" {
+		t.Errorf("reason = %q, want safe generic failure", reason)
+	}
+	if strings.Contains(rec.Header().Get("Location"), "session insert sentinel") {
+		t.Errorf("redirect leaked database error: %s", rec.Header().Get("Location"))
 	}
 }
 
