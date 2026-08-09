@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"dify2api/config"
 	"dify2api/db"
@@ -45,6 +47,17 @@ func testConfig() *config.Config {
 	}
 }
 
+func cleanupGatewayForTest(t *testing.T, gw *Gateway) {
+	t.Helper()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := gw.Shutdown(ctx); err != nil {
+			t.Errorf("shutdown gateway: %v", err)
+		}
+	})
+}
+
 // allowDifyTestOrigin replaces the gateway's egress policy with one that
 // allows the given exact origins. Mock Dify Apps bind dynamic loopback
 // ports, which cannot be known when the fixture config is built, and the
@@ -67,6 +80,7 @@ func setupTestGateway(t *testing.T) *Gateway {
 	}
 	t.Cleanup(func() { store.Close() })
 	gw := NewGateway(testConfig(), store)
+	cleanupGatewayForTest(t, gw)
 	disableAntiAbuseForTest(t, gw)
 	return gw
 }
@@ -82,6 +96,7 @@ func setupTestGatewayDebug(t *testing.T, dir string) *Gateway {
 	cfg.Debug = true
 	cfg.DebugDir = dir
 	gw := NewGateway(cfg, store)
+	cleanupGatewayForTest(t, gw)
 	disableAntiAbuseForTest(t, gw)
 	return gw
 }

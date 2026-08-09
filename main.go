@@ -110,7 +110,7 @@ func main() {
 	}
 
 	cleanupCtx, cancelCleanup := context.WithCancel(context.Background())
-	cleanupDone := startCleanupWorker(cleanupCtx, store)
+	cleanupDone := startCleanupWorker(cleanupCtx, store, time.Duration(cfg.RequestLogCleanupIntervalSec)*time.Second)
 
 	signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stopSignals()
@@ -181,10 +181,21 @@ func shutdownApplication(ctx context.Context, server shutdownServer, gateway shu
 
 // startCleanupWorker enforces retention and expiry until ctx is cancelled.
 // Closing the returned channel means all Store access by this worker ended.
-func startCleanupWorker(ctx context.Context, store *db.Store) <-chan struct{} {
+func startCleanupWorker(ctx context.Context, store *db.Store, requestLogInterval time.Duration) <-chan struct{} {
+	if requestLogInterval <= 0 {
+		requestLogInterval = time.Duration(config.DefaultRequestLogCleanupIntervalSec) * time.Second
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		purgeRequestLogs := func() {
+			logsDeleted, alertsDeleted, err := store.PurgeExpiredRequestLogs(time.Now().Unix())
+			if err != nil {
+				log.Printf("[CLEANUP] request logs: %v", err)
+			} else if logsDeleted+alertsDeleted > 0 {
+				log.Printf("[CLEANUP] purged %d request logs and %d bound alerts", logsDeleted, alertsDeleted)
+			}
+		}
 		runCleanup := func() {
 			now := time.Now().Unix()
 			donationsExpired, donationErr := store.ExpireOverdueDonations(now)
@@ -214,14 +225,18 @@ func startCleanupWorker(ctx context.Context, store *db.Store) <-chan struct{} {
 		}
 		cleanupTicker := time.NewTicker(24 * time.Hour)
 		expiryTicker := time.NewTicker(time.Minute)
+		requestLogTicker := time.NewTicker(requestLogInterval)
 		defer cleanupTicker.Stop()
 		defer expiryTicker.Stop()
+		defer requestLogTicker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-cleanupTicker.C:
 				runCleanup()
+			case <-requestLogTicker.C:
+				purgeRequestLogs()
 			case <-expiryTicker.C:
 				expired, err := store.ExpireOverdueDonations(time.Now().Unix())
 				if err != nil {

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -151,15 +152,12 @@ func TestPurgeExpiredRequestLogs_DeletesBoundAlertsAtomically(t *testing.T) {
 	if err := st.AddRequestLogDonation(u.ID, "recent", "general", recent, recent.Add(time.Second), "success", "", d.ID); err != nil {
 		t.Fatal(err)
 	}
-	logs, _ := st.ListRequestLogs(u.ID, 10)
 	var oldID, recentID int64
-	for _, entry := range logs {
-		switch entry.Model {
-		case "old":
-			oldID = entry.ID
-		case "recent":
-			recentID = entry.ID
-		}
+	if err := st.db.QueryRow(`SELECT id FROM request_logs WHERE model='old'`).Scan(&oldID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.db.QueryRow(`SELECT id FROM request_logs WHERE model='recent'`).Scan(&recentID); err != nil {
+		t.Fatal(err)
 	}
 	for _, alert := range []*AdminAlert{
 		{Type: AlertBlockingFailed200, Message: "old-bound", RequestLogID: &oldID},
@@ -205,6 +203,36 @@ func TestPurgeExpiredRequestLogs_NoExpiredRows(t *testing.T) {
 	}
 	if logs != 0 || alerts != 0 {
 		t.Fatalf("deleted logs=%d alerts=%d, want 0/0", logs, alerts)
+	}
+}
+
+func TestPurgeExpiredRequestLogs_RollsBackAlertDeletionOnLogFailure(t *testing.T) {
+	st, _ := openTemp(t)
+	now := time.Now().Truncate(time.Second)
+	old := now.Add(-RequestLogRetention - time.Hour)
+	u, _ := st.CreateUser("retention-rollback", "retention-rollback", "")
+	logID, err := st.AddRequestLogFull(u.ID, "rollback", "general", old, old.Add(time.Second), "error", "old", 500, "old", 0, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddAdminAlert(&AdminAlert{Type: AlertBlockingFailed200, Message: "rollback", RequestLogID: &logID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`CREATE TRIGGER fail_expired_log_delete BEFORE DELETE ON request_logs
+		WHEN OLD.id=` + fmt.Sprint(logID) + ` BEGIN SELECT RAISE(ABORT, 'injected purge failure'); END;`); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.PurgeExpiredRequestLogs(now.Unix()); err == nil {
+		t.Fatal("expected injected purge failure")
+	}
+	for table, query := range map[string]string{
+		"request_logs": `SELECT COUNT(*) FROM request_logs WHERE id=?`,
+		"admin_alerts": `SELECT COUNT(*) FROM admin_alerts WHERE request_log_id=?`,
+	} {
+		var count int
+		if err := st.db.QueryRow(query, logID).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("%s count=%d err=%v, want rollback-preserved row", table, count, err)
+		}
 	}
 }
 
@@ -535,14 +563,14 @@ func TestLogStatsByHour_RespectsRetentionWindow(t *testing.T) {
 		t.Fatalf("retention cutoff: got total=%d buckets, want 1 with 1 entry", len(stats))
 	}
 
-	// Explicit since should override retention
+	// An explicit older since must not override retention.
 	stats, err = st.LogStatsByHour(LogFilter{Since: oldLog.Unix()})
 	if err != nil {
 		t.Fatalf("LogStatsByHour with explicit since: %v", err)
 	}
 
-	if len(stats) != 2 || totalStats(stats) != 2 {
-		t.Fatalf("explicit since: got %d buckets with total=%d entries, want 2 entries", len(stats), totalStats(stats))
+	if len(stats) != 1 || totalStats(stats) != 1 {
+		t.Fatalf("explicit old since: got %d buckets with total=%d entries, want only retained entry", len(stats), totalStats(stats))
 	}
 }
 

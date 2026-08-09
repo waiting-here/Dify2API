@@ -93,7 +93,7 @@ func TestSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
-	if token == "" || time.Until(expiresAt) < 6*24*time.Hour {
+	if token == "" || time.Until(expiresAt.Idle) < 6*24*time.Hour || time.Until(expiresAt.Absolute) < 29*24*time.Hour {
 		t.Errorf("token/expiry wrong")
 	}
 
@@ -139,12 +139,12 @@ func TestSessionSlidingExpiryHasAbsoluteLimit(t *testing.T) {
 
 	created := time.Unix(2_000_000_000, 0)
 	if _, err := st.db.Exec(`UPDATE sessions SET created_at=?, expires_at=? WHERE id=?`,
-		created.Unix(), created.Add(29*24*time.Hour+time.Hour).Unix(), token); err != nil {
+		created.Unix(), created.Add(28*24*time.Hour+time.Hour).Unix(), token); err != nil {
 		t.Fatalf("seed session times: %v", err)
 	}
 
 	// Activity near the absolute deadline renews only up to that deadline.
-	lookupAt := created.Add(29 * 24 * time.Hour)
+	lookupAt := created.Add(28 * 24 * time.Hour)
 	got, err := st.getSessionUserAt(token, lookupAt)
 	if err != nil || got == nil {
 		t.Fatalf("near-limit lookup: user=%v err=%v", got, err)

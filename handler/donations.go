@@ -1091,26 +1091,16 @@ func (g *Gateway) charityBlocking(w http.ResponseWriter, client *dify.Client, wf
 // dispatch. Both confirmed consumption and uncertain upstream outcomes use
 // this conservative settlement.
 func (g *Gateway) charityCommitAccounting(reservation *db.CharityReservation) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if _, err := g.Store.CommitCharityReservation(ctx, reservation.ID); err != nil {
+	if err := g.settlement.settleNow(reservation.ID); err != nil {
 		log.Printf("[ERROR] commit charity reservation %s: %v", reservation.ID, err)
+		g.settlement.wake(reservation.ID)
 	}
 }
 
 func (g *Gateway) releaseCharitySetup(reservation *db.CharityReservation) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if _, err := g.Store.ReleaseCharityReservation(ctx, reservation.ID, false); err != nil {
-		// MarkCharityDispatched can return an uncertain database/context error.
-		// If the durable row nevertheless crossed the dispatch boundary, release
-		// is intentionally rejected and the only safe settlement is commit.
-		current, getErr := g.Store.GetCharityReservation(reservation.ID)
-		if getErr == nil && current != nil && (current.Status == db.ReservationDispatched || current.Status == db.ReservationCommitted) {
-			g.charityCommitAccounting(reservation)
-			return
-		}
+	if err := g.settlement.settleNow(reservation.ID); err != nil {
 		log.Printf("[ERROR] release charity setup reservation %s: %v", reservation.ID, err)
+		g.settlement.wake(reservation.ID)
 	}
 }
 

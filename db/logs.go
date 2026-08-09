@@ -4,10 +4,12 @@ import (
 	"database/sql"
 	"strings"
 	"time"
+
+	"dify2api/config"
 )
 
 // RequestLogRetention is how long request logs are kept (rolling 30 days).
-const RequestLogRetention = 30 * 24 * time.Hour
+const RequestLogRetention = config.DefaultRequestLogRetention
 
 // RequestLog is one recorded gateway call (metadata only — never the request
 // or response content).
@@ -74,12 +76,17 @@ func (s *Store) AddRequestLogDonation(userID int64, model, service string, start
 
 // ListRequestLogs returns a user's recent logs, newest first (bounded).
 func (s *Store) ListRequestLogs(userID int64, limit int) ([]*RequestLog, error) {
+	return s.listRequestLogsForUserAt(userID, limit, time.Now())
+}
+
+func (s *Store) listRequestLogsForUserAt(userID int64, limit int, now time.Time) ([]*RequestLog, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
 	rows, err := s.db.Query(
 		`SELECT id, user_id, model, service, started_at, ended_at, status, error_code, http_status, error_detail, credits_consumed, anti_abuse_info
-		 FROM request_logs WHERE user_id=? ORDER BY started_at DESC LIMIT ?`, userID, limit)
+		 FROM request_logs WHERE user_id=? AND started_at>=? ORDER BY started_at DESC LIMIT ?`,
+		userID, requestLogCutoff(now), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -98,9 +105,14 @@ func (s *Store) ListRequestLogs(userID int64, limit int) ([]*RequestLog, error) 
 // ExportRequestLogs returns ALL of a user's request logs (newest first),
 // without any LIMIT — intended only for the GDPR export path.
 func (s *Store) ExportRequestLogs(userID int64) ([]*RequestLog, error) {
+	return s.exportRequestLogsAt(userID, time.Now())
+}
+
+func (s *Store) exportRequestLogsAt(userID int64, now time.Time) ([]*RequestLog, error) {
 	rows, err := s.db.Query(
 		`SELECT id, user_id, model, service, started_at, ended_at, status, error_code, http_status, error_detail, credits_consumed, anti_abuse_info
-		 FROM request_logs WHERE user_id=? ORDER BY started_at DESC`, userID)
+		 FROM request_logs WHERE user_id=? AND started_at>=? ORDER BY started_at DESC`,
+		userID, requestLogCutoff(now))
 	if err != nil {
 		return nil, err
 	}
@@ -151,9 +163,26 @@ const requestLogSelect = `SELECT l.id, l.user_id, COALESCE(u.username, ''), l.mo
 	FROM request_logs l
 	LEFT JOIN users u ON l.user_id = u.id`
 
-// logFilterWhere builds the parameterized WHERE clause for a LogFilter.
-// Returns "" and no args when the filter is empty.
+// logFilterWhere builds the parameterized WHERE clause for a LogFilter and
+// always clamps it to the rolling request-log retention boundary.
+func requestLogCutoff(now time.Time) int64 {
+	return now.Add(-RequestLogRetention).Unix()
+}
+
+func clampLogFilterToRetention(f LogFilter, now time.Time) LogFilter {
+	cutoff := requestLogCutoff(now)
+	if f.Since < cutoff {
+		f.Since = cutoff
+	}
+	return f
+}
+
 func logFilterWhere(f LogFilter) (string, []interface{}) {
+	return logFilterWhereAt(f, time.Now())
+}
+
+func logFilterWhereAt(f LogFilter, now time.Time) (string, []interface{}) {
+	f = clampLogFilterToRetention(f, now)
 	var conds []string
 	var args []interface{}
 
@@ -222,7 +251,11 @@ func (s *Store) listRequestLogs(where string, args []interface{}, limit, offset 
 // ListAllRequestLogs returns request logs across all users with optional
 // filters and offset-based pagination.  All WHERE conditions are parameterized.
 func (s *Store) ListAllRequestLogs(f LogFilter, limit, offset int) ([]*AdminRequestLog, int, error) {
-	where, args := logFilterWhere(f)
+	return s.listAllRequestLogsAt(f, limit, offset, time.Now())
+}
+
+func (s *Store) listAllRequestLogsAt(f LogFilter, limit, offset int, now time.Time) ([]*AdminRequestLog, int, error) {
+	where, args := logFilterWhereAt(f, now)
 
 	// Total count (without limit/offset).
 	countArgs := make([]interface{}, len(args))
@@ -248,7 +281,11 @@ func (s *Store) ListAllRequestLogs(f LogFilter, limit, offset int) ([]*AdminRequ
 // first, without pagination — the admin CSV/JSON export path. Unlike
 // ListAllRequestLogs it never clamps to a page size, so exports are complete.
 func (s *Store) ExportAllRequestLogs(f LogFilter) ([]*AdminRequestLog, error) {
-	where, args := logFilterWhere(f)
+	return s.exportAllRequestLogsAt(f, time.Now())
+}
+
+func (s *Store) exportAllRequestLogsAt(f LogFilter, now time.Time) ([]*AdminRequestLog, error) {
+	where, args := logFilterWhereAt(f, now)
 	return s.listRequestLogs(where, args, 0, 0)
 }
 
@@ -279,6 +316,10 @@ type LogHourStat struct {
 // Deprecated: Use LogStatsByHour for new code.
 func (s *Store) LogStats(days int, since, until int64) ([]LogDayStat, []LogServiceStat, error) {
 	cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour).Unix()
+	retentionCutoff := requestLogCutoff(time.Now())
+	if cutoff < retentionCutoff {
+		cutoff = retentionCutoff
+	}
 
 	// By day.
 	var dayConds []string
@@ -360,13 +401,11 @@ func (s *Store) LogStats(days int, since, until int64) ([]LogDayStat, []LogServi
 // The filter accepts user_id, service, model, status, and time bounds.
 // An empty filter returns all history within the current 30-day retention window.
 func (s *Store) LogStatsByHour(f LogFilter) ([]LogHourStat, error) {
-	// If no explicit time bounds are provided, apply the 30-day retention cutoff.
-	// This ensures "all history" stays within the rolling retention window.
-	if f.Since <= 0 {
-		f.Since = time.Now().Add(-RequestLogRetention).Unix()
-	}
+	return s.logStatsByHourAt(f, time.Now())
+}
 
-	where, args := logFilterWhere(f)
+func (s *Store) logStatsByHourAt(f LogFilter, now time.Time) ([]LogHourStat, error) {
+	where, args := logFilterWhereAt(f, now)
 
 	// Hourly aggregation: use UTC hour buckets for consistent server-side grouping.
 	// The frontend will merge these into local days.

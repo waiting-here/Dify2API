@@ -15,12 +15,10 @@ func TestPurgeAlertsForExpiredLogs(t *testing.T) {
 	// Insert an old regular log (no donation_id) and a bound alert.
 	oldTime := now.Add(-RequestLogRetention - 1*time.Hour)
 	st.AddRequestLog(u.ID, "[general]x", "general", oldTime, oldTime.Add(30*time.Second), "success", "")
-
-	logs, _ := st.ListRequestLogs(u.ID, 10)
-	if len(logs) == 0 {
-		t.Fatal("no logs found")
+	var logID int64
+	if err := st.db.QueryRow(`SELECT id FROM request_logs WHERE user_id=?`, u.ID).Scan(&logID); err != nil {
+		t.Fatalf("read physical old log: %v", err)
 	}
-	logID := logs[0].ID
 
 	// Add an alert bound to this old log.
 	if err := st.AddAdminAlert(&AdminAlert{
@@ -106,9 +104,10 @@ func TestPurgeAlertsForExpiredLogs_IncludesDonationLogs(t *testing.T) {
 	created, _ := st.CreateDonation(d, "k1")
 	oldTime := now.Add(-RequestLogRetention - 1*time.Hour)
 	st.AddRequestLogDonation(u.ID, "[公益][general]test", "general", oldTime, oldTime.Add(30*time.Second), "success", "", created.ID)
-
-	logs, _ := st.ListRequestLogs(u.ID, 10)
-	logID := logs[0].ID
+	var logID int64
+	if err := st.db.QueryRow(`SELECT id FROM request_logs WHERE user_id=?`, u.ID).Scan(&logID); err != nil {
+		t.Fatalf("read physical old donation log: %v", err)
+	}
 
 	if err := st.AddAdminAlert(&AdminAlert{
 		Type:         AlertBlockingFailed200,

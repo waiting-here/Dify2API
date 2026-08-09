@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"sync"
@@ -101,7 +102,7 @@ func TestCleanupWorkerStopsBeforeStoreClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	done := startCleanupWorker(ctx, store)
+	done := startCleanupWorker(ctx, store, time.Minute)
 	cancel()
 	select {
 	case <-done:
@@ -110,5 +111,58 @@ func TestCleanupWorkerStopsBeforeStoreClose(t *testing.T) {
 	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("close Store after worker exit: %v", err)
+	}
+}
+
+func TestCleanupWorkerPurgesRequestLogsAtStartupAndConfiguredInterval(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "retention.db")
+	store, err := db.Open(dbPath, filepath.Join(dir, "retention.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	u, _ := store.CreateUser("cleanup-retention", "cleanup", "")
+	insertExpired := func(label string) {
+		t.Helper()
+		old := time.Now().Add(-db.RequestLogRetention - time.Hour)
+		id, err := store.AddRequestLogFull(u.ID, label, "general", old, old.Add(time.Second), "error", "old", 500, "old", 0, 0, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.AddAdminAlert(&db.AdminAlert{Type: db.AlertBlockingFailed200, Message: label, RequestLogID: &id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insertExpired("startup")
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	waitPurged := func(label string) {
+		t.Helper()
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			var logs, alerts int
+			logErr := raw.QueryRow(`SELECT COUNT(*) FROM request_logs WHERE model=?`, label).Scan(&logs)
+			alertErr := raw.QueryRow(`SELECT COUNT(*) FROM admin_alerts WHERE message=?`, label).Scan(&alerts)
+			if logErr == nil && alertErr == nil && logs == 0 && alerts == 0 {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("expired log/alert %q were not purged", label)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := startCleanupWorker(ctx, store, 20*time.Millisecond)
+	waitPurged("startup")
+	insertExpired("periodic")
+	waitPurged("periodic")
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("cleanup worker did not stop")
 	}
 }

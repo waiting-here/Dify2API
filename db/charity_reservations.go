@@ -142,7 +142,11 @@ func (s *Store) MarkCharityDispatched(ctx context.Context, id string) error {
 }
 
 func (s *Store) GetCharityReservation(id string) (*CharityReservation, error) {
-	r, err := scanCharityReservation(s.db.QueryRow(
+	return s.GetCharityReservationContext(context.Background(), id)
+}
+
+func (s *Store) GetCharityReservationContext(ctx context.Context, id string) (*CharityReservation, error) {
+	r, err := scanCharityReservation(s.db.QueryRowContext(ctx,
 		`SELECT id,user_id,donation_id,donor_user_id,price,reward,status,created_at,updated_at
 		 FROM charity_reservations WHERE id=?`, id,
 	))
@@ -150,6 +154,33 @@ func (s *Store) GetCharityReservation(id string) (*CharityReservation, error) {
 		return nil, nil
 	}
 	return r, err
+}
+
+// ListStaleCharityReservationIDs returns a bounded snapshot of durable states
+// that are old enough for online recovery. Active requests remain untouched.
+func (s *Store) ListStaleCharityReservationIDs(ctx context.Context, reservedBefore, dispatchedBefore int64, limit int) ([]string, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id FROM charity_reservations
+		 WHERE (status=? AND updated_at<=?) OR (status=? AND updated_at<=?)
+		 ORDER BY updated_at, id LIMIT ?`,
+		ReservationReserved, reservedBefore, ReservationDispatched, dispatchedBefore, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := make([]string, 0, limit)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 func getCharityReservationTx(ctx context.Context, tx *sql.Tx, id string) (*CharityReservation, error) {

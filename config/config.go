@@ -10,6 +10,22 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
+)
+
+const (
+	DefaultCharitySettlementAttemptTimeoutSec = 5
+	DefaultCharitySettlementRetryDelayMs      = 100
+	DefaultCharitySettlementReservedStaleSec  = 5 * 60
+	DefaultCharitySettlementDispatchGraceSec  = 60
+	DefaultCharitySettlementScanIntervalSec   = 60
+	DefaultCharitySettlementQueueSize         = 256
+	DefaultRequestLogCleanupIntervalSec       = 60
+
+	DefaultSessionIdleTTL          = 7 * 24 * time.Hour
+	DefaultSessionAbsoluteTTL      = 30 * 24 * time.Hour
+	DefaultSessionRenewalThreshold = 24 * time.Hour
+	DefaultRequestLogRetention     = 30 * 24 * time.Hour
 )
 
 // Config holds all gateway configuration, loaded from the single startup
@@ -111,6 +127,27 @@ type Config struct {
 	// ShutdownTimeoutSec bounds HTTP draining and background shutdown before
 	// the database is closed (default 30 seconds).
 	ShutdownTimeoutSec int
+	// CharitySettlementAttemptTimeoutSec bounds each synchronous settlement
+	// attempt before durable online retry takes over (default 5 seconds).
+	CharitySettlementAttemptTimeoutSec int
+	// CharitySettlementRetryDelayMs is the bounded backoff between transient
+	// SQLite BUSY/LOCKED settlement attempts (default 100 milliseconds).
+	CharitySettlementRetryDelayMs int
+	// CharitySettlementReservedStaleSec is how old an undispatched reservation
+	// must be before the periodic recovery scan may release it (default 300).
+	CharitySettlementReservedStaleSec int
+	// CharitySettlementDispatchGraceSec is added to DifyHTTPTimeoutMs before a
+	// dispatched reservation is considered stale (default 60 seconds).
+	CharitySettlementDispatchGraceSec int
+	// CharitySettlementScanIntervalSec controls retry and stale-state scans
+	// (default 60 seconds).
+	CharitySettlementScanIntervalSec int
+	// CharitySettlementQueueSize bounds in-memory settlement wakeups. The
+	// periodic database scan preserves recovery when this queue is full.
+	CharitySettlementQueueSize int
+	// RequestLogCleanupIntervalSec controls physical request-log cleanup;
+	// API visibility is independently enforced at the exact retention cutoff.
+	RequestLogCleanupIntervalSec int
 }
 
 // SMTPConfig holds the email-delivery settings for operational alerts.
@@ -210,10 +247,17 @@ func LoadStartup(path string) (*Config, error) {
 		AuthFailRPMPerIP: getIntOrAllowZero(envMap, "AUTH_FAIL_RPM_PER_IP", 30),
 
 		// alpha.3 — tunable windows.
-		RPMWindowSec:        getIntOr(envMap, "RPM_WINDOW_SEC", 60),
-		IPThrottleWindowSec: getIntOr(envMap, "IP_THROTTLE_WINDOW_SEC", 60),
-		LogDetailMaxChars:   getIntOr(envMap, "LOG_DETAIL_MAX_CHARS", 500),
-		ShutdownTimeoutSec:  getIntOr(envMap, "SHUTDOWN_TIMEOUT_SEC", 30),
+		RPMWindowSec:                       getIntOr(envMap, "RPM_WINDOW_SEC", 60),
+		IPThrottleWindowSec:                getIntOr(envMap, "IP_THROTTLE_WINDOW_SEC", 60),
+		LogDetailMaxChars:                  getIntOr(envMap, "LOG_DETAIL_MAX_CHARS", 500),
+		ShutdownTimeoutSec:                 getIntOr(envMap, "SHUTDOWN_TIMEOUT_SEC", 30),
+		CharitySettlementAttemptTimeoutSec: getIntOr(envMap, "CHARITY_SETTLEMENT_ATTEMPT_TIMEOUT_SEC", DefaultCharitySettlementAttemptTimeoutSec),
+		CharitySettlementRetryDelayMs:      getIntOr(envMap, "CHARITY_SETTLEMENT_RETRY_DELAY_MS", DefaultCharitySettlementRetryDelayMs),
+		CharitySettlementReservedStaleSec:  getIntOr(envMap, "CHARITY_SETTLEMENT_RESERVED_STALE_SEC", DefaultCharitySettlementReservedStaleSec),
+		CharitySettlementDispatchGraceSec:  getIntOr(envMap, "CHARITY_SETTLEMENT_DISPATCH_GRACE_SEC", DefaultCharitySettlementDispatchGraceSec),
+		CharitySettlementScanIntervalSec:   getIntOr(envMap, "CHARITY_SETTLEMENT_SCAN_INTERVAL_SEC", DefaultCharitySettlementScanIntervalSec),
+		CharitySettlementQueueSize:         getIntOr(envMap, "CHARITY_SETTLEMENT_QUEUE_SIZE", DefaultCharitySettlementQueueSize),
+		RequestLogCleanupIntervalSec:       getIntOr(envMap, "REQUEST_LOG_CLEANUP_INTERVAL_SEC", DefaultRequestLogCleanupIntervalSec),
 	}
 
 	a := &cfg.Admin

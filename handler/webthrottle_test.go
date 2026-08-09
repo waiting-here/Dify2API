@@ -26,6 +26,7 @@ func setupThrottledGateway(t *testing.T, webRPM, authFailRPM int) (*Gateway, htt
 	cfg.WebThrottleSec = 60
 	cfg.AuthFailRPMPerIP = authFailRPM
 	gw := NewGateway(cfg, store)
+	cleanupGatewayForTest(t, gw)
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
 	return gw, gw.Wrap(mux)

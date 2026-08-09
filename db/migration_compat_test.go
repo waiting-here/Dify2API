@@ -7,6 +7,21 @@ import (
 	"testing"
 )
 
+func stripV131RuntimeIndexes(t *testing.T, input string) string {
+	t.Helper()
+	for _, indexLine := range []string{
+		"CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);\n",
+		"CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at);\n",
+		"CREATE INDEX IF NOT EXISTS idx_da_donation ON donation_applications(donation_id);\n",
+	} {
+		if !strings.Contains(input, indexLine) {
+			t.Fatalf("fixture broken: missing %q", strings.TrimSpace(indexLine))
+		}
+		input = strings.Replace(input, indexLine, "", 1)
+	}
+	return input
+}
+
 // TestV120ToV121MigrationCompatibility verifies that a production database
 // created by the v1.2.0 binary opens cleanly with the current code and that
 // the v1.2.1 schema additions (alert_prefs table, donation_selectable
@@ -20,7 +35,7 @@ func TestV120ToV121MigrationCompatibility(t *testing.T) {
 	// schema and remove the v1.2.1 additions (alert_prefs table and the
 	// donation_selectable column) plus the v1.3.0 addition (users.level).
 	// Guards below ensure the removals matched.
-	oldSchema := schema
+	oldSchema := stripV131RuntimeIndexes(t, schema)
 	alertPrefsBlock := `
 CREATE TABLE IF NOT EXISTS alert_prefs (
 	event_type     TEXT PRIMARY KEY,
@@ -148,7 +163,7 @@ func TestV121ToV130MigrationCompatibility(t *testing.T) {
 	// 1. Build a database with the EXACT v1.2.1 schema: take the current
 	// schema and remove the v1.3.0 addition (users.level). The guard below
 	// ensures the removal matched.
-	oldSchema := schema
+	oldSchema := stripV131RuntimeIndexes(t, schema)
 	levelBlock := "updated_at      INTEGER NOT NULL,\n\tlevel           INTEGER\n"
 	if !strings.Contains(oldSchema, levelBlock) {
 		t.Fatal("fixture broken: users.level block not found in current schema")

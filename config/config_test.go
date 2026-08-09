@@ -40,6 +40,11 @@ func TestLoadStartup_Defaults(t *testing.T) {
 		cfg.DifyMaxResponseMB != 32 || cfg.DifyProbeInFlight != 8 || cfg.ShutdownTimeoutSec != 30 {
 		t.Errorf("perf defaults wrong: %+v", cfg)
 	}
+	if cfg.CharitySettlementAttemptTimeoutSec != 5 || cfg.CharitySettlementRetryDelayMs != 100 || cfg.CharitySettlementReservedStaleSec != 300 ||
+		cfg.CharitySettlementDispatchGraceSec != 60 || cfg.CharitySettlementScanIntervalSec != 60 ||
+		cfg.CharitySettlementQueueSize != 256 || cfg.RequestLogCleanupIntervalSec != 60 {
+		t.Errorf("recovery/retention defaults wrong: %+v", cfg)
+	}
 	if len(cfg.TrustedProxyCIDRs) != 2 || cfg.TrustedProxyCIDRs[0].String() != "127.0.0.0/8" || cfg.TrustedProxyCIDRs[1].String() != "::1/128" {
 		t.Errorf("trusted proxy defaults wrong: %v", cfg.TrustedProxyCIDRs)
 	}
@@ -74,6 +79,13 @@ LOGIN_LOCK_MIN=120
 ADMIN_HOST=manage.example.com
 SOURCE_URL=https://git.example.com/me/fork
 SHUTDOWN_TIMEOUT_SEC=45
+CHARITY_SETTLEMENT_ATTEMPT_TIMEOUT_SEC=7
+CHARITY_SETTLEMENT_RETRY_DELAY_MS=25
+CHARITY_SETTLEMENT_RESERVED_STALE_SEC=420
+CHARITY_SETTLEMENT_DISPATCH_GRACE_SEC=90
+CHARITY_SETTLEMENT_SCAN_INTERVAL_SEC=30
+CHARITY_SETTLEMENT_QUEUE_SIZE=64
+REQUEST_LOG_CLEANUP_INTERVAL_SEC=15
 `)
 	cfg, err := LoadStartup(p)
 	if err != nil {
@@ -94,6 +106,11 @@ SHUTDOWN_TIMEOUT_SEC=45
 	}
 	if cfg.ShutdownTimeoutSec != 45 {
 		t.Errorf("SHUTDOWN_TIMEOUT_SEC = %d, want 45", cfg.ShutdownTimeoutSec)
+	}
+	if cfg.CharitySettlementAttemptTimeoutSec != 7 || cfg.CharitySettlementRetryDelayMs != 25 || cfg.CharitySettlementReservedStaleSec != 420 ||
+		cfg.CharitySettlementDispatchGraceSec != 90 || cfg.CharitySettlementScanIntervalSec != 30 ||
+		cfg.CharitySettlementQueueSize != 64 || cfg.RequestLogCleanupIntervalSec != 15 {
+		t.Errorf("custom recovery/retention values wrong: %+v", cfg)
 	}
 	if cfg.Admin.AdminHost != "manage.example.com" {
 		t.Errorf("AdminHost override = %q", cfg.Admin.AdminHost)
@@ -123,12 +140,12 @@ func TestLoadStartup_EnvOverridesFile(t *testing.T) {
 }
 
 func TestLoadStartup_InvalidIntsFallBack(t *testing.T) {
-	p := writeTemp(t, "admin.env", minimalAdmin+"MAX_CHAT_IN_FLIGHT=nope\nSSE_BUFFER_MB=-3\n")
+	p := writeTemp(t, "admin.env", minimalAdmin+"MAX_CHAT_IN_FLIGHT=nope\nSSE_BUFFER_MB=-3\nCHARITY_SETTLEMENT_RETRY_DELAY_MS=0\nCHARITY_SETTLEMENT_QUEUE_SIZE=0\nREQUEST_LOG_CLEANUP_INTERVAL_SEC=-1\n")
 	cfg, err := LoadStartup(p)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.MaxChatInFlight != 32 || cfg.SSEBufferMB != 1 {
+	if cfg.MaxChatInFlight != 32 || cfg.SSEBufferMB != 1 || cfg.CharitySettlementRetryDelayMs != 100 || cfg.CharitySettlementQueueSize != 256 || cfg.RequestLogCleanupIntervalSec != 60 {
 		t.Errorf("invalid ints should fall back: %+v", cfg)
 	}
 }

@@ -1673,6 +1673,12 @@ func TestCreateDonationApplication_ZeroReviewLimitPersistsAndStopsFirstSubmissio
 	}
 
 	assertZeroLimit(t, gw)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Second)
+	if err := gw.Shutdown(shutdownCtx); err != nil {
+		shutdownCancel()
+		t.Fatalf("shutdown gateway before reopen: %v", err)
+	}
+	shutdownCancel()
 	if err := store.Close(); err != nil {
 		t.Fatalf("close database before reopen: %v", err)
 	}
@@ -1682,6 +1688,7 @@ func TestCreateDonationApplication_ZeroReviewLimitPersistsAndStopsFirstSubmissio
 	}
 	t.Cleanup(func() { reopened.Close() })
 	restarted := NewGateway(testConfig(), reopened)
+	cleanupGatewayForTest(t, restarted)
 	disableAntiAbuseForTest(t, restarted)
 	assertZeroLimit(t, restarted)
 }

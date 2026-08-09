@@ -60,6 +60,13 @@ SITE_BASE_URL=https://dify2api.example.com
 | `DIFY_EGRESS_ALLOWLIST` | 空 | 显式允许私有 Dify 的精确 origin（拒绝 CIDR/裸 IP）；留空仅阻断非公网目标，公网域名（含 CDN 代理）无需条目 |
 | `REMOTE_CONTENT_ORIGIN_ALLOWLIST` | 空 | 允许 Dify 抓取的 website/image 精确 origin；留空则两个功能禁用（data URI 图片不受影响） |
 | `DIFY_MAX_RESPONSE_MB` | `32` | 解压后 JSON / 累计 SSE 上限 |
+| `CHARITY_SETTLEMENT_ATTEMPT_TIMEOUT_SEC` | `5` | 公益结算同步尝试时限；失败后转入在线恢复 |
+| `CHARITY_SETTLEMENT_RETRY_DELAY_MS` | `100` | SQLite BUSY/LOCKED 同步重试退避；不改变总尝试时限 |
+| `CHARITY_SETTLEMENT_RESERVED_STALE_SEC` | `300` | 周期扫描可释放未派发 reservation 的陈旧阈值 |
+| `CHARITY_SETTLEMENT_DISPATCH_GRACE_SEC` | `60` | 已派发 reservation 陈旧阈值在 Dify 超时上的额外宽限 |
+| `CHARITY_SETTLEMENT_SCAN_INTERVAL_SEC` | `60` | 公益结算在线重试与陈旧状态扫描周期 |
+| `CHARITY_SETTLEMENT_QUEUE_SIZE` | `256` | 公益结算内存唤醒队列/去重集合上限；满载由 DB 扫描兜底 |
+| `REQUEST_LOG_CLEANUP_INTERVAL_SEC` | `60` | 过期请求日志物理清理周期；API 可见范围始终严格滚动 30 天 |
 | `MAX_CHAT_IN_FLIGHT` | `32` | 全局聊天并发上限 |
 | `MAX_REQUEST_BODY_MB` | `10` | chat 请求体上限 |
 | `MAX_WEB_REQUEST_BODY_KB` | `256` | 状态变更 Web API 请求体上限 |

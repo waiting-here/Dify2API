@@ -15,8 +15,9 @@ func TestResolveLang_DefaultZh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() { _ = store.Close() })
 	gw := NewGateway(testConfig(), store)
+	cleanupGatewayForTest(t, gw)
 
 	req := httptest.NewRequest("GET", "/api/test", nil)
 	lang := gw.resolveLang(req)
@@ -31,8 +32,9 @@ func TestResolveLang_QueryParam(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() { _ = store.Close() })
 	gw := NewGateway(testConfig(), store)
+	cleanupGatewayForTest(t, gw)
 
 	req := httptest.NewRequest("GET", "/api/test?lang=en", nil)
 	lang := gw.resolveLang(req)
@@ -53,8 +55,9 @@ func TestResolveLang_UserPreference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() { _ = store.Close() })
 	gw := NewGateway(testConfig(), store)
+	cleanupGatewayForTest(t, gw)
 
 	u, err := store.CreateUser("123", "testuser", "")
 	if err != nil {

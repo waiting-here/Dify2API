@@ -538,7 +538,8 @@ func TestAdminLogs_CSVFormulaInjectionAndSecretFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AddRequestLogFull(u.ID, "=model", "+service", time.Unix(100, 0), time.Unix(101, 0),
+	started := time.Now().Add(-time.Minute)
+	if _, err := store.AddRequestLogFull(u.ID, "=model", "+service", started, started.Add(time.Second),
 		"-status", "@error", -418, "=detail,with,commas", 0, -7, "+anti-abuse"); err != nil {
 		t.Fatal(err)
 	}

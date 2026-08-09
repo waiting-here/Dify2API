@@ -62,6 +62,7 @@ type Gateway struct {
 	// antiAbuseCache maps service -> per-service anti-abuse config (hot path).
 	antiAbuseMu    sync.RWMutex
 	antiAbuseCache map[string]*db.AntiAbuseConfig
+	settlement     *charitySettlementWorker
 }
 
 // NewGateway creates a new Gateway.
@@ -119,6 +120,38 @@ func NewGateway(cfg *config.Config, store *db.Store) *Gateway {
 		probeLimiter:         newProbeLimiter(),
 		remoteContentOrigins: remoteOrigins,
 	}
+	settlementAttemptSec := cfg.CharitySettlementAttemptTimeoutSec
+	if settlementAttemptSec <= 0 {
+		settlementAttemptSec = config.DefaultCharitySettlementAttemptTimeoutSec
+	}
+	settlementRetryDelayMs := cfg.CharitySettlementRetryDelayMs
+	if settlementRetryDelayMs <= 0 {
+		settlementRetryDelayMs = config.DefaultCharitySettlementRetryDelayMs
+	}
+	reservedStaleSec := cfg.CharitySettlementReservedStaleSec
+	if reservedStaleSec <= 0 {
+		reservedStaleSec = config.DefaultCharitySettlementReservedStaleSec
+	}
+	dispatchGraceSec := cfg.CharitySettlementDispatchGraceSec
+	if dispatchGraceSec <= 0 {
+		dispatchGraceSec = config.DefaultCharitySettlementDispatchGraceSec
+	}
+	scanSec := cfg.CharitySettlementScanIntervalSec
+	if scanSec <= 0 {
+		scanSec = config.DefaultCharitySettlementScanIntervalSec
+	}
+	queueSize := cfg.CharitySettlementQueueSize
+	if queueSize <= 0 {
+		queueSize = config.DefaultCharitySettlementQueueSize
+	}
+	gw.settlement = newCharitySettlementWorker(store, charitySettlementOptions{
+		attemptTimeout:  time.Duration(settlementAttemptSec) * time.Second,
+		retryDelay:      time.Duration(settlementRetryDelayMs) * time.Millisecond,
+		reservedStale:   time.Duration(reservedStaleSec) * time.Second,
+		dispatchedStale: time.Duration(cfg.DifyHTTPTimeoutMs)*time.Millisecond + time.Duration(dispatchGraceSec)*time.Second,
+		scanInterval:    time.Duration(scanSec) * time.Second,
+		queueSize:       queueSize,
+	})
 	// Seed alert-center preference rows (defaults on) for every category.
 	if err := store.EnsureAlertPrefs(alertPrefEventTypes()); err != nil {
 		log.Printf("[WARN] seed alert prefs: %v", err)
@@ -144,10 +177,16 @@ func (g *Gateway) Shutdown(ctx context.Context) error {
 	g.webThrottle.shutdown()
 	g.authFailThrottle.shutdown()
 	g.userDebug.shutdown()
-	if g.mailer != nil {
-		return g.mailer.Shutdown(ctx)
+	var errs []error
+	if err := g.settlement.shutdown(ctx); err != nil {
+		errs = append(errs, err)
 	}
-	return nil
+	if g.mailer != nil {
+		if err := g.mailer.Shutdown(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // RegisterRoutes sets up HTTP routes.

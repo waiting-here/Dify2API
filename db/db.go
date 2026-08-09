@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS sessions (
 	created_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at);
 
 CREATE TABLE IF NOT EXISTS app_configs (
 	id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -192,6 +194,7 @@ CREATE TABLE IF NOT EXISTS donation_applications (
 );
 CREATE INDEX IF NOT EXISTS idx_da_user ON donation_applications(user_id);
 CREATE INDEX IF NOT EXISTS idx_da_status ON donation_applications(status);
+CREATE INDEX IF NOT EXISTS idx_da_donation ON donation_applications(donation_id);
 
 CREATE TABLE IF NOT EXISTS charity_pricing (
     service TEXT NOT NULL,
@@ -289,6 +292,17 @@ func IsUniqueViolation(err error) bool {
 	code := se.Code()
 	return code == sqlite3.SQLITE_CONSTRAINT_UNIQUE ||
 		code == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY
+}
+
+// IsBusyOrLocked reports transient SQLite writer/read-lock contention. The
+// low byte is the primary result code; extended BUSY/LOCKED codes retain it.
+func IsBusyOrLocked(err error) bool {
+	var se *sqlite.Error
+	if !errors.As(err, &se) {
+		return false
+	}
+	code := se.Code() & 0xff
+	return code == sqlite3.SQLITE_BUSY || code == sqlite3.SQLITE_LOCKED
 }
 
 // Exec executes a raw SQL statement with args. Use with care — prefer

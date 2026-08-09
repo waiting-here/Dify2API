@@ -383,10 +383,10 @@ func (g *Gateway) requireLevel(r *http.Request, min int) *db.User {
 
 // issueSession creates a session and sets the cookie.
 func (g *Gateway) issueSession(w http.ResponseWriter, u *db.User) error {
-	token, expiresAt, err := g.Store.CreateSession(u.ID)
+	token, expiry, err := g.Store.CreateSession(u.ID)
 	if err != nil {
 		return err
 	}
-	auth.SetSessionCookie(w, token, expiresAt, g.Config.Admin.SiteBaseURL)
+	auth.SetSessionCookie(w, token, expiry.Absolute, g.Config.Admin.SiteBaseURL)
 	return nil
 }

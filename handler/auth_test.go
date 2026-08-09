@@ -63,6 +63,7 @@ func setupAuthGatewayAt(t *testing.T, adminPassword, dbPath, keyPath string) (*G
 		},
 	}
 	gw := NewGateway(cfg, store)
+	cleanupGatewayForTest(t, gw)
 	disableAntiAbuseForTest(t, gw)
 	return gw, store
 }
