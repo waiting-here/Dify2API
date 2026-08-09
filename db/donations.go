@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -38,6 +39,67 @@ type Donation struct {
 	Note                string
 	CreatedAt           int64
 	UpdatedAt           int64
+}
+
+// DonationPatch contains optional donation fields. Nil means that a field was
+// omitted; non-nil values (including zero and the empty string) were supplied
+// explicitly. DifyAPIKey is plaintext only for the duration of this call and
+// is encrypted before the transaction starts.
+type DonationPatch struct {
+	Service     *string
+	Model       *string
+	DifyBaseURL *string
+	DifyAPIKey  *string
+	RpmLimit    *int
+	Deadline    *int64
+	TotalCount  *int
+	Note        *string
+	ReviewNote  *string
+	Status      *string
+}
+
+type DonationPatchErrorKind string
+
+const (
+	DonationPatchNotFound           DonationPatchErrorKind = "not_found"
+	DonationPatchExpired            DonationPatchErrorKind = "expired"
+	DonationPatchReviewRecordAbsent DonationPatchErrorKind = "review_record_absent"
+	DonationPatchPricingAbsent      DonationPatchErrorKind = "pricing_absent"
+	DonationPatchInvalid            DonationPatchErrorKind = "invalid"
+)
+
+// DonationPatchError is an expected validation or concurrent-state failure.
+type DonationPatchError struct {
+	DonationID int64
+	Kind       DonationPatchErrorKind
+	Service    string
+	Model      string
+	Message    string
+}
+
+func (e *DonationPatchError) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	switch e.Kind {
+	case DonationPatchNotFound:
+		return fmt.Sprintf("donation %d not found", e.DonationID)
+	case DonationPatchExpired:
+		return fmt.Sprintf("donation %d is expired", e.DonationID)
+	case DonationPatchReviewRecordAbsent:
+		return fmt.Sprintf("donation %d has no review record", e.DonationID)
+	case DonationPatchPricingAbsent:
+		return fmt.Sprintf("enabled pricing for (%s, %s) not found", e.Service, e.Model)
+	default:
+		return fmt.Sprintf("invalid donation patch for %d", e.DonationID)
+	}
+}
+
+// DonationPatchResult is the state committed by PatchDonation.
+type DonationPatchResult struct {
+	Donation        *Donation
+	HasReviewRecord bool
+	ReviewNote      string
 }
 
 // DonationDeleteError identifies an expected delete conflict. Batch callers
@@ -133,6 +195,180 @@ func (s *Store) GetDonation(id int64) (*Donation, error) {
 		return nil, nil
 	}
 	return d, err
+}
+
+// PatchDonation applies donation fields and the originating application's
+// optional review note in one transaction. It reads and merges the latest row
+// inside the transaction, so remaining-count deltas and activation checks are
+// based on current state rather than a handler-side snapshot.
+func (s *Store) PatchDonation(id int64, patch DonationPatch) (*DonationPatchResult, error) {
+	var keyEnc, keySHA256 *string
+	if patch.DifyAPIKey != nil {
+		if strings.TrimSpace(*patch.DifyAPIKey) == "" {
+			return nil, &DonationPatchError{DonationID: id, Kind: DonationPatchInvalid, Message: "dify_api_key must not be blank"}
+		}
+		plain := *patch.DifyAPIKey
+		enc, err := s.Encrypt(plain)
+		if err != nil {
+			return nil, fmt.Errorf("encrypt donation api key: %w", err)
+		}
+		sum := sha256.Sum256([]byte(plain))
+		hash := hex.EncodeToString(sum[:])
+		keyEnc, keySHA256 = &enc, &hash
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	current, err := scanDonation(tx.QueryRow(
+		`SELECT id, service, model, dify_base_url, dify_api_key_enc, dify_api_key_sha256,
+		 source_user_id, source_discord_id, source_username, source_text,
+		 deadline, total_count, remaining_count,
+		 success_count, failure_count, consecutive_failures,
+		 rpm_limit,
+		 status, note, created_at, updated_at
+		 FROM donations WHERE id=?`, id,
+	))
+	if err == sql.ErrNoRows {
+		return nil, &DonationPatchError{DonationID: id, Kind: DonationPatchNotFound}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load donation for patch: %w", err)
+	}
+	if current.Status == DonationExpired {
+		return nil, &DonationPatchError{DonationID: id, Kind: DonationPatchExpired}
+	}
+
+	updated := *current
+	if patch.Service != nil {
+		updated.Service = *patch.Service
+	}
+	if patch.Model != nil {
+		updated.Model = strings.TrimSpace(*patch.Model)
+	}
+	if patch.DifyBaseURL != nil {
+		updated.DifyBaseURL = *patch.DifyBaseURL
+	}
+	if keyEnc != nil {
+		updated.DifyAPIKeyEnc = *keyEnc
+		updated.DifyAPIKeySHA256 = *keySHA256
+	}
+	if patch.RpmLimit != nil {
+		if *patch.RpmLimit <= 0 {
+			return nil, &DonationPatchError{DonationID: id, Kind: DonationPatchInvalid, Message: "rpm_limit must be positive"}
+		}
+		updated.RpmLimit = *patch.RpmLimit
+	}
+	if patch.Deadline != nil {
+		if *patch.Deadline <= time.Now().Unix() {
+			return nil, &DonationPatchError{DonationID: id, Kind: DonationPatchInvalid, Message: "deadline must be in the future"}
+		}
+		updated.Deadline = *patch.Deadline
+	}
+	if patch.TotalCount != nil {
+		if *patch.TotalCount <= 0 {
+			return nil, &DonationPatchError{DonationID: id, Kind: DonationPatchInvalid, Message: "total_count must be positive"}
+		}
+		updated.RemainingCount += *patch.TotalCount - current.TotalCount
+		if updated.RemainingCount < 0 {
+			updated.RemainingCount = 0
+		}
+		updated.TotalCount = *patch.TotalCount
+	}
+	if patch.Note != nil {
+		updated.Note = strings.TrimSpace(*patch.Note)
+	}
+	if patch.Status != nil {
+		switch *patch.Status {
+		case DonationActive, DonationInactive:
+			updated.Status = *patch.Status
+		default:
+			return nil, &DonationPatchError{DonationID: id, Kind: DonationPatchInvalid, Message: "status must be active or inactive"}
+		}
+	}
+	if current.Status != DonationActive && updated.Status == DonationActive {
+		updated.ConsecutiveFailures = 0
+	}
+	if updated.Status == DonationActive {
+		var enabled int
+		if err := tx.QueryRow(
+			`SELECT COUNT(1) FROM charity_pricing WHERE service=? AND model=? AND enabled=1`,
+			updated.Service, updated.Model,
+		).Scan(&enabled); err != nil {
+			return nil, fmt.Errorf("check enabled pricing: %w", err)
+		}
+		if enabled == 0 {
+			return nil, &DonationPatchError{
+				DonationID: id, Kind: DonationPatchPricingAbsent,
+				Service: updated.Service, Model: updated.Model,
+			}
+		}
+	}
+
+	updated.UpdatedAt = time.Now().Unix()
+	res, err := tx.Exec(
+		`UPDATE donations SET
+		 service=?, model=?, dify_base_url=?, dify_api_key_enc=?, dify_api_key_sha256=?,
+		 deadline=?, total_count=?, remaining_count=?, consecutive_failures=?, rpm_limit=?,
+		 status=?, note=?, updated_at=? WHERE id=?`,
+		updated.Service, updated.Model, updated.DifyBaseURL, updated.DifyAPIKeyEnc, updated.DifyAPIKeySHA256,
+		updated.Deadline, updated.TotalCount, updated.RemainingCount, updated.ConsecutiveFailures, updated.RpmLimit,
+		updated.Status, updated.Note, updated.UpdatedAt, id,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("update donation: %w", err)
+	}
+	if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+		return nil, fmt.Errorf("check donation update: %w", rowsErr)
+	} else if n != 1 {
+		return nil, &DonationPatchError{DonationID: id, Kind: DonationPatchNotFound}
+	}
+
+	if patch.ReviewNote != nil {
+		note := strings.TrimSpace(*patch.ReviewNote)
+		res, err := tx.Exec(`UPDATE donation_applications SET review_note=? WHERE donation_id=?`, note, id)
+		if err != nil {
+			return nil, fmt.Errorf("update donation review note: %w", err)
+		}
+		if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+			return nil, fmt.Errorf("check donation review note update: %w", rowsErr)
+		} else if n == 0 {
+			return nil, &DonationPatchError{DonationID: id, Kind: DonationPatchReviewRecordAbsent}
+		} else if n != 1 {
+			return nil, fmt.Errorf("update donation review note: affected %d rows", n)
+		}
+	}
+
+	committedDonation, err := scanDonation(tx.QueryRow(
+		`SELECT id, service, model, dify_base_url, dify_api_key_enc, dify_api_key_sha256,
+		 source_user_id, source_discord_id, source_username, source_text,
+		 deadline, total_count, remaining_count,
+		 success_count, failure_count, consecutive_failures,
+		 rpm_limit,
+		 status, note, created_at, updated_at
+		 FROM donations WHERE id=?`, id,
+	))
+	if err == sql.ErrNoRows {
+		return nil, &DonationPatchError{DonationID: id, Kind: DonationPatchNotFound}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reload patched donation: %w", err)
+	}
+	result := &DonationPatchResult{Donation: committedDonation}
+	if err := tx.QueryRow(
+		`SELECT review_note FROM donation_applications WHERE donation_id=? LIMIT 1`, id,
+	).Scan(&result.ReviewNote); err == nil {
+		result.HasReviewRecord = true
+	} else if err != sql.ErrNoRows {
+		return nil, fmt.Errorf("reload donation review note: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit donation patch: %w", err)
+	}
+	return result, nil
 }
 
 // ListDonations returns all donations, newest first.

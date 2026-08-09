@@ -2,9 +2,7 @@ package handler
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,6 +36,50 @@ func ParseCharityModel(model string) (service, backend string) {
 		}
 	}
 	return
+}
+
+func normalizeDonationService(service string) (string, error) {
+	service = strings.TrimSpace(service)
+	if !translator.IsSupportedService(service) {
+		return "", fmt.Errorf("不支持的服务 %q", service)
+	}
+	return service, nil
+}
+
+func normalizeDonationModel(model string) (string, error) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return "", errors.New("模型名不得为空")
+	}
+	if strings.ContainsAny(model, "[]") {
+		return "", errors.New("模型名不得包含方括号")
+	}
+	return model, nil
+}
+
+func normalizeDonationTarget(service, model string) (string, string, error) {
+	service, err := normalizeDonationService(service)
+	if err != nil {
+		return "", "", err
+	}
+	model, err = normalizeDonationModel(model)
+	if err != nil {
+		return "", "", err
+	}
+	return service, model, nil
+}
+
+func validateDonationAPIKey(apiKey *string, required bool) error {
+	if apiKey == nil {
+		if required {
+			return errors.New("dify_api_key 为必填")
+		}
+		return nil
+	}
+	if strings.TrimSpace(*apiKey) == "" {
+		return errors.New("dify_api_key 不得为空白")
+	}
+	return nil
 }
 
 // charityModelName builds the model string for logging: "[公益][s]m".
@@ -182,19 +224,12 @@ func (g *Gateway) serveCreateDonation(w http.ResponseWriter, r *http.Request, op
 		return
 	}
 
-	// Validate service
-	if !translator.IsSupportedService(req.Service) {
-		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			fmt.Sprintf("不支持的服务 %q", req.Service))
+	service, model, inputErr := normalizeDonationTarget(req.Service, req.Model)
+	if inputErr != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", inputErr.Error())
 		return
 	}
-
-	// Validate model: no brackets
-	if strings.ContainsAny(req.Model, "[]") {
-		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			"模型名不得包含方括号")
-		return
-	}
+	req.Service, req.Model = service, model
 
 	// Validate deadline
 	if req.Deadline <= time.Now().Unix() {
@@ -219,10 +254,8 @@ func (g *Gateway) serveCreateDonation(w http.ResponseWriter, r *http.Request, op
 	}
 	req.DifyBaseURL = normalizedBaseURL
 
-	// Validate dify_api_key
-	if req.DifyAPIKey == "" {
-		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			"dify_api_key 为必填")
+	if err := validateDonationAPIKey(&req.DifyAPIKey, true); err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
 
@@ -286,6 +319,10 @@ func (g *Gateway) serveCreateDonation(w http.ResponseWriter, r *http.Request, op
 
 	created, err := g.Store.CreateDonation(d, req.DifyAPIKey)
 	if err != nil {
+		if db.IsUniqueViolation(err) {
+			g.writeError(w, http.StatusConflict, "conflict", "donation conflicts with an existing record")
+			return
+		}
 		g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -297,7 +334,8 @@ func (g *Gateway) serveCreateDonation(w http.ResponseWriter, r *http.Request, op
 		pricingWarning = "该模型尚未设定价格，捐赠已创建但自动设为未激活状态。请先在定价表中添加该组合后再激活。"
 	}
 
-	// Decrypt key for the creation response only
+	// Decrypt only for the post-commit Dify compatibility probe. The key is
+	// never included in the HTTP response.
 	keyPlain, decErr := g.Store.Decrypt(created.DifyAPIKeyEnc)
 	if decErr != nil {
 		log.Printf("[ERROR] decrypt donation key for creation response: %v", decErr)
@@ -309,7 +347,7 @@ func (g *Gateway) serveCreateDonation(w http.ResponseWriter, r *http.Request, op
 	w.Header().Set("Content-Type", "application/json")
 	resp := map[string]interface{}{
 		"ok":         true,
-		"donation":   donationJSON(created, &keyPlain),
+		"donation":   donationJSON(created),
 		"validation": validation,
 	}
 	if pricingWarning != "" {
@@ -368,11 +406,13 @@ func (g *Gateway) serveListDonations(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]map[string]interface{}, 0, len(list))
 	for _, d := range list {
-		j := g.enrichDonationJSON(d, nil)
+		j := g.enrichDonationJSON(d)
+		j["has_review_record"] = false
 		if d.DifyAPIKeySHA256 != "" && shaCounts[d.DifyAPIKeySHA256] >= 2 {
 			j["is_dup_key"] = true
 		}
 		if rn, ok := reviewNotes[d.ID]; ok {
+			j["has_review_record"] = true
 			j["review_note"] = rn
 		}
 		out = append(out, j)
@@ -513,223 +553,135 @@ func (g *Gateway) servePatchDonation(w http.ResponseWriter, r *http.Request, ope
 	}
 
 	var req struct {
-		Service     string `json:"service"`
-		Model       string `json:"model"`
-		DifyBaseURL string `json:"dify_base_url"`
-		DifyAPIKey  string `json:"dify_api_key"`
-		RpmLimit    int    `json:"rpm_limit"`
-		Deadline    int64  `json:"deadline"`
-		TotalCount  int    `json:"total_count"`
-		Note        string `json:"note"`
-		ReviewNote  string `json:"review_note"`
-		Status      string `json:"status"`
+		Service     *string `json:"service"`
+		Model       *string `json:"model"`
+		DifyBaseURL *string `json:"dify_base_url"`
+		DifyAPIKey  *string `json:"dify_api_key"`
+		RpmLimit    *int    `json:"rpm_limit"`
+		Deadline    *int64  `json:"deadline"`
+		TotalCount  *int    `json:"total_count"`
+		Note        *string `json:"note"`
+		ReviewNote  *string `json:"review_note"`
+		Status      *string `json:"status"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
 		return
 	}
 
-	d, err := g.Store.GetDonation(id)
-	if err != nil {
-		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-		return
+	patch := db.DonationPatch{
+		Service: req.Service, Model: req.Model, DifyBaseURL: req.DifyBaseURL,
+		DifyAPIKey: req.DifyAPIKey, RpmLimit: req.RpmLimit, Deadline: req.Deadline,
+		TotalCount: req.TotalCount, Note: req.Note, ReviewNote: req.ReviewNote, Status: req.Status,
 	}
-	if d == nil {
-		g.writeError(w, http.StatusNotFound, "not_found", "donation not found")
-		return
-	}
-	if d.Status == db.DonationExpired {
-		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			"已失效的捐赠条目不可修改")
-		return
-	}
-
-	// Build SET clause dynamically.
-	now := time.Now().Unix()
-	var sets []string
-	var args []interface{}
-
-	// Track fields that may need Dify validation.
-	newBaseURL := d.DifyBaseURL
-	newAPIKeyEnc := d.DifyAPIKeyEnc
-	apiKeyChanged := false
-	validateDify := false
-
-	if req.Service != "" && req.Service != d.Service {
-		if !translator.IsSupportedService(req.Service) {
-			g.writeError(w, http.StatusBadRequest, "invalid_request",
-				fmt.Sprintf("不支持的服务 %q", req.Service))
+	if patch.Service != nil {
+		normalized, inputErr := normalizeDonationService(*patch.Service)
+		if inputErr != nil {
+			g.writeError(w, http.StatusBadRequest, "invalid_request", inputErr.Error())
 			return
 		}
-		sets = append(sets, "service=?")
-		args = append(args, req.Service)
-		validateDify = true
+		patch.Service = &normalized
 	}
-
-	if req.Model != "" && req.Model != d.Model {
-		if strings.ContainsAny(req.Model, "[]") {
-			g.writeError(w, http.StatusBadRequest, "invalid_request",
-				"模型名不得包含方括号")
+	if patch.Model != nil {
+		normalized, inputErr := normalizeDonationModel(*patch.Model)
+		if inputErr != nil {
+			g.writeError(w, http.StatusBadRequest, "invalid_request", inputErr.Error())
 			return
 		}
-		sets = append(sets, "model=?")
-		args = append(args, req.Model)
+		patch.Model = &normalized
 	}
-
-	if req.DifyBaseURL != "" {
-		normalized, baseErr := g.difyPolicy.ValidateBaseURL(req.DifyBaseURL)
+	if patch.DifyBaseURL != nil {
+		normalized, baseErr := g.difyPolicy.ValidateBaseURL(*patch.DifyBaseURL)
 		if baseErr != nil {
 			g.writeError(w, http.StatusBadRequest, "invalid_request",
 				t(g.resolveLang(r), "dify_base_url 不符合出站安全策略", "dify_base_url is not allowed by the egress policy")+": "+baseErr.Error())
 			return
 		}
-		if normalized != d.DifyBaseURL {
-			sets = append(sets, "dify_base_url=?")
-			args = append(args, normalized)
-			newBaseURL = normalized
-			validateDify = true
-		}
+		patch.DifyBaseURL = &normalized
 	}
-
-	if req.DifyAPIKey != "" {
-		enc, encErr := g.Store.Encrypt(req.DifyAPIKey)
-		if encErr != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal", encErr.Error())
-			return
-		}
-		// Recompute SHA-256 for duplicate detection.
-		sum := sha256.Sum256([]byte(req.DifyAPIKey))
-		keySHA256 := hex.EncodeToString(sum[:])
-		sets = append(sets, "dify_api_key_enc=?", "dify_api_key_sha256=?")
-		args = append(args, enc, keySHA256)
-		newAPIKeyEnc = enc
-		apiKeyChanged = true
-		validateDify = true
-	}
-
-	if req.RpmLimit > 0 && req.RpmLimit != d.RpmLimit {
-		sets = append(sets, "rpm_limit=?")
-		args = append(args, req.RpmLimit)
-	}
-
-	if req.Deadline > 0 && req.Deadline != d.Deadline {
-		if req.Deadline <= time.Now().Unix() {
-			g.writeError(w, http.StatusBadRequest, "invalid_request",
-				t(g.resolveLang(r), "截止时间必须是将来的 Unix 时间戳", "Deadline must be a future Unix timestamp"))
-			return
-		}
-		sets = append(sets, "deadline=?")
-		args = append(args, req.Deadline)
-	}
-
-	if req.TotalCount > 0 && req.TotalCount != d.TotalCount {
-		// Lowering total_count must never drive remaining_count below zero
-		// (a negative value would be unroutable and confusing in the UI).
-		sets = append(sets, "total_count=?, remaining_count=MAX(0, remaining_count + (? - ?))")
-		args = append(args, req.TotalCount, req.TotalCount, d.TotalCount)
-	}
-
-	if req.Note != "" && req.Note != d.Note {
-		sets = append(sets, "note=?")
-		args = append(args, strings.TrimSpace(req.Note))
-	}
-
-	if req.Status != "" && req.Status != d.Status {
-		switch req.Status {
-		case db.DonationActive, db.DonationInactive:
-			if d.Status == db.DonationExpired {
-				g.writeError(w, http.StatusBadRequest, "invalid_request",
-					"已失效的捐赠条目不可更改状态")
-				return
-			}
-		case db.DonationExpired:
-			g.writeError(w, http.StatusBadRequest, "invalid_request",
-				"不能手动将捐赠条目设为失效")
-			return
-		default:
-			g.writeError(w, http.StatusBadRequest, "invalid_request",
-				t(g.resolveLang(r), "状态值必须是 'active' 或 'inactive'", "Status must be 'active' or 'inactive'"))
-			return
-		}
-		sets = append(sets, "status=?")
-		args = append(args, req.Status)
-		// Reset consecutive_failures on re-activation.
-		if req.Status == db.DonationActive {
-			sets = append(sets, "consecutive_failures=0")
-		}
-	}
-
-	// Handle review_note separately (stored in donation_applications, not donations table).
-	// Must be checked before the "no changes" guard to allow review_note-only updates.
-	reviewNoteUpdated := false
-	if req.ReviewNote != "" {
-		if err := g.Store.UpdateDonationReviewNote(id, strings.TrimSpace(req.ReviewNote)); err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-			return
-		}
-		reviewNoteUpdated = true
-	}
-
-	if len(sets) == 0 && !reviewNoteUpdated {
-		// No changes requested.
-		validation := map[string]interface{}{"compatible": true, "message": "无字段变更"}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"ok":         true,
-			"donation":   g.enrichDonationJSON(d, nil),
-			"validation": validation,
-		})
+	if inputErr := validateDonationAPIKey(patch.DifyAPIKey, false); inputErr != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", inputErr.Error())
 		return
 	}
-
-	sets = append(sets, "updated_at=?")
-	args = append(args, now)
-	args = append(args, id)
-
-	query := "UPDATE donations SET " + strings.Join(sets, ", ") + " WHERE id=?"
-	if _, err := g.Store.Exec(query, args...); err != nil {
-		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+	if patch.RpmLimit != nil && *patch.RpmLimit <= 0 {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "rpm_limit must be positive")
 		return
 	}
+	if patch.Deadline != nil && *patch.Deadline <= time.Now().Unix() {
+		g.writeError(w, http.StatusBadRequest, "invalid_request",
+			t(g.resolveLang(r), "截止时间必须是将来的 Unix 时间戳", "Deadline must be a future Unix timestamp"))
+		return
+	}
+	if patch.TotalCount != nil && *patch.TotalCount <= 0 {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "total_count must be positive")
+		return
+	}
+	if patch.Status != nil && *patch.Status != db.DonationActive && *patch.Status != db.DonationInactive {
+		g.writeError(w, http.StatusBadRequest, "invalid_request",
+			t(g.resolveLang(r), "状态值必须是 'active' 或 'inactive'", "Status must be 'active' or 'inactive'"))
+		return
+	}
+	if patch.Note != nil {
+		note := strings.TrimSpace(*patch.Note)
+		patch.Note = &note
+	}
+	if patch.ReviewNote != nil {
+		note := strings.TrimSpace(*patch.ReviewNote)
+		patch.ReviewNote = &note
+	}
 
-	// Refresh from DB.
-	updated, err := g.Store.GetDonation(id)
+	result, err := g.Store.PatchDonation(id, patch)
 	if err != nil {
-		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		var patchErr *db.DonationPatchError
+		switch {
+		case errors.As(err, &patchErr) && patchErr.Kind == db.DonationPatchNotFound:
+			g.writeError(w, http.StatusNotFound, "not_found", "donation not found")
+		case errors.As(err, &patchErr) && patchErr.Kind == db.DonationPatchExpired:
+			g.writeError(w, http.StatusBadRequest, "invalid_request", "已失效的捐赠条目不可修改")
+		case errors.As(err, &patchErr) && patchErr.Kind == db.DonationPatchReviewRecordAbsent:
+			g.writeError(w, http.StatusBadRequest, "invalid_request", "该捐赠没有关联的申请记录，不能修改审核备注")
+		case errors.As(err, &patchErr) && patchErr.Kind == db.DonationPatchPricingAbsent:
+			g.writeError(w, http.StatusBadRequest, "invalid_request", "激活状态要求对应模型存在且启用定价")
+		case errors.As(err, &patchErr) && patchErr.Kind == db.DonationPatchInvalid:
+			g.writeError(w, http.StatusBadRequest, "invalid_request", patchErr.Error())
+		case db.IsUniqueViolation(err):
+			g.writeError(w, http.StatusConflict, "conflict", "donation update conflicts with an existing record")
+		default:
+			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		}
 		return
 	}
 
-	// Dify validation (only when service/base_url/api_key changed).
+	// Dify validation runs only after the transaction commits.
 	validation := map[string]interface{}{"compatible": true, "message": "无校验需求"}
-	if validateDify {
-		validKeyEnc := newAPIKeyEnc
-		if !apiKeyChanged {
-			validKeyEnc = d.DifyAPIKeyEnc
-		}
-		keyPlain, decErr := g.Store.Decrypt(validKeyEnc)
+	if patch.Service != nil || patch.DifyBaseURL != nil || patch.DifyAPIKey != nil {
+		keyPlain, decErr := g.Store.Decrypt(result.Donation.DifyAPIKeyEnc)
 		if decErr != nil {
 			validation = map[string]interface{}{
 				"compatible": false,
 				"message":    fmt.Sprintf("密钥解密失败: %v", decErr),
 			}
 		} else {
-			validation = g.validateDonationApp(r.Context(), operator.ID, updated.Service, newBaseURL, keyPlain)
+			validation = g.validateDonationApp(r.Context(), operator.ID, result.Donation.Service, result.Donation.DifyBaseURL, keyPlain)
 		}
+	}
+	donation := g.enrichDonationJSON(result.Donation)
+	donation["has_review_record"] = result.HasReviewRecord
+	if result.HasReviewRecord {
+		donation["review_note"] = result.ReviewNote
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"ok":         true,
-		"donation":   g.enrichDonationJSON(updated, nil),
+		"donation":   donation,
 		"validation": validation,
 	})
 }
 
-// donationJSON builds the API representation of a Donation.
-// If keyPlain is non-nil, the Dify API key is included in plaintext
-// (for creation response only). Otherwise, has_key is returned.
-// isDupKey is set by the caller after computing duplicates across the list.
-func donationJSON(d *db.Donation, keyPlain *string) map[string]interface{} {
+// donationJSON builds the API representation of a Donation without exposing
+// its Dify API key. isDupKey is set by list callers after computing duplicates.
+func donationJSON(d *db.Donation) map[string]interface{} {
 	out := map[string]interface{}{
 		"id":                   d.ID,
 		"service":              d.Service,
@@ -756,9 +708,6 @@ func donationJSON(d *db.Donation, keyPlain *string) map[string]interface{} {
 	}
 	if d.SourceUserID.Valid {
 		out["source_user_id"] = d.SourceUserID.Int64
-	}
-	if keyPlain != nil {
-		out["dify_api_key"] = *keyPlain
 	}
 	return out
 }
@@ -1201,8 +1150,8 @@ func (g *Gateway) logRequestDonation(userID int64, model, service string, starte
 
 // resolveDonationSourceDisplay resolves source_display for a donation and
 // sets it on the returned JSON map.
-func (g *Gateway) enrichDonationJSON(d *db.Donation, keyPlain *string) map[string]interface{} {
-	j := donationJSON(d, keyPlain)
+func (g *Gateway) enrichDonationJSON(d *db.Donation) map[string]interface{} {
+	j := donationJSON(d)
 	j["source_display"] = g.resolveSourceDisplay(d)
 	return j
 }
@@ -1243,12 +1192,12 @@ func (g *Gateway) handleCreateDonationApp(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Validate service.
-	if !translator.IsSupportedService(req.Service) {
-		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			fmt.Sprintf("不支持的服务 %q", req.Service))
+	service, model, inputErr := normalizeDonationTarget(req.Service, req.Model)
+	if inputErr != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", inputErr.Error())
 		return
 	}
+	req.Service, req.Model = service, model
 
 	// The admin may disable a service for self-service donations
 	// (anti-abuse tab switch); the dropdown is filtered client-side, this
@@ -1256,13 +1205,6 @@ func (g *Gateway) handleCreateDonationApp(w http.ResponseWriter, r *http.Request
 	if !g.Store.IsServiceDonationSelectable(req.Service) {
 		g.writeError(w, http.StatusBadRequest, "invalid_request",
 			fmt.Sprintf("服务 %q 当前不接受自助捐赠申请", req.Service))
-		return
-	}
-
-	// Validate model: no brackets.
-	if strings.ContainsAny(req.Model, "[]") {
-		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			"模型名不得包含方括号")
 		return
 	}
 
@@ -1275,10 +1217,8 @@ func (g *Gateway) handleCreateDonationApp(w http.ResponseWriter, r *http.Request
 	}
 	req.DifyBaseURL = normalizedBaseURL
 
-	// Validate dify_api_key.
-	if strings.TrimSpace(req.DifyAPIKey) == "" {
-		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			"dify_api_key 为必填")
+	if err := validateDonationAPIKey(&req.DifyAPIKey, true); err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
 
@@ -1305,6 +1245,10 @@ func (g *Gateway) handleCreateDonationApp(w http.ResponseWriter, r *http.Request
 			}
 			g.writeError(w, http.StatusBadRequest, "too_many_pending",
 				fmt.Sprintf("您已有 %d 条待审核申请（上限 %d），请等待审核完成后再提交", pending, limit))
+			return
+		}
+		if db.IsUniqueViolation(err) {
+			g.writeError(w, http.StatusConflict, "conflict", "donation application conflicts with an existing record")
 			return
 		}
 		g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
@@ -1504,26 +1448,20 @@ func (g *Gateway) serveApproveApplication(w http.ResponseWriter, r *http.Request
 	}
 
 	var req struct {
-		Service     string `json:"service"`
-		Model       string `json:"model"`
-		DifyBaseURL string `json:"dify_base_url"`
-		DifyAPIKey  string `json:"dify_api_key"`
-		TotalCount  int    `json:"total_count"`
-		Deadline    int64  `json:"deadline"`
-		RpmLimit    int    `json:"rpm_limit"`
-		ReviewNote  string `json:"review_note"`
+		Service     *string `json:"service"`
+		Model       *string `json:"model"`
+		DifyBaseURL *string `json:"dify_base_url"`
+		DifyAPIKey  *string `json:"dify_api_key"`
+		TotalCount  *int    `json:"total_count"`
+		Deadline    *int64  `json:"deadline"`
+		RpmLimit    *int    `json:"rpm_limit"`
+		ReviewNote  string  `json:"review_note"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
 		return
 	}
 
-	// Validate modified fields if provided.
-	if req.Model != "" && strings.ContainsAny(req.Model, "[]") {
-		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			"模型名不得包含方括号")
-		return
-	}
 	existingApp, err := g.Store.GetApplication(id)
 	if err != nil {
 		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
@@ -1533,37 +1471,76 @@ func (g *Gateway) serveApproveApplication(w http.ResponseWriter, r *http.Request
 		g.writeError(w, http.StatusNotFound, "not_found", "application not found")
 		return
 	}
-	effectiveDeadline := req.Deadline
-	if effectiveDeadline == 0 {
-		effectiveDeadline = existingApp.Deadline
+	effectiveService, effectiveModel := existingApp.Service, existingApp.Model
+	if req.Service != nil {
+		effectiveService = *req.Service
+	}
+	if req.Model != nil {
+		effectiveModel = *req.Model
+	}
+	effectiveService, effectiveModel, inputErr := normalizeDonationTarget(effectiveService, effectiveModel)
+	if inputErr != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", inputErr.Error())
+		return
+	}
+	if err := validateDonationAPIKey(req.DifyAPIKey, false); err != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	effectiveDeadline := existingApp.Deadline
+	if req.Deadline != nil {
+		effectiveDeadline = *req.Deadline
 	}
 	if effectiveDeadline <= time.Now().Unix() {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "application deadline has expired")
 		return
 	}
-	effectiveBaseURL := req.DifyBaseURL
-	if effectiveBaseURL == "" {
-		effectiveBaseURL = existingApp.DifyBaseURL
+	effectiveBaseURL := existingApp.DifyBaseURL
+	if req.DifyBaseURL != nil {
+		effectiveBaseURL = *req.DifyBaseURL
 	}
 	normalized, baseErr := g.difyPolicy.ValidateBaseURL(effectiveBaseURL)
 	if baseErr != nil {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "dify_base_url 不符合出站安全策略: "+baseErr.Error())
 		return
 	}
-	req.DifyBaseURL = normalized
+	if req.TotalCount != nil && *req.TotalCount <= 0 {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "total_count must be positive")
+		return
+	}
+	if req.RpmLimit != nil && *req.RpmLimit <= 0 {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", "rpm_limit must be positive")
+		return
+	}
 
 	modified := &db.ApproveApplicationFields{
-		Service:     req.Service,
-		Model:       req.Model,
-		DifyBaseURL: req.DifyBaseURL,
-		DifyAPIKey:  req.DifyAPIKey,
-		TotalCount:  req.TotalCount,
-		Deadline:    req.Deadline,
-		RpmLimit:    req.RpmLimit,
+		DifyBaseURL: normalized,
+	}
+	if req.Service != nil {
+		modified.Service = effectiveService
+	}
+	if req.Model != nil {
+		modified.Model = effectiveModel
+	}
+	if req.DifyAPIKey != nil {
+		modified.DifyAPIKey = strings.TrimSpace(*req.DifyAPIKey)
+	}
+	if req.TotalCount != nil {
+		modified.TotalCount = *req.TotalCount
+	}
+	if req.Deadline != nil {
+		modified.Deadline = *req.Deadline
+	}
+	if req.RpmLimit != nil {
+		modified.RpmLimit = *req.RpmLimit
 	}
 
 	app, donation, err := g.Store.ApproveApplication(id, operator.ID, modified, strings.TrimSpace(req.ReviewNote))
 	if err != nil {
+		if db.IsUniqueViolation(err) {
+			g.writeError(w, http.StatusConflict, "conflict", "approved donation conflicts with an existing record")
+			return
+		}
 		g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -1583,7 +1560,7 @@ func (g *Gateway) serveApproveApplication(w http.ResponseWriter, r *http.Request
 	resp := map[string]interface{}{
 		"ok":          true,
 		"application": applicationJSON(app),
-		"donation":    donationJSON(donation, nil),
+		"donation":    donationJSON(donation),
 	}
 	if pricingWarning != "" {
 		resp["warning"] = pricingWarning

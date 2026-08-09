@@ -16,6 +16,22 @@ type CharityPricing struct {
 	Enabled bool
 }
 
+// PricingPatch contains optional mutable pricing fields. Nil means omitted.
+type PricingPatch struct {
+	Price   *int
+	Reward  *int
+	Enabled *bool
+}
+
+// PricingPatchError identifies an expected missing target.
+type PricingPatchError struct {
+	Pair PricingPair
+}
+
+func (e *PricingPatchError) Error() string {
+	return fmt.Sprintf("pricing (%s, %s) not found", e.Pair.Service, e.Pair.Model)
+}
+
 // PricingPair identifies one pricing row in batch operations.
 type PricingPair struct {
 	Service string
@@ -125,6 +141,71 @@ func (s *Store) UpsertPricing(service, model string, price int, reward *int) (*C
 		return nil, fmt.Errorf("upsert pricing: %w", err)
 	}
 	return s.GetPricing(service, model)
+}
+
+// PatchPricing validates and updates all supplied pricing fields atomically.
+func (s *Store) PatchPricing(service, model string, patch PricingPatch) (*CharityPricing, error) {
+	if patch.Price != nil && *patch.Price < 0 {
+		return nil, fmt.Errorf("price must be >= 0, got %d", *patch.Price)
+	}
+	if patch.Reward != nil && *patch.Reward < 0 {
+		return nil, fmt.Errorf("reward must be >= 0, got %d", *patch.Reward)
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	p, err := scanPricing(tx.QueryRow(
+		`SELECT service, model, price, reward, enabled FROM charity_pricing WHERE service=? AND model=?`,
+		service, model,
+	))
+	if err == sql.ErrNoRows {
+		return nil, &PricingPatchError{Pair: PricingPair{Service: service, Model: model}}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load pricing for patch: %w", err)
+	}
+	if patch.Price != nil {
+		p.Price = *patch.Price
+	}
+	if patch.Reward != nil {
+		p.Reward = *patch.Reward
+	}
+	if patch.Enabled != nil {
+		p.Enabled = *patch.Enabled
+	}
+	enabled := 0
+	if p.Enabled {
+		enabled = 1
+	}
+	res, err := tx.Exec(
+		`UPDATE charity_pricing SET price=?, reward=?, enabled=? WHERE service=? AND model=?`,
+		p.Price, p.Reward, enabled, service, model,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("update pricing: %w", err)
+	}
+	if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+		return nil, fmt.Errorf("check pricing update: %w", rowsErr)
+	} else if n != 1 {
+		return nil, &PricingPatchError{Pair: PricingPair{Service: service, Model: model}}
+	}
+	updated, err := scanPricing(tx.QueryRow(
+		`SELECT service, model, price, reward, enabled FROM charity_pricing WHERE service=? AND model=?`,
+		service, model,
+	))
+	if err == sql.ErrNoRows {
+		return nil, &PricingPatchError{Pair: PricingPair{Service: service, Model: model}}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reload patched pricing: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit pricing patch: %w", err)
+	}
+	return updated, nil
 }
 
 // DeletePricing removes a pricing row. Returns an error when donations exist

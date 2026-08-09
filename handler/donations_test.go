@@ -154,9 +154,9 @@ func TestCreateDonation_WithSourceUser(t *testing.T) {
 	if d["source_username"] != "source_user" {
 		t.Errorf("source_username = %v", d["source_username"])
 	}
-	// API key should be returned in creation response
-	if d["dify_api_key"] != "app-test-key" {
-		t.Errorf("dify_api_key = %v (want app-test-key)", d["dify_api_key"])
+	// API keys are write-only and must not be echoed.
+	if _, leaked := d["dify_api_key"]; leaked {
+		t.Errorf("dify_api_key leaked in creation response")
 	}
 	// has_key should be true
 	if d["has_key"] != true {
@@ -2451,9 +2451,8 @@ func TestDonationPatch_ReviewNote(t *testing.T) {
 	}
 }
 
-// TestDonationPatch_ReviewNoteNoApplication verifies that patching review_note
-// on a donation without a corresponding application (admin-created) succeeds
-// silently without error.
+// TestDonationPatch_ReviewNoteNoApplication verifies that an explicit
+// review_note without an originating application rejects the whole patch.
 func TestDonationPatch_ReviewNoteNoApplication(t *testing.T) {
 	gw, _ := setupAuthGateway(t, "x")
 	adminC := adminCookie(t, gw)
@@ -2479,19 +2478,20 @@ func TestDonationPatch_ReviewNoteNoApplication(t *testing.T) {
 	json.Unmarshal(rec.Body.Bytes(), &cr)
 	donID := int64(cr.Donation["id"].(float64))
 
-	// Patch review_note — should succeed even though no application record exists.
+	// Patch review_note — the explicit field requires an associated record.
 	rec2 := donationRequest(gw, adminC, "PATCH", fmt.Sprintf("/api/admin/donations/%d", donID), map[string]interface{}{
+		"note":        "must roll back",
 		"review_note": "此捐赠无对应申请",
 	})
-	if rec2.Code != http.StatusOK {
-		t.Fatalf("patch review_note on direct donation: status = %d, body: %s", rec2.Code, rec2.Body.String())
+	if rec2.Code != http.StatusBadRequest {
+		t.Fatalf("patch review_note on direct donation: status = %d, want 400; body: %s", rec2.Code, rec2.Body.String())
 	}
-	var patchResp struct {
-		OK bool `json:"ok"`
+	stored, err := gw.Store.GetDonation(donID)
+	if err != nil || stored == nil {
+		t.Fatalf("reload donation: %+v %v", stored, err)
 	}
-	json.Unmarshal(rec2.Body.Bytes(), &patchResp)
-	if !patchResp.OK {
-		t.Fatal("expected ok=true")
+	if stored.Note != "管理员直接创建" {
+		t.Fatalf("donation note partially updated: %q", stored.Note)
 	}
 }
 
@@ -2736,6 +2736,12 @@ func TestDonationPatch_TotalCountNeverNegativeRemaining(t *testing.T) {
 	}
 	created, err := store.CreateDonation(d, "app-secret")
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertPricing("general", "neg-test", 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetPricingEnabled("general", "neg-test", true); err != nil {
 		t.Fatal(err)
 	}
 	// Simulate 8 uses consumed: remaining 2 of total 10.

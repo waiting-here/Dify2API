@@ -1995,12 +1995,13 @@ function showReviewDialog(app) {
       service: f.querySelector("[name=service]").value.trim(),
       model: f.querySelector("[name=model]").value.trim(),
       dify_base_url: f.querySelector("[name=dify_base_url]").value.trim(),
-      dify_api_key: f.querySelector("[name=dify_api_key]").value.trim(),
       total_count: parseInt(f.querySelector("[name=total_count]").value, 10),
       rpm_limit: rpmLimit,
       deadline,
       review_note: f.querySelector("[name=review_note]").value.trim(),
     };
+    const replacementKey = f.querySelector("[name=dify_api_key]").value.trim();
+    if (replacementKey) body.dify_api_key = replacementKey;
     const msg = $("#review-msg");
     msg.innerHTML = `<span class="muted">${T('loading')}</span>`;
     try {
@@ -2112,6 +2113,46 @@ async function loadDonationAppHistory() {
   }
 }
 
+// S2_DONATION_EDIT_HELPERS_START
+function buildDonationPatchBody(d, values) {
+  const initial = {
+    service: String(d.service || "").trim(),
+    model: String(d.model || "").trim(),
+    dify_base_url: String(d.dify_base_url || "").trim(),
+    deadline: fmtLocalDT(d.deadline),
+    total_count: String(d.total_count),
+    rpm_limit: String(d.rpm_limit || 10),
+    note: String(d.note || "").trim(),
+    review_note: String(d.review_note || "").trim(),
+  };
+  const body = {};
+  for (const field of ["service", "model", "dify_base_url", "note"]) {
+    const value = String(values[field] || "").trim();
+    if (value !== initial[field]) body[field] = value;
+  }
+  if (values.deadline !== initial.deadline) {
+    body.deadline = values.deadline ? Math.floor(new Date(values.deadline).getTime() / 1000) : 0;
+  }
+  for (const field of ["total_count", "rpm_limit"]) {
+    const raw = String(values[field] || "").trim();
+    if (raw !== initial[field]) body[field] = parseInt(raw, 10) || 0;
+  }
+  const apiKey = String(values.dify_api_key || "").trim();
+  if (apiKey) body.dify_api_key = apiKey;
+  if (d.has_review_record) {
+    const reviewNote = String(values.review_note || "").trim();
+    if (reviewNote !== initial.review_note) body.review_note = reviewNote;
+  }
+  return body;
+}
+
+function beginDonationSave(state) {
+  if (state.saving) return false;
+  state.saving = true;
+  return true;
+}
+// S2_DONATION_EDIT_HELPERS_END
+
 async function showDonationEditDialog(d) {
   // Remove existing dialog if any.
   const old = $("#don-edit-dialog");
@@ -2137,7 +2178,8 @@ async function showDonationEditDialog(d) {
           <label>${T('charityTotalCount')}<input name="total_count" type="number" min="1" value="${esc(String(d.total_count))}"></label>
           <label>${T('rpmLimitLabel')}<input name="rpm_limit" type="number" min="1" value="${esc(String(d.rpm_limit || 10))}" placeholder="${T('rpmLimitHint')}"></label>
         </div>
-        <label>${T('adminReviewNote')}<textarea name="review_note" rows="2">${esc(d.review_note || "")}</textarea></label>
+        <label>${T('donationAppThNote')}<textarea name="note" rows="2">${esc(d.note || "")}</textarea></label>
+        ${d.has_review_record ? `<label>${T('adminReviewNote')}<textarea name="review_note" rows="2">${esc(d.review_note || "")}</textarea></label>` : ""}
         <div id="don-edit-msg" style="margin-bottom:.5rem"></div>
         <footer style="display:flex;gap:.5rem;justify-content:flex-end">
           <button type="button" id="don-edit-save-btn">${T('save')}</button>
@@ -2151,22 +2193,29 @@ async function showDonationEditDialog(d) {
   $("#don-edit-cancel-btn").onclick = close;
   dialog.addEventListener("click", (e) => { if (e.target === dialog) close(); });
 
+  const saveState = { saving: false };
   $("#don-edit-save-btn").onclick = async () => {
+    if (!beginDonationSave(saveState)) return;
     const f = $("#don-edit-form");
-    const deadline = f.querySelector("[name=deadline]").value ? Math.floor(new Date(f.querySelector("[name=deadline]").value).getTime() / 1000) : 0;
-    const rpmLimit = parseInt(f.querySelector("[name=rpm_limit]").value, 10) || 0;
-    const totalCount = parseInt(f.querySelector("[name=total_count]").value, 10) || 0;
-    const body = {
-      service: f.querySelector("[name=service]").value.trim(),
-      model: f.querySelector("[name=model]").value.trim(),
-      dify_base_url: f.querySelector("[name=dify_base_url]").value.trim(),
-      dify_api_key: f.querySelector("[name=dify_api_key]").value.trim(),
-      review_note: f.querySelector("[name=review_note]").value.trim(),
-    };
-    if (deadline) body.deadline = deadline;
-    if (totalCount > 0) body.total_count = totalCount;
-    if (rpmLimit > 0) body.rpm_limit = rpmLimit;
+    const reviewInput = f.querySelector("[name=review_note]");
+    const body = buildDonationPatchBody(d, {
+      service: f.querySelector("[name=service]").value,
+      model: f.querySelector("[name=model]").value,
+      dify_base_url: f.querySelector("[name=dify_base_url]").value,
+      dify_api_key: f.querySelector("[name=dify_api_key]").value,
+      deadline: f.querySelector("[name=deadline]").value,
+      total_count: f.querySelector("[name=total_count]").value,
+      rpm_limit: f.querySelector("[name=rpm_limit]").value,
+      note: f.querySelector("[name=note]").value,
+      review_note: reviewInput ? reviewInput.value : "",
+    });
+    if (Object.keys(body).length === 0) {
+      close();
+      return;
+    }
     const msg = $("#don-edit-msg");
+    const saveButton = $("#don-edit-save-btn");
+    saveButton.disabled = true;
     msg.innerHTML = `<span class="muted">${T('loading')}</span>`;
     try {
       const resp = await api(coAdminPath(`/api/admin/donations/${d.id}`), { method: "PATCH", body });
@@ -2179,6 +2228,8 @@ async function showDonationEditDialog(d) {
       await loadAdminDonations();
     } catch (err) {
       msg.innerHTML = `<span class="note err">${T('error').replace("{msg}", err.message)}</span>`;
+      saveState.saving = false;
+      saveButton.disabled = false;
     }
   };
 }

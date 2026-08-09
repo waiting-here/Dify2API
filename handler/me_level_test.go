@@ -309,7 +309,8 @@ func TestMeCharityAdmin_Level5CRUD(t *testing.T) {
 		t.Fatalf("activate: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
-	// Pricing list + patch (disable).
+	// Pricing list + patch (enable). Active donation PATCH requires the result
+	// pair to have enabled pricing.
 	rec = donationRequest(gw, c, "GET", "/api/me/charity-admin/pricing", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list pricing: status=%d body=%s", rec.Code, rec.Body.String())
@@ -326,7 +327,7 @@ func TestMeCharityAdmin_Level5CRUD(t *testing.T) {
 	if pricingResp.Pricing[0]["service"] != "general" || pricingResp.Pricing[0]["model"] != "coadmin-model" || pricingResp.Pricing[0]["price"].(float64) != 100 {
 		t.Fatalf("pricing = %v", pricingResp.Pricing)
 	}
-	rec = donationRequest(gw, c, "PATCH", "/api/me/charity-admin/pricing", map[string]interface{}{"service": "general", "model": "coadmin-model", "enabled": false})
+	rec = donationRequest(gw, c, "PATCH", "/api/me/charity-admin/pricing", map[string]interface{}{"service": "general", "model": "coadmin-model", "enabled": true})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("patch pricing: status=%d body=%s", rec.Code, rec.Body.String())
 	}

@@ -3,10 +3,10 @@ package handler
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"dify2api/db"
@@ -662,16 +662,12 @@ func (g *Gateway) serveUpsertPricing(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
 		return
 	}
-	if !translator.IsSupportedService(req.Service) {
-		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			fmt.Sprintf("不支持的服务 %q", req.Service))
+	service, model, inputErr := normalizeDonationTarget(req.Service, req.Model)
+	if inputErr != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", inputErr.Error())
 		return
 	}
-	if strings.ContainsAny(req.Model, "[]") {
-		g.writeError(w, http.StatusBadRequest, "invalid_request",
-			"模型名不得包含方括号")
-		return
-	}
+	req.Service, req.Model = service, model
 	if req.Price < 0 {
 		g.writeError(w, http.StatusBadRequest, "invalid_request",
 			"price 必须 >= 0")
@@ -685,6 +681,10 @@ func (g *Gateway) serveUpsertPricing(w http.ResponseWriter, r *http.Request) {
 
 	p, err := g.Store.UpsertPricing(req.Service, req.Model, req.Price, req.Reward)
 	if err != nil {
+		if db.IsUniqueViolation(err) {
+			g.writeError(w, http.StatusConflict, "conflict", "pricing conflicts with an existing record")
+			return
+		}
 		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
@@ -718,60 +718,32 @@ func (g *Gateway) servePatchPricing(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
 		return
 	}
-	if req.Service == "" || req.Model == "" {
-		g.writeError(w, http.StatusBadRequest, "invalid_request", "service and model are required")
+	service, model, inputErr := normalizeDonationTarget(req.Service, req.Model)
+	if inputErr != nil {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", inputErr.Error())
 		return
 	}
-
-	p, err := g.Store.GetPricing(req.Service, req.Model)
+	if req.Price != nil && *req.Price < 0 {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", t(g.resolveLang(r), "price 必须 >= 0", "price must be >= 0"))
+		return
+	}
+	if req.Reward != nil && *req.Reward < 0 {
+		g.writeError(w, http.StatusBadRequest, "invalid_request", t(g.resolveLang(r), "reward 必须 >= 0", "reward must be >= 0"))
+		return
+	}
+	updated, err := g.Store.PatchPricing(service, model, db.PricingPatch{
+		Price: req.Price, Reward: req.Reward, Enabled: req.Enabled,
+	})
 	if err != nil {
-		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-		return
-	}
-	if p == nil {
-		g.writeError(w, http.StatusNotFound, "not_found", "pricing entry not found")
-		return
-	}
-
-	// Handle enabled toggle.
-	if req.Enabled != nil {
-		if err := g.Store.SetPricingEnabled(req.Service, req.Model, *req.Enabled); err != nil {
+		var patchErr *db.PricingPatchError
+		switch {
+		case errors.As(err, &patchErr):
+			g.writeError(w, http.StatusNotFound, "not_found", "pricing entry not found")
+		case db.IsUniqueViolation(err):
+			g.writeError(w, http.StatusConflict, "conflict", "pricing update conflicts with an existing record")
+		default:
 			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-			return
 		}
-	}
-
-	// Handle price/reward update (via UpsertPricing).
-	if req.Price != nil || req.Reward != nil {
-		price := p.Price
-		var rewardPtr *int
-		if req.Price != nil {
-			if *req.Price < 0 {
-				g.writeError(w, http.StatusBadRequest, "invalid_request", t(g.resolveLang(r), "price 必须 >= 0", "price must be >= 0"))
-				return
-			}
-			price = *req.Price
-		}
-		if req.Reward != nil {
-			if *req.Reward < 0 {
-				g.writeError(w, http.StatusBadRequest, "invalid_request", t(g.resolveLang(r), "reward 必须 >= 0", "reward must be >= 0"))
-				return
-			}
-			r := *req.Reward
-			rewardPtr = &r
-		} else {
-			rewardPtr = &p.Reward
-		}
-		if _, err := g.Store.UpsertPricing(req.Service, req.Model, price, rewardPtr); err != nil {
-			g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
-			return
-		}
-	}
-
-	// Re-fetch for accurate response.
-	updated, err := g.Store.GetPricing(req.Service, req.Model)
-	if err != nil {
-		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

@@ -563,9 +563,9 @@ func (s *Store) ListApplicationsFiltered(status string, userID int64, service st
 	return out, total, rows.Err()
 }
 
-// GetReviewNotesByDonationIDs returns a map of donation_id → review_note
-// for the given donation IDs. Only donations that originated from an
-// application (with a review_note set) are included in the result.
+// GetReviewNotesByDonationIDs returns a map of donation_id → review_note for
+// every donation that originated from an application. Empty notes remain in
+// the map so callers can distinguish an empty review record from no record.
 func (s *Store) GetReviewNotesByDonationIDs(ids []int64) (map[int64]string, error) {
 	if len(ids) == 0 {
 		return nil, nil
@@ -577,7 +577,7 @@ func (s *Store) GetReviewNotesByDonationIDs(ids []int64) (map[int64]string, erro
 		args[i] = id
 	}
 	query := `SELECT donation_id, review_note FROM donation_applications
-		WHERE donation_id IN (` + strings.Join(placeholders, ",") + `) AND review_note != ''`
+		WHERE donation_id IN (` + strings.Join(placeholders, ",") + `)`
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
