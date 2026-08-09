@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	sqlite "modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
@@ -102,6 +103,34 @@ CREATE TABLE IF NOT EXISTS request_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_request_logs_user ON request_logs(user_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_request_logs_started ON request_logs(started_at);
+
+CREATE TABLE IF NOT EXISTS user_activity_daily (
+	day             INTEGER NOT NULL,
+	user_id         INTEGER NOT NULL REFERENCES users(id),
+	api_attempts    INTEGER NOT NULL DEFAULT 0,
+	api_successes   INTEGER NOT NULL DEFAULT 0,
+	console_actions INTEGER NOT NULL DEFAULT 0,
+	checkins        INTEGER NOT NULL DEFAULT 0,
+	updated_at      INTEGER NOT NULL,
+	PRIMARY KEY (day, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_uad_user_day ON user_activity_daily(user_id, day);
+
+CREATE TABLE IF NOT EXISTS site_activity_daily (
+	day                   INTEGER PRIMARY KEY,
+	new_users             INTEGER,
+	product_active        INTEGER,
+	successful_api_active INTEGER,
+	attempted_api_active  INTEGER,
+	console_active        INTEGER,
+	checkin_only_active   INTEGER,
+	api_attempts          INTEGER,
+	api_successes         INTEGER,
+	wau                   INTEGER,
+	active_28d            INTEGER,
+	engaged_28d           INTEGER,
+	finalized_at          INTEGER NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS donations (
 	id                   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -275,7 +304,12 @@ func Open(path, keyPath string) (*Store, error) {
 		}
 	}
 
-	return &Store{db: sqldb, key: key}, nil
+	store := &Store{db: sqldb, key: key}
+	if err := store.initializeActivity(time.Now()); err != nil {
+		sqldb.Close()
+		return nil, fmt.Errorf("initialize activity data: %w", err)
+	}
+	return store, nil
 }
 
 // Close closes the database handle.

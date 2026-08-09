@@ -1244,6 +1244,7 @@ func (g *Gateway) handleCreateDonationApp(w http.ResponseWriter, r *http.Request
 		g.writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
+	g.recordConsoleActivity(u.ID)
 
 	resp := map[string]interface{}{
 		"ok":          true,

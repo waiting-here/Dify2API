@@ -248,6 +248,7 @@ func (g *Gateway) handleCreateConfig(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
+	g.recordConsoleActivity(u.ID)
 
 	resp := map[string]interface{}{
 		"ok":        true,
@@ -299,6 +300,7 @@ func (g *Gateway) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
+	g.recordConsoleActivity(u.ID)
 
 	cfg, _ := g.Store.GetAppConfig(id)
 	resp := map[string]interface{}{
@@ -338,6 +340,7 @@ func (g *Gateway) handleToggleConfig(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusNotFound, "not_found", "config not found")
 		return
 	}
+	g.recordConsoleActivity(u.ID)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 }
@@ -358,6 +361,7 @@ func (g *Gateway) handleDeleteConfig(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusNotFound, "not_found", "config not found")
 		return
 	}
+	g.recordConsoleActivity(u.ID)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 }

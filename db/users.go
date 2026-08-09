@@ -92,15 +92,30 @@ func (s *Store) GetUserByDiscordID(discordID string) (*User, error) {
 
 // CreateUser inserts a Discord-registered user.
 func (s *Store) CreateUser(discordID, username, avatar string) (*User, error) {
-	now := time.Now().Unix()
-	res, err := s.db.Exec(
+	nowTime := time.Now()
+	now := nowTime.Unix()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("create user: %w", err)
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(
 		`INSERT INTO users (discord_id, username, avatar, created_at, updated_at) VALUES (?,?,?,?,?)`,
 		discordID, username, avatar, now, now,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create user: %w", err)
 	}
-	id, _ := res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("create user: %w", err)
+	}
+	if err := recordNewUserTx(tx, nowTime); err != nil {
+		return nil, fmt.Errorf("create user activity: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("create user: %w", err)
+	}
 	return s.GetUserByID(id)
 }
 
@@ -149,8 +164,38 @@ func (s *Store) AutoBanUser(id int64, until time.Time) error {
 // UnbanUser clears both the timed ban, the permanent disabled flag,
 // the auto-ban flag, and the ban reason.
 func (s *Store) UnbanUser(id int64) error {
-	_, err := s.db.Exec(`UPDATE users SET banned_until=0, disabled=0, auto_banned=0, ban_reason='', updated_at=? WHERE id=? AND is_admin=0`, time.Now().Unix(), id)
-	return err
+	return s.unbanUserAt(id, time.Now())
+}
+
+func (s *Store) unbanUserAt(id int64, now time.Time) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var disabled int
+	var createdAt int64
+	if err := tx.QueryRow(`SELECT disabled,created_at FROM users WHERE id=? AND is_admin=0`, id).Scan(&disabled, &createdAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return err
+	}
+	if disabled != 0 {
+		if err := s.finalizeCompletedActivityDaysTx(tx, now); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE users SET banned_until=0, disabled=0, auto_banned=0, ban_reason='', updated_at=? WHERE id=? AND is_admin=0`, now.Unix(), id); err != nil {
+		return err
+	}
+	if disabled != 0 {
+		day := utcDay(now)
+		if err := adjustOpenSiteForUserTx(tx, id, day, 1, utcDay(time.Unix(createdAt, 0)) == day); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // SetUserLang updates the user's preferred UI language.
@@ -161,12 +206,46 @@ func (s *Store) SetUserLang(id int64, lang string) error {
 
 // SetUserDisabled marks a user disabled/enabled with an optional reason.
 func (s *Store) SetUserDisabled(id int64, disabled bool, reason string) error {
+	return s.setUserDisabledAt(id, disabled, reason, time.Now())
+}
+
+func (s *Store) setUserDisabledAt(id int64, disabled bool, reason string, now time.Time) error {
 	v := 0
 	if disabled {
 		v = 1
 	}
-	_, err := s.db.Exec(`UPDATE users SET disabled=?, ban_reason=?, updated_at=? WHERE id=?`, v, reason, time.Now().Unix(), id)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var oldDisabled, isAdmin int
+	var createdAt int64
+	if err := tx.QueryRow(`SELECT disabled,is_admin,created_at FROM users WHERE id=?`, id).Scan(&oldDisabled, &isAdmin, &createdAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return err
+	}
+	if isAdmin == 0 && oldDisabled != v {
+		if err := s.finalizeCompletedActivityDaysTx(tx, now); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE users SET disabled=?, ban_reason=?, updated_at=? WHERE id=?`, v, reason, now.Unix(), id); err != nil {
+		return err
+	}
+	if isAdmin == 0 && oldDisabled != v {
+		day := utcDay(now)
+		direction := int64(1)
+		if disabled {
+			direction = -1
+		}
+		if err := adjustOpenSiteForUserTx(tx, id, day, direction, utcDay(time.Unix(createdAt, 0)) == day); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // ListUsers returns all non-admin users, newest first.
@@ -246,6 +325,9 @@ func (s *Store) ApplyUserCheckin(userID int64, day string, bonus, cap int, bypas
 		`UPDATE users SET last_checkin_day=?, credits=?, updated_at=? WHERE id=?`,
 		day, newCredits, time.Now().Unix(), userID,
 	); err != nil {
+		return "", 0, 0, err
+	}
+	if err := recordActivityTx(tx, userID, time.Now(), activityDelta{checkins: 1}); err != nil {
 		return "", 0, 0, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -383,6 +465,10 @@ func (s *Store) SetUserCharityEnabled(userID int64, enabled bool) error {
 
 // DeleteUser removes a user and their dependent rows.
 func (s *Store) DeleteUser(id int64) error {
+	return s.deleteUserAt(id, time.Now())
+}
+
+func (s *Store) deleteUserAt(id int64, now time.Time) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("delete user: %w", err)
@@ -398,6 +484,14 @@ func (s *Store) DeleteUser(id int64) error {
 	}
 	if isAdmin {
 		return fmt.Errorf("delete user: administrator cannot be deleted")
+	}
+	var disabled int
+	var createdAt int64
+	if err := tx.QueryRow(`SELECT disabled,created_at FROM users WHERE id=?`, id).Scan(&disabled, &createdAt); err != nil {
+		return fmt.Errorf("delete user: %w", err)
+	}
+	if err := s.finalizeCompletedActivityDaysTx(tx, now); err != nil {
+		return fmt.Errorf("delete user: finalize completed activity: %w", err)
 	}
 
 	var activeReservations int
@@ -436,11 +530,19 @@ func (s *Store) DeleteUser(id int64) error {
 	if _, err := tx.Exec(`UPDATE donation_applications SET reviewer_id=NULL WHERE reviewer_id=?`, id); err != nil {
 		return fmt.Errorf("anonymize application reviewer: %w", err)
 	}
+	if disabled == 0 {
+		day := utcDay(now)
+		registrationDay := utcDay(time.Unix(createdAt, 0))
+		if err := adjustOpenSiteForUserTx(tx, id, day, -1, registrationDay == day); err != nil {
+			return fmt.Errorf("subtract current activity: %w", err)
+		}
+	}
 	for _, q := range []string{
 		`DELETE FROM sessions WHERE user_id=?`,
 		`DELETE FROM app_configs WHERE user_id=?`,
 		`DELETE FROM caller_keys WHERE user_id=?`,
 		`DELETE FROM request_logs WHERE user_id=?`,
+		`DELETE FROM user_activity_daily WHERE user_id=?`,
 		`DELETE FROM donation_applications WHERE user_id=?`,
 		`UPDATE donations SET source_user_id=NULL, source_discord_id='', source_username='' WHERE source_user_id=?`,
 	} {

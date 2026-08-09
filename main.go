@@ -198,6 +198,9 @@ func startCleanupWorker(ctx context.Context, store *db.Store, requestLogInterval
 		}
 		runCleanup := func() {
 			now := time.Now().Unix()
+			if err := store.MaintainActivity(time.Unix(now, 0)); err != nil {
+				log.Printf("[CLEANUP] activity: %v", err)
+			}
 			donationsExpired, donationErr := store.ExpireOverdueDonations(now)
 			if donationErr != nil {
 				log.Printf("[CLEANUP] donations: %v", donationErr)
@@ -238,7 +241,11 @@ func startCleanupWorker(ctx context.Context, store *db.Store, requestLogInterval
 			case <-requestLogTicker.C:
 				purgeRequestLogs()
 			case <-expiryTicker.C:
-				expired, err := store.ExpireOverdueDonations(time.Now().Unix())
+				now := time.Now()
+				if err := store.MaintainActivity(now); err != nil {
+					log.Printf("[CLEANUP] activity: %v", err)
+				}
+				expired, err := store.ExpireOverdueDonations(now.Unix())
 				if err != nil {
 					log.Printf("[CLEANUP] donations: %v", err)
 				} else if expired > 0 {

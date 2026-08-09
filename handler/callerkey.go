@@ -2,8 +2,16 @@ package handler
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
+	"time"
 )
+
+func (g *Gateway) recordConsoleActivity(userID int64) {
+	if err := g.Store.RecordConsoleAction(userID, time.Now()); err != nil {
+		log.Printf("[WARN] record console activity for user %d: %v", userID, err)
+	}
+}
 
 // --- GET /api/caller-key ---
 // Returns the session user's caller key (full value — this endpoint backs the
@@ -44,6 +52,7 @@ func (g *Gateway) handleResetCallerKey(w http.ResponseWriter, r *http.Request) {
 		g.writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
+	g.recordConsoleActivity(u.ID)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"key": key})
 }

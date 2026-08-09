@@ -21,6 +21,7 @@ type ExportBundle struct {
 	Configs              []ExportConfig             `json:"app_configs"`
 	CallerKey            string                     `json:"caller_key"`
 	Logs                 []ExportLog                `json:"request_logs"`
+	Activity             []UserActivityDaily        `json:"user_activity_daily"`
 	DonationApplications []ExportDonationApp        `json:"donation_applications"`
 	CharityReservations  []ExportCharityReservation `json:"charity_reservations"`
 }
@@ -199,6 +200,11 @@ func (s *Store) ExportUserData(userID int64) (*ExportBundle, error) {
 			AntiAbuseInfo:   l.AntiAbuseInfo,
 		})
 	}
+	activity, err := s.ListUserActivity(userID)
+	if err != nil {
+		return nil, err
+	}
+	bundle.Activity = activity
 
 	// Donation applications with decrypted API keys.
 	apps, err := s.ListApplicationsByUser(userID)

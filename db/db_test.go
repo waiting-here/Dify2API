@@ -50,7 +50,7 @@ func TestIsUniqueViolation(t *testing.T) {
 
 func TestOpen_CreatesTables(t *testing.T) {
 	st, _ := openTemp(t)
-	for _, table := range []string{"users", "sessions", "app_configs", "caller_keys", "request_logs"} {
+	for _, table := range []string{"users", "sessions", "app_configs", "caller_keys", "request_logs", "user_activity_daily", "site_activity_daily"} {
 		var name string
 		err := st.db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name)
 		if err != nil {

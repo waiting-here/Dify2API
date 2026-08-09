@@ -22,6 +22,16 @@ func stripV131RuntimeIndexes(t *testing.T, input string) string {
 	return input
 }
 
+func stripV131ActivitySchema(t *testing.T, input string) string {
+	t.Helper()
+	start := strings.Index(input, "CREATE TABLE IF NOT EXISTS user_activity_daily")
+	end := strings.Index(input, "CREATE TABLE IF NOT EXISTS donations")
+	if start < 0 || end < 0 || end <= start {
+		t.Fatal("fixture broken: activity schema block not found")
+	}
+	return input[:start] + input[end:]
+}
+
 // TestV120ToV121MigrationCompatibility verifies that a production database
 // created by the v1.2.0 binary opens cleanly with the current code and that
 // the v1.2.1 schema additions (alert_prefs table, donation_selectable
@@ -35,7 +45,7 @@ func TestV120ToV121MigrationCompatibility(t *testing.T) {
 	// schema and remove the v1.2.1 additions (alert_prefs table and the
 	// donation_selectable column) plus the v1.3.0 addition (users.level).
 	// Guards below ensure the removals matched.
-	oldSchema := stripV131RuntimeIndexes(t, schema)
+	oldSchema := stripV131ActivitySchema(t, stripV131RuntimeIndexes(t, schema))
 	alertPrefsBlock := `
 CREATE TABLE IF NOT EXISTS alert_prefs (
 	event_type     TEXT PRIMARY KEY,
@@ -163,7 +173,7 @@ func TestV121ToV130MigrationCompatibility(t *testing.T) {
 	// 1. Build a database with the EXACT v1.2.1 schema: take the current
 	// schema and remove the v1.3.0 addition (users.level). The guard below
 	// ensures the removal matched.
-	oldSchema := stripV131RuntimeIndexes(t, schema)
+	oldSchema := stripV131ActivitySchema(t, stripV131RuntimeIndexes(t, schema))
 	levelBlock := "updated_at      INTEGER NOT NULL,\n\tlevel           INTEGER\n"
 	if !strings.Contains(oldSchema, levelBlock) {
 		t.Fatal("fixture broken: users.level block not found in current schema")

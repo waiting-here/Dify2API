@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 
@@ -37,10 +38,7 @@ type RequestLog struct {
 // AddRequestLog records one completed call (no HTTP status / error detail;
 // prefer AddRequestLogFull on new call sites).
 func (s *Store) AddRequestLog(userID int64, model, service string, startedAt, endedAt time.Time, status, errorCode string) error {
-	_, err := s.db.Exec(
-		`INSERT INTO request_logs (user_id, model, service, started_at, ended_at, status, error_code) VALUES (?,?,?,?,?,?,?)`,
-		userID, model, service, startedAt.Unix(), endedAt.Unix(), status, errorCode,
-	)
+	_, err := s.addRequestLogFull(userID, model, service, startedAt, endedAt, status, errorCode, 0, "", 0, 0, "")
 	return err
 }
 
@@ -52,18 +50,43 @@ func (s *Store) AddRequestLog(userID int64, model, service string, startedAt, en
 // or empty string if not triggered. Returns the new log row id (0 on error)
 // so callers can link dependent rows (e.g. admin alerts).
 func (s *Store) AddRequestLogFull(userID int64, model, service string, startedAt, endedAt time.Time, status, errorCode string, httpStatus int, errorDetail string, donationID int64, creditsConsumed int, antiAbuseInfo string) (int64, error) {
+	return s.addRequestLogFull(userID, model, service, startedAt, endedAt, status, errorCode, httpStatus, errorDetail, donationID, creditsConsumed, antiAbuseInfo)
+}
+
+func (s *Store) addRequestLogFull(userID int64, model, service string, startedAt, endedAt time.Time, status, errorCode string, httpStatus int, errorDetail string, donationID int64, creditsConsumed int, antiAbuseInfo string) (int64, error) {
 	var don interface{}
 	if donationID > 0 {
 		don = donationID
 	}
-	res, err := s.db.Exec(
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(
 		`INSERT INTO request_logs (user_id, model, service, started_at, ended_at, status, error_code, http_status, error_detail, donation_id, credits_consumed, anti_abuse_info) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 		userID, model, service, startedAt.Unix(), endedAt.Unix(), status, errorCode, httpStatus, errorDetail, don, creditsConsumed, antiAbuseInfo,
 	)
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	success := int64(0)
+	// Debug dry-runs produce a successful synthetic /v1 response without an
+	// upstream product call, so they are attempts but not successful API use.
+	if status == "success" && errorCode != "debug_dry_run" {
+		success = 1
+	}
+	if err := recordActivityTx(tx, userID, startedAt, activityDelta{attempts: 1, success: success}); err != nil {
+		return 0, fmt.Errorf("record request activity: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 // AddRequestLogDonation records a completed call with a donation routing

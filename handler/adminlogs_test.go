@@ -333,6 +333,9 @@ func TestAdminLogs_DeletedUser(t *testing.T) {
 	// Simulate a user row being deleted while logs remain (e.g. manual DB
 	// cleanup that missed the request_logs FK cascade).  DeleteUser() would
 	// also wipe the logs, so we bypass it here to exercise the LEFT JOIN path.
+	// The S4 user activity table has the specified user FK, therefore the
+	// simulated manual cleanup must omit that associated row as well.
+	store.RawExec(`DELETE FROM user_activity_daily WHERE user_id = ?`, u.ID)
 	store.RawExec(`DELETE FROM users WHERE id = ?`, u.ID)
 
 	rec := adminGet(gw, adminCookie, "/api/admin/logs")

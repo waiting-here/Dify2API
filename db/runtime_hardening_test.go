@@ -15,7 +15,7 @@ func TestV130ToV131RuntimeIndexesMigration(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "v130.db")
 	keyPath := filepath.Join(dir, "v130.key")
-	oldSchema := stripV131RuntimeIndexes(t, schema)
+	oldSchema := stripV131ActivitySchema(t, stripV131RuntimeIndexes(t, schema))
 	raw, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatal(err)
@@ -34,6 +34,14 @@ func TestV130ToV131RuntimeIndexesMigration(t *testing.T) {
 		VALUES (1,'general','kept-model','https://example.com','enc',1,99,42,1)`); err != nil {
 		t.Fatal(err)
 	}
+	startedAt := time.Now().UTC().Unix()
+	if _, err := raw.Exec(`INSERT INTO request_logs
+		(user_id,model,service,started_at,ended_at,status,error_code)
+		VALUES (1,'kept-success','general',?,?,'success',''),
+		       (1,'kept-failure','general',?,?,'error','upstream_error')`,
+		startedAt, startedAt, startedAt, startedAt); err != nil {
+		t.Fatal(err)
+	}
 	if err := raw.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +51,7 @@ func TestV130ToV131RuntimeIndexesMigration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Open #%d: %v", openNumber, err)
 		}
-		for _, name := range []string{"idx_sessions_expires", "idx_sessions_created", "idx_da_donation"} {
+		for _, name := range []string{"idx_sessions_expires", "idx_sessions_created", "idx_da_donation", "idx_uad_user_day"} {
 			var found string
 			if err := st.db.QueryRow(`SELECT name FROM sqlite_master WHERE type='index' AND name=?`, name).Scan(&found); err != nil || found != name {
 				t.Errorf("Open #%d index %s: found=%q err=%v", openNumber, name, found, err)
@@ -58,6 +66,12 @@ func TestV130ToV131RuntimeIndexesMigration(t *testing.T) {
 		}
 		if err := st.db.QueryRow(`SELECT model FROM donation_applications WHERE donation_id=42`).Scan(&model); err != nil || model != "kept-model" {
 			t.Errorf("Open #%d application data: %q %v", openNumber, model, err)
+		}
+		var attempts, successes int
+		if err := st.db.QueryRow(`SELECT api_attempts,api_successes FROM user_activity_daily WHERE user_id=1`).Scan(&attempts, &successes); err != nil {
+			t.Errorf("Open #%d activity backfill: %v", openNumber, err)
+		} else if attempts != 2 || successes != 1 {
+			t.Errorf("Open #%d activity backfill=%d/%d, want 2/1", openNumber, attempts, successes)
 		}
 		if err := st.Close(); err != nil {
 			t.Fatalf("close #%d: %v", openNumber, err)

@@ -122,7 +122,10 @@ func TestPurgeExpiredRequestLogs_StrictPerRowAndOrphans(t *testing.T) {
 		t.Fatalf("deleted logs=%d alerts=%d, want 3/0", logsDeleted, alertsDeleted)
 	}
 
-	logs, err := st.ListRequestLogs(u.ID, 10)
+	// Keep the read cutoff identical to the purge cutoff. Race instrumentation
+	// can otherwise cross a wall-clock second and correctly hide the row that
+	// is exactly at this test's fixed boundary.
+	logs, err := st.listRequestLogsForUserAt(u.ID, 10, now)
 	if err != nil {
 		t.Fatal(err)
 	}
