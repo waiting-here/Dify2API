@@ -186,8 +186,6 @@ const requestLogSelect = `SELECT l.id, l.user_id, COALESCE(u.username, ''), l.mo
 	FROM request_logs l
 	LEFT JOIN users u ON l.user_id = u.id`
 
-// logFilterWhere builds the parameterized WHERE clause for a LogFilter and
-// always clamps it to the rolling request-log retention boundary.
 func requestLogCutoff(now time.Time) int64 {
 	return now.Add(-RequestLogRetention).Unix()
 }
@@ -200,10 +198,8 @@ func clampLogFilterToRetention(f LogFilter, now time.Time) LogFilter {
 	return f
 }
 
-func logFilterWhere(f LogFilter) (string, []interface{}) {
-	return logFilterWhereAt(f, time.Now())
-}
-
+// logFilterWhereAt builds the parameterized WHERE clause for a LogFilter and
+// always clamps it to the rolling request-log retention boundary.
 func logFilterWhereAt(f LogFilter, now time.Time) (string, []interface{}) {
 	f = clampLogFilterToRetention(f, now)
 	var conds []string
