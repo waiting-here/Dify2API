@@ -103,6 +103,15 @@
   #don-filter label { margin-bottom: 0; }
   #don-filter input, #don-filter select { width: 100%; margin-bottom: 0; }
   .admin-log-chart { position: relative; height: 18rem; padding: .5rem; border: 1px solid var(--pico-muted-border-color); border-radius: 4px; }
+  .activity-heading, .activity-chart-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .75rem; }
+  .activity-heading h3, .activity-heading p, .activity-chart-toolbar h4, .activity-chart-toolbar label { margin-bottom: 0; }
+  .activity-summary-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: .75rem; margin: 1rem 0; }
+  .activity-metric { margin: 0; padding: .75rem; border: 1px solid var(--pico-muted-border-color); border-radius: .4rem; background: var(--pico-card-background-color); }
+  .activity-metric span, .activity-metric strong, .activity-metric small { display: block; }
+  .activity-metric strong { font-size: 1.55rem; line-height: 1.3; margin: .2rem 0; }
+  .activity-chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; margin: .75rem 0 1rem; }
+  .activity-chart { position: relative; min-width: 0; height: 20rem; padding: .5rem; border: 1px solid var(--pico-muted-border-color); border-radius: 4px; }
+  .activity-ranges button[aria-pressed="true"] { font-weight: 700; }
   @media (max-width: 800px) {
     #admin-logs-filter { grid-template-columns: 1fr; }
     #admin-logs-filter .afl-actions { grid-column: 1; grid-row: auto; flex-direction: row; }
@@ -111,6 +120,7 @@
     #admin-logs-filter.alf-no-user .afl-model, #admin-logs-filter.alf-no-user .afl-since,
     #admin-logs-filter.alf-no-user .afl-until, #admin-logs-filter.alf-no-user .afl-actions { grid-column: 1; grid-row: auto; }
     #don-filter { grid-template-columns: 1fr; }
+    .activity-chart-grid { grid-template-columns: 1fr; }
   }
   /* ---- Mobile / tablet adaptation ----
      Two breakpoints: 768px (tablet/phone) and 480px (small phone).
@@ -118,6 +128,8 @@
   @media (max-width: 768px) {
     main.container { width: 100%; padding: .5rem; }
     .admin-log-chart { height: 16rem; padding: .25rem; }
+    .activity-chart { height: 16rem; padding: .25rem; }
+    .activity-summary-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .card { padding: .75rem; }
     body > nav { flex-wrap: wrap; gap: .5rem; padding: .5rem; }
     .tab-nav .admin-tab, .tab-nav .user-tab { min-width: 4.5rem; padding: .35rem .6rem; font-size: .8rem; }
@@ -130,6 +142,8 @@
   }
   @media (max-width: 480px) {
     .admin-log-chart { height: 14rem; }
+    .activity-chart { height: 14rem; }
+    .activity-summary-cards { grid-template-columns: 1fr; }
     .tab-nav .admin-tab, .tab-nav .user-tab { min-width: auto; padding: .25rem .4rem; font-size: .75rem; }
     body > nav .logo { font-size: .95rem; }
     table td, table th { font-size: .85rem; padding: .4rem .5rem; }
@@ -180,6 +194,7 @@
 <script src="/static/i18n.js"></script>
 <script src="/static/common.js"></script>
 <script src="/static/user.js"></script>
+<script src="/static/admin_activity.js"></script>
 <script src="/static/admin.js"></script>
 </body>
 </html>

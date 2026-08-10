@@ -6,6 +6,51 @@ let _adminLogCharts = [];
 let _adminLogStats = null;
 let _adminLogChartGeneration = 0;
 
+/* ---------------- admin activity (UTC ranges + lazy Chart lifecycle) ---------------- */
+const _adminActivityRequestGate = D2AActivity.createLatestRequestGate();
+const _adminActivityChartGate = D2AActivity.createLatestRequestGate();
+const _adminActivityCharts = D2AActivity.createChartRegistry();
+let _adminActivityStats = null;
+let _adminActivityRangeDays = 28;
+let _adminActivityShowConsole = true;
+
+function destroyAdminActivityCharts() {
+  _adminActivityChartGate.invalidate();
+  _adminActivityCharts.destroy();
+}
+
+function adminActivityTabVisible() {
+  const tab = $("#tab-activity");
+  return !!tab && tab.style.display !== "none";
+}
+
+function resizeAdminActivityCharts() {
+  if (_adminActivityCharts.size() === 0) return;
+  requestAnimationFrame(() => _adminActivityCharts.resize());
+}
+
+function reportAdminActivityChartFailure() {
+  destroyAdminActivityCharts();
+  const note = $("#activity-chart-error");
+  if (note) {
+    note.style.display = "";
+    note.textContent = T('activityChartLoadFailed');
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.id = "activity-chart-retry";
+    retry.className = "secondary outline";
+    retry.textContent = T('retry');
+    retry.onclick = () => {
+      note.style.display = "none";
+      if (_adminActivityStats) {
+        renderAdminActivityCharts(_adminActivityStats).catch(reportAdminActivityChartFailure);
+      }
+    };
+    note.append(" ", retry);
+  }
+  toast(T('activityChartLoadFailed'), 3500);
+}
+
 /* R-A (v1.3.0): the donation/pricing/review panel code is shared between
  * the admin site (/api/admin/...) and the level-4/5 user site
  * (/api/me/...). _coAdminMode selects the endpoint prefix; the user site
@@ -99,12 +144,18 @@ function onThemeChanged() {
   if (_adminLogStats && adminLogsTabVisible()) {
     renderAdminLogCharts(_adminLogStats).catch(reportAdminLogChartFailure);
   }
+  if (_adminActivityStats && adminActivityTabVisible()) {
+    renderAdminActivityCharts(_adminActivityStats).catch(reportAdminActivityChartFailure);
+  }
 }
 
 /* ---------------- admin site: login ---------------- */
 function renderAdminLogin() {
   destroyAdminLogCharts();
+  destroyAdminActivityCharts();
+  _adminActivityRequestGate.invalidate();
   _adminLogStats = null;
+  _adminActivityStats = null;
   $("#nav-user").textContent = "";
   $("#app").innerHTML = `
     <article class="card" style="max-width:24rem;margin:4rem auto">
@@ -161,6 +212,7 @@ function switchAdminTab(tab) {
     const inits = {
       users: initAdminUsersTab,
       levels: initAdminLevelsTab,
+      activity: initAdminActivityTab,
       logs: initAdminLogsTab,
       donations: initAdminDonationsTab,
       alerts: initAdminAlertsTab,
@@ -180,6 +232,10 @@ function switchAdminTab(tab) {
     // A chart hidden by another tab can have a stale zero-sized layout.
     if (_adminLogCharts.length > 0) resizeAdminLogCharts();
     else if (_adminLogStats) renderAdminLogCharts(_adminLogStats).catch(reportAdminLogChartFailure);
+  } else if (tab === "activity") {
+    // Returning to a hidden Chart only repairs its layout; data and Chart
+    // instances are not recreated until the range, console toggle, or theme changes.
+    resizeAdminActivityCharts();
   }
 }
 
@@ -291,17 +347,23 @@ function initAdminBulletinsTab() {
 /* ---------------- admin site: dashboard ---------------- */
 async function renderAdminDashboard() {
   destroyAdminLogCharts();
+  destroyAdminActivityCharts();
+  _adminActivityRequestGate.invalidate();
   _adminLogStats = null;
+  _adminActivityStats = null;
+  _adminActivityRangeDays = 28;
+  _adminActivityShowConsole = true;
   _coAdminMode = "admin";
   _allLogsMode = "admin";
   $("#nav-user").innerHTML = `${esc(state.me.username)} · <a href="#" id="logout">${T('logout')}</a>`;
   bindLogout("#logout");
 
   // Tab navigation bar
-  const tabs = ["settings", "antiabuse", "users", "levels", "logs", "donations", "alerts", "bulletins"];
+  const tabs = ["settings", "antiabuse", "users", "levels", "activity", "logs", "donations", "alerts", "bulletins"];
   const tabLabels = {
     settings: T('adminTabSettings'), antiabuse: T('adminTabAntiAbuse'), users: T('adminTabUsers'),
     levels: T('adminTabLevels'),
+    activity: T('adminTabActivity'),
     logs: T('adminTabLogs'), donations: T('adminTabDonations'), alerts: T('adminTabAlerts'),
     bulletins: T('adminTabBulletins'),
   };
@@ -450,6 +512,55 @@ async function renderAdminDashboard() {
           <div id="level-settings-msg"></div>
           <button type="submit">${T('save')}</button>
         </form>
+      </section>
+    </div>
+
+    <!-- Activity tab -->
+    <div id="tab-activity" class="admin-tab-content" style="display:none">
+      <section class="card" id="activity-panel" aria-busy="false">
+        <div class="activity-heading">
+          <div>
+            <h3>${T('activityTitle')}</h3>
+            <p class="muted">${T('activityRetentionNote')}</p>
+          </div>
+          <div class="row-actions activity-ranges" role="group" aria-label="${esc(T('activityRangeLabel'))}">
+            ${D2AActivity.RANGE_DAYS.map((days) => `<button type="button" class="secondary outline activity-range" data-days="${days}" aria-pressed="${days === 28}">${T('activityRangeDays').replace('{n}', String(days))}</button>`).join("")}
+          </div>
+        </div>
+        <div id="activity-status" role="status" aria-live="polite"></div>
+        <div id="activity-content" style="display:none">
+          <div id="activity-summary-cards" class="activity-summary-cards"></div>
+          <div class="activity-chart-toolbar">
+            <h4>${T('activityTrendTitle')}</h4>
+            <label><input id="activity-console-toggle" type="checkbox" role="switch" checked> ${T('activityShowConsole')}</label>
+          </div>
+          <div id="activity-empty" class="note info" style="display:none" role="status">${T('activityNoReportableData')}</div>
+          <div id="activity-chart-area" class="activity-chart-grid">
+            <div class="activity-chart">
+              <canvas id="activity-users-chart" role="img" aria-label="${esc(T('activityUsersChartAria'))}" aria-describedby="activity-chart-summary">${esc(T('activityUsersChartAria'))}</canvas>
+            </div>
+            <div class="activity-chart">
+              <canvas id="activity-requests-chart" role="img" aria-label="${esc(T('activityRequestsChartAria'))}" aria-describedby="activity-chart-summary">${esc(T('activityRequestsChartAria'))}</canvas>
+            </div>
+          </div>
+          <p id="activity-chart-error" class="note warn" style="display:none"></p>
+          <p id="activity-chart-summary" class="sr-only" aria-live="polite"></p>
+          <h4>${T('activityDailyTableTitle')}</h4>
+          <div class="table-wrap"><table>
+            <thead><tr>
+              <th scope="col">${T('activityDayUTC')}</th>
+              <th scope="col">${T('activityNewUsers')}</th>
+              <th scope="col">${T('activityProductActive')}</th>
+              <th scope="col">${T('activitySuccessfulAPIActive')}</th>
+              <th scope="col">${T('activityAttemptedAPIActive')}</th>
+              <th scope="col">${T('activityConsoleActive')}</th>
+              <th scope="col">${T('activityAPIAttempts')}</th>
+              <th scope="col">${T('activityAPISuccesses')}</th>
+              <th scope="col">${T('activitySuccessRate')}</th>
+            </tr></thead>
+            <tbody id="activity-rows"></tbody>
+          </table></div>
+        </div>
       </section>
     </div>
 
@@ -1290,6 +1401,246 @@ async function renderAdminLogCharts(stats) {
     },
   });
   _adminLogCharts.push(dayChart);
+}
+
+/* ---------------- admin site: activity analytics ---------------- */
+function activityLocale() {
+  return currentLang === "zh" ? "zh-CN" : "en-US";
+}
+
+function formatActivityCount(value) {
+  const state = D2AActivity.valueState(value);
+  return state.available
+    ? new Intl.NumberFormat(activityLocale()).format(state.value)
+    : T('activitySuppressed');
+}
+
+function formatActivityRate(successes, attempts) {
+  const rate = D2AActivity.successRate(successes, attempts);
+  if (rate == null) return T('activityUnavailable');
+  return new Intl.NumberFormat(activityLocale(), {
+    style: "percent",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 1,
+  }).format(rate);
+}
+
+function activityUTCDate(day) {
+  const date = new Date(Number(day) * 1000);
+  return Number.isNaN(date.getTime()) ? T('activityUnavailable') : date.toISOString().slice(0, 10);
+}
+
+function updateActivityRangeButtons() {
+  document.querySelectorAll(".activity-range").forEach((button) => {
+    const selected = Number(button.dataset.days) === _adminActivityRangeDays;
+    button.setAttribute("aria-pressed", selected ? "true" : "false");
+    button.classList.toggle("contrast", selected);
+    button.classList.toggle("outline", !selected);
+  });
+}
+
+function renderActivityLoading() {
+  const panel = $("#activity-panel");
+  if (panel) panel.setAttribute("aria-busy", "true");
+  $("#activity-content").style.display = "none";
+  $("#activity-status").innerHTML = `<p class="muted">${T('loading')}</p>`;
+}
+
+function bindActivityRetry() {
+  const retry = $("#activity-retry");
+  if (!retry) return;
+  retry.onclick = async () => {
+    try {
+      if (await loadAdminActivity()) _adminTabLoaded.activity = true;
+    } catch (_) { /* the retryable inline error remains visible */ }
+  };
+}
+
+function renderActivityError(err) {
+  const panel = $("#activity-panel");
+  if (panel) panel.setAttribute("aria-busy", "false");
+  $("#activity-content").style.display = "none";
+  $("#activity-status").innerHTML = `
+    <div class="note err">
+      <p>${esc(T('activityLoadFailed').replace('{msg}', err?.message || T('activityUnavailable')))}</p>
+      <button type="button" id="activity-retry" class="secondary">${T('retry')}</button>
+    </div>`;
+  bindActivityRetry();
+}
+
+function activitySummaryCard(label, value, hint = "") {
+  return `<article class="activity-metric">
+    <span class="muted">${esc(label)}</span>
+    <strong>${esc(value)}</strong>
+    ${hint ? `<small class="muted">${esc(hint)}</small>` : ""}
+  </article>`;
+}
+
+function renderActivitySummary(stats) {
+  const summary = stats.summary || {};
+  const activation = stats.activation || {};
+  const activationRate = formatActivityRate(
+    activation.first_success_within_7d,
+    activation.eligible_registrations
+  );
+  $("#activity-summary-cards").innerHTML = [
+    activitySummaryCard(T('activityTodayDAU'), formatActivityCount(summary.dau)),
+    activitySummaryCard(T('activity7DayWAU'), formatActivityCount(summary.wau)),
+    activitySummaryCard(T('activity28DAU'), formatActivityCount(summary.active_28d)),
+    activitySummaryCard(T('activity28DayEngaged'), formatActivityCount(summary.engaged_28d)),
+    activitySummaryCard(T('activityRegisteredTotal'), formatActivityCount(summary.registered_total)),
+    activitySummaryCard(T('activity7DayActivationRate'), activationRate, T('activityActivationHint')),
+  ].join("");
+}
+
+function renderActivityTable(rows) {
+  $("#activity-rows").innerHTML = rows.length ? rows.map((row) => `
+    <tr>
+      <th scope="row" class="mono">${activityUTCDate(row.day)}</th>
+      <td>${formatActivityCount(row.new_users)}</td>
+      <td>${formatActivityCount(row.product_active)}</td>
+      <td>${formatActivityCount(row.successful_api_active)}</td>
+      <td>${formatActivityCount(row.attempted_api_active)}</td>
+      <td>${formatActivityCount(row.console_active)}</td>
+      <td>${formatActivityCount(row.api_attempts)}</td>
+      <td>${formatActivityCount(row.api_successes)}</td>
+      <td>${formatActivityRate(row.api_successes, row.api_attempts)}</td>
+    </tr>`).join("") : `<tr><td colspan="9" class="muted">${T('empty')}</td></tr>`;
+}
+
+function renderActivityData(stats) {
+  const panel = $("#activity-panel");
+  if (panel) panel.setAttribute("aria-busy", "false");
+  $("#activity-status").innerHTML = "";
+  $("#activity-content").style.display = "";
+  $("#activity-chart-error").style.display = "none";
+  const rows = Array.isArray(stats.by_day) ? stats.by_day : [];
+  renderActivitySummary(stats);
+  renderActivityTable(rows);
+  const reportable = D2AActivity.hasReportableData(rows);
+  $("#activity-empty").style.display = reportable ? "none" : "";
+  $("#activity-chart-summary").textContent = T('activityChartSummary')
+    .replace('{n}', String(rows.length))
+    .replace('{range}', T('activityRangeDays').replace('{n}', String(_adminActivityRangeDays)));
+  if (!reportable) {
+    destroyAdminActivityCharts();
+    $("#activity-chart-area").style.display = "none";
+    return;
+  }
+  $("#activity-chart-area").style.display = "";
+  renderAdminActivityCharts(stats).catch(reportAdminActivityChartFailure);
+}
+
+async function loadAdminActivity() {
+  const requestToken = _adminActivityRequestGate.begin();
+  destroyAdminActivityCharts();
+  updateActivityRangeButtons();
+  renderActivityLoading();
+  const range = D2AActivity.rangeForDays(_adminActivityRangeDays);
+  try {
+    const stats = await api(`/api/admin/activity/stats?since=${range.since}&until=${range.until}`);
+    if (!_adminActivityRequestGate.isCurrent(requestToken)) return false;
+    if (stats?.timezone !== "UTC") throw new Error(T('activityTimezoneInvalid'));
+    _adminActivityStats = stats;
+    renderActivityData(stats);
+    return true;
+  } catch (err) {
+    if (!_adminActivityRequestGate.isCurrent(requestToken)) return false;
+    _adminActivityStats = null;
+    renderActivityError(err);
+    throw err;
+  }
+}
+
+async function initAdminActivityTab() {
+  updateActivityRangeButtons();
+  document.querySelectorAll(".activity-range").forEach((button) => {
+    button.onclick = async () => {
+      const days = Number(button.dataset.days);
+      if (!D2AActivity.RANGE_DAYS.includes(days) || days === _adminActivityRangeDays) return;
+      _adminActivityRangeDays = days;
+      try { await loadAdminActivity(); } catch (_) { /* inline retry state */ }
+    };
+  });
+  const consoleToggle = $("#activity-console-toggle");
+  consoleToggle.checked = _adminActivityShowConsole;
+  consoleToggle.onchange = () => {
+    _adminActivityShowConsole = consoleToggle.checked;
+    if (_adminActivityStats) {
+      renderAdminActivityCharts(_adminActivityStats).catch(reportAdminActivityChartFailure);
+    }
+  };
+  await loadAdminActivity();
+}
+
+async function renderAdminActivityCharts(stats) {
+  destroyAdminActivityCharts();
+  const generation = _adminActivityChartGate.begin();
+  const ChartJS = await loadChartJS();
+  const usersCanvas = $("#activity-users-chart");
+  const requestsCanvas = $("#activity-requests-chart");
+  if (!_adminActivityChartGate.isCurrent(generation) || !usersCanvas || !requestsCanvas) return;
+
+  const rows = Array.isArray(stats.by_day) ? stats.by_day : [];
+  if (!D2AActivity.hasReportableData(rows)) return;
+  const labels = rows.map((row) => activityUTCDate(row.day));
+  const rootStyle = getComputedStyle(document.documentElement);
+  const textColor = rootStyle.getPropertyValue("--pico-muted-color").trim() || "#666";
+  const gridColor = rootStyle.getPropertyValue("--pico-muted-border-color").trim() || "#ccc";
+  const tickSize = window.innerWidth <= 480 ? 9 : 11;
+  const commonOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: "index", intersect: false },
+    plugins: {
+      legend: { position: "bottom", labels: { color: textColor } },
+      tooltip: { mode: "index", intersect: false },
+    },
+  };
+  const axes = (title) => ({
+    x: { ticks: { color: textColor, font: { size: tickSize }, maxTicksLimit: isNarrowScreen() ? 6 : 12 }, grid: { display: false } },
+    y: { beginAtZero: true, ticks: { color: textColor, precision: 0, font: { size: tickSize } }, grid: { color: gridColor }, title: { display: true, text: title, color: textColor } },
+  });
+  const userDatasets = [
+    { label: T('activityProductActive'), data: rows.map((row) => row.product_active), borderColor: "#4a7ddb", backgroundColor: "#4a7ddb", spanGaps: false },
+    { label: T('activitySuccessfulAPIActive'), data: rows.map((row) => row.successful_api_active), borderColor: "#1a7f1a", backgroundColor: "#1a7f1a", spanGaps: false },
+    { label: T('activityAttemptedAPIActive'), data: rows.map((row) => row.attempted_api_active), borderColor: "#d9822b", backgroundColor: "#d9822b", spanGaps: false },
+  ];
+  if (_adminActivityShowConsole) {
+    userDatasets.push({ label: T('activityConsoleActive'), data: rows.map((row) => row.console_active), borderColor: "#8f5bb7", backgroundColor: "#8f5bb7", spanGaps: false });
+  }
+
+  const created = [];
+  try {
+    created.push(new ChartJS(usersCanvas, {
+      type: "line",
+      data: { labels, datasets: userDatasets },
+      options: { ...commonOptions, scales: axes(T('activityDistinctUsersAxis')) },
+    }));
+    created.push(new ChartJS(requestsCanvas, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [
+          { label: T('activityAPIAttempts'), data: rows.map((row) => row.api_attempts), borderColor: "#d9822b", backgroundColor: "#d9822b", spanGaps: false },
+          { label: T('activityAPISuccesses'), data: rows.map((row) => row.api_successes), borderColor: "#1a7f1a", backgroundColor: "#1a7f1a", spanGaps: false },
+        ],
+      },
+      options: { ...commonOptions, scales: axes(T('activityRequestsAxis')) },
+    }));
+  } catch (err) {
+    for (const chart of created) {
+      try { chart.destroy(); } catch (_) {}
+    }
+    throw err;
+  }
+  if (!_adminActivityChartGate.isCurrent(generation)) {
+    for (const chart of created) chart.destroy();
+    return;
+  }
+  usersCanvas.setAttribute("aria-label", T('activityUsersChartAria'));
+  requestsCanvas.setAttribute("aria-label", T('activityRequestsChartAria'));
+  _adminActivityCharts.replace(created);
 }
 
 /* ---------------- admin site: alert center ---------------- */
