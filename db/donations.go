@@ -289,18 +289,22 @@ func (s *Store) PatchDonation(id int64, patch DonationPatch) (*DonationPatchResu
 			return nil, &DonationPatchError{DonationID: id, Kind: DonationPatchInvalid, Message: "status must be active or inactive"}
 		}
 	}
+	// Activation gate: only a transition into active requires a pricing row to
+	// exist. The enabled flag is a listing toggle (models disappear from the
+	// user-facing charity list when disabled), not an activation gate, and the
+	// status endpoint applies the same row-exists semantics. Editing an
+	// already-active donation must therefore not be blocked by a disabled or
+	// deleted pricing row.
 	if current.Status != DonationActive && updated.Status == DonationActive {
 		updated.ConsecutiveFailures = 0
-	}
-	if updated.Status == DonationActive {
-		var enabled int
+		var n int
 		if err := tx.QueryRow(
-			`SELECT COUNT(1) FROM charity_pricing WHERE service=? AND model=? AND enabled=1`,
+			`SELECT COUNT(1) FROM charity_pricing WHERE service=? AND model=?`,
 			updated.Service, updated.Model,
-		).Scan(&enabled); err != nil {
-			return nil, fmt.Errorf("check enabled pricing: %w", err)
+		).Scan(&n); err != nil {
+			return nil, fmt.Errorf("check pricing row: %w", err)
 		}
-		if enabled == 0 {
+		if n == 0 {
 			return nil, &DonationPatchError{
 				DonationID: id, Kind: DonationPatchPricingAbsent,
 				Service: updated.Service, Model: updated.Model,

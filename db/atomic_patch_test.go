@@ -158,6 +158,57 @@ func TestPatchDonation_ValidationAndMissingReviewRollback(t *testing.T) {
 	}
 }
 
+// v1.3.2 M2: editing an already-active donation must succeed even when its
+// pricing row is disabled. The activation gate only applies to transitions
+// into active and only requires the pricing row to exist (aligned with the
+// status endpoint); the enabled flag is a listing toggle, not an activation
+// gate.
+func TestPatchDonation_ActiveEditWithDisabledPricing(t *testing.T) {
+	st, _ := openTemp(t)
+	donation := seedS2Donation(t, st, "patch-active-edit", DonationInactive, "original")
+
+	// Pricing row exists but is disabled.
+	if _, err := st.UpsertPricing("general", donation.Model, 10, rewardPtr(5)); err != nil {
+		t.Fatalf("upsert pricing: %v", err)
+	}
+	if err := st.SetPricingEnabled("general", donation.Model, false); err != nil {
+		t.Fatalf("disable pricing: %v", err)
+	}
+
+	// Activation with a disabled pricing row is allowed (row-exists semantics).
+	result, err := st.PatchDonation(donation.ID, DonationPatch{Status: s2String(DonationActive)})
+	if err != nil {
+		t.Fatalf("activate with disabled pricing: %v", err)
+	}
+	if result.Donation.Status != DonationActive {
+		t.Fatalf("status = %q, want active", result.Donation.Status)
+	}
+
+	// Editing the active donation (no status in patch) must succeed.
+	result, err = st.PatchDonation(donation.ID, DonationPatch{Note: s2String("changed")})
+	if err != nil {
+		t.Fatalf("edit active donation with disabled pricing: %v", err)
+	}
+	if result.Donation.Note != "changed" {
+		t.Fatalf("note = %q, want changed", result.Donation.Note)
+	}
+
+	// Deactivating and re-activating with no pricing row is rejected again
+	// (row-exists gate still guards transitions into active). DeletePricing
+	// refuses while donations exist, so simulate the absent row directly.
+	if _, err := st.PatchDonation(donation.ID, DonationPatch{Status: s2String(DonationInactive)}); err != nil {
+		t.Fatalf("deactivate: %v", err)
+	}
+	if _, err := st.RawExec(`DELETE FROM charity_pricing WHERE service=? AND model=?`, "general", donation.Model); err != nil {
+		t.Fatalf("delete pricing row: %v", err)
+	}
+	_, err = st.PatchDonation(donation.ID, DonationPatch{Status: s2String(DonationActive)})
+	var patchErr *DonationPatchError
+	if !errors.As(err, &patchErr) || patchErr.Kind != DonationPatchPricingAbsent {
+		t.Fatalf("reactivate without pricing row: err=%v, want DonationPatchPricingAbsent", err)
+	}
+}
+
 func TestPatchDonation_FailureInjectionRollsBack(t *testing.T) {
 	t.Run("donation write", func(t *testing.T) {
 		st, _ := openTemp(t)
