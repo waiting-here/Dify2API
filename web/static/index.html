@@ -7,24 +7,178 @@
 <title>Dify2API</title>
 <link rel="stylesheet" href="/static/pico.min.css">
 <style>
-  :root { --brand: #4a7ddb; }
-  body > nav { border-bottom: 1px solid var(--pico-muted-border-color); padding: .5rem 1rem; display: flex; justify-content: space-between; align-items: center; }
-  body > nav .logo { font-weight: 700; color: var(--brand); }
+  /* ============================================================
+     「清爽 SaaS」纯 CSS 换肤层（v1.3.2 M1）
+     设计令牌集中在 :root / [data-theme=dark]，覆盖对应 --pico-* 变量；
+     不改 DOM 结构、不改 JS、不改 Pico 文件本身。
+     结构规则（.table-wrap 横滑、.row-actions、.tab-nav flex、媒体查询）
+     保持原有职责，皮肤层只覆盖视觉并补增量修复（R1/R2/R3）。
+     ============================================================ */
+
+  /* ---------------- 设计令牌（浅色为默认） ---------------- */
+  :root {
+    /* 品牌主色：清爽蓝（Stripe 系），含 hover/focus 派生 */
+    --brand: #2563eb;
+    --brand-hover: #1d4ed8;
+    --brand-soft: #eff4ff;          /* 主色浅底（选中态/强调背景） */
+    --brand-border: #c7d8fb;
+
+    /* 中性阶（背景 / 卡片 / 边框 / 文字） */
+    --bg: #f4f6fb;                  /* 页面背景：微冷灰，衬出白卡 */
+    --surface: #ffffff;             /* 卡片/面板 */
+    --surface-2: #f8fafc;           /* 次级填充（表头/输入框底） */
+    --border: #e6eaf2;              /* 默认边框：更柔 */
+    --border-strong: #d4dbe8;
+    --text: #1f2937;
+    --text-muted: #6b7280;
+
+    /* 状态色（徽章/提示，柔和低饱和） */
+    --ok-bg: #e7f7ee;    --ok-fg: #15803d;
+    --warn-bg: #fdf4e0;  --warn-fg: #b45309;
+    --err-bg: #fdeaea;   --err-fg: #c03636;
+    --info-bg: #e9f1fe;  --info-fg: #1d4ed8;
+    --off-bg: #eef1f6;   --off-fg: #64748b;
+
+    /* 形状与层次 */
+    --radius: 12px;
+    --radius-sm: 8px;
+    --shadow-sm: 0 1px 2px rgba(16, 24, 40, .05);
+    --shadow-md: 0 4px 16px -4px rgba(16, 24, 40, .08), 0 2px 6px -2px rgba(16, 24, 40, .05);
+    --shadow-lg: 0 12px 32px -8px rgba(16, 24, 40, .16);
+
+    /* 字体：层级靠字重与字号，不引入新字体 */
+    --font: var(--pico-font-family-sans-serif);
+
+    /* 覆盖 Pico 变量，让框架组件跟随主题 */
+    --pico-font-family: var(--font);
+    /* 页面底色由 <html> 承载；光晕的透明边缘落回同一 --bg，避免长页面露出浏览器画布。 */
+    --pico-background-color: var(--bg);
+    --pico-color: var(--text);
+    --pico-muted-color: var(--text-muted);
+    --pico-muted-border-color: var(--border);
+    --pico-border-radius: var(--radius);
+    --pico-card-background-color: var(--surface);
+    --pico-card-border-color: var(--border);
+    --pico-card-box-shadow: var(--shadow-sm);
+    --pico-primary: var(--brand);
+    --pico-primary-background: var(--brand);
+    --pico-primary-border: var(--brand);
+    --pico-primary-hover-background: var(--brand-hover);
+    --pico-primary-hover-border: var(--brand-hover);
+    --pico-primary-focus: rgba(37, 99, 235, .28);
+    --pico-primary-inverse: #fff;
+    --pico-form-element-background-color: var(--surface);
+    --pico-form-element-border-color: var(--border-strong);
+    --pico-form-element-focus-color: var(--brand);
+  }
+
+  /* ---------------- 深色主题（同一套令牌换值） ---------------- */
+  /* Pico 的暗色有两条等效路径，本层令牌必须同时覆盖（auto=null 时走
+     prefers-color-scheme 媒体查询，其 :root:not([data-theme]) 优先级 0-1-1 高于
+     :root，且 Pico 后声明——不加此规则则 auto 模式下会拿到 Pico 默认色）：
+       1) 声明式：[data-theme=dark]（用户显式选深色）
+       2) 媒体查询：@media (prefers-color-scheme: dark) 且根元素无 data-theme（auto）*/
+  [data-theme="dark"] {
+    --brand: #5b8cff;
+    --brand-hover: #7ba2ff;
+    --brand-soft: #1a2540;
+    --brand-border: #2c3d63;
+
+    --bg: #0f1420;
+    --surface: #171d2e;
+    --surface-2: #1d2438;
+    --border: #262f47;
+    --border-strong: #333e5e;
+    --text: #e6eaf2;
+    --text-muted: #93a0b8;
+
+    --ok-bg: #123324;    --ok-fg: #4ade80;
+    --warn-bg: #352a12;  --warn-fg: #fbbf24;
+    --err-bg: #3a1a1a;   --err-fg: #f87171;
+    --info-bg: #16233f;  --info-fg: #7ba2ff;
+    --off-bg: #232a3d;   --off-fg: #93a0b8;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, .4);
+    --shadow-md: 0 4px 16px -4px rgba(0, 0, 0, .5);
+    --shadow-lg: 0 12px 32px -8px rgba(0, 0, 0, .6);
+    --pico-background-color: var(--bg);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) {
+      --brand: #5b8cff;
+      --brand-hover: #7ba2ff;
+      --brand-soft: #1a2540;
+      --brand-border: #2c3d63;
+
+      --bg: #0f1420;
+      --surface: #171d2e;
+      --surface-2: #1d2438;
+      --border: #262f47;
+      --border-strong: #333e5e;
+      --text: #e6eaf2;
+      --text-muted: #93a0b8;
+
+      --ok-bg: #123324;    --ok-fg: #4ade80;
+      --warn-bg: #352a12;  --warn-fg: #fbbf24;
+      --err-bg: #3a1a1a;   --err-fg: #f87171;
+      --info-bg: #16233f;  --info-fg: #7ba2ff;
+      --off-bg: #232a3d;   --off-fg: #93a0b8;
+
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, .4);
+      --shadow-md: 0 4px 16px -4px rgba(0, 0, 0, .5);
+      --shadow-lg: 0 12px 32px -8px rgba(0, 0, 0, .6);
+      --pico-background-color: var(--bg);
+    }
+  }
+
+  /* ---------------- 全局基底（顶部品牌光晕 + 抗锯齿） ---------------- */
+  /* 光晕画在始终铺满页面的 <html>；透明边缘回落到 --bg，长短页面都不会露出画布。 */
+  html {
+    background-color: var(--bg);
+    background-image:
+      radial-gradient(1200px 600px at 70% -10%, rgba(37, 99, 235, .06), transparent 60%);
+  }
+  html[data-theme="dark"] {
+    background-image:
+      radial-gradient(1200px 600px at 70% -10%, rgba(91, 140, 255, .10), transparent 60%);
+  }
+  @media (prefers-color-scheme: dark) {
+    html:not([data-theme]) {
+      background-image:
+        radial-gradient(1200px 600px at 70% -10%, rgba(91, 140, 255, .10), transparent 60%);
+    }
+  }
+  body {
+    font-family: var(--font);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+
+/* ---------------- 顶部导航：毛玻璃 + 细分隔线 ---------------- */
+  body > nav { border-bottom: 1px solid var(--border); padding: .65rem 1.25rem; display: flex; justify-content: space-between; align-items: center;
+    background: color-mix(in srgb, var(--surface) 82%, transparent);
+    backdrop-filter: saturate(1.4) blur(8px);
+    box-shadow: var(--shadow-sm);
+  }
+  body > nav .logo { font-weight: 800; font-size: 1.15rem; letter-spacing: -.01em; color: var(--brand); }
   /* Wide-screen friendly: use most of the viewport on desktop instead of
      a fixed 960px column (tables like the admin request log need room). */
   main.container { max-width: 1440px; width: 96%; }
-  .card { border: 1px solid var(--pico-muted-border-color); border-radius: .5rem; padding: 1rem 1.25rem; margin-bottom: 1.25rem; }
-  .card h3 { margin-top: 0; }
+  /* ---------------- 卡片：柔和投影 + 大圆角 + 悬停浮起 ---------------- */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm); padding: 1.5rem 1.5rem; margin-bottom: 1.25rem; transition: box-shadow .18s ease, transform .18s ease; }
+  .card:hover { box-shadow: var(--shadow-md); }
+  .card h3 { margin-top: 0; font-size: 1.05rem; font-weight: 700; letter-spacing: -.01em; }
   /* Tables scroll horizontally inside their card instead of overflowing it. */
   .card .table-wrap { overflow-x: auto; }
   .card .table-wrap > table { margin-bottom: 0; }
   table td, table th { white-space: nowrap; }
   table td.wrap, table th.wrap { white-space: normal; }
-  .badge { display: inline-block; padding: .1rem .5rem; border-radius: 1rem; font-size: .8rem; }
-  .badge.ok { background: #e6f6e6; color: #1a7f1a; }
-  .badge.warn { background: #fdf3d8; color: #8a6d00; }
-  .badge.err { background: #fde6e6; color: #b02020; }
-  .badge.off { background: #eee; color: #666; }
+  /* ---------------- 徽章：药丸 + 柔和低饱和 ---------------- */
+  .badge { display: inline-block; padding: .1rem .5rem; border-radius: 999px; font-size: .8rem; font-weight: 600; letter-spacing: .01em; }
+  .badge.ok { background: var(--ok-bg); color: var(--ok-fg); }
+  .badge.warn { background: var(--warn-bg); color: var(--warn-fg); }
+  .badge.err { background: var(--err-bg); color: var(--err-fg); }
+  .badge.off { background: var(--off-bg); color: var(--off-fg); }
   table td, table th { vertical-align: middle; }
   .mono { font-family: ui-monospace, monospace; font-size: .9em; }
   .row-actions { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; }
@@ -32,40 +186,110 @@
   td .row-actions { flex-wrap: nowrap; }
   .muted { color: var(--pico-muted-color); }
   .sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
-  .note { padding: .6rem .9rem; border-radius: .4rem; margin: .5rem 0; }
-  .note.ok { background: #e6f6e6; }
-  .note.warn { background: #fdf3d8; }
-  .note.err { background: #fde6e6; }
-  .note.info { background: #e8f0fd; }
-  #toast { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%); background: #333; color: #fff; padding: .5rem 1.2rem; border-radius: 2rem; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 99; }
+  /* ---------------- 提示条 note ---------------- */
+  .note { padding: .6rem .9rem; border-radius: var(--radius-sm); margin: .5rem 0; border: 1px solid transparent; }
+  .note.ok { background: var(--ok-bg); border-color: color-mix(in srgb, var(--ok-fg) 25%, transparent); }
+  .note.warn { background: var(--warn-bg); border-color: color-mix(in srgb, var(--warn-fg) 25%, transparent); }
+  .note.err { background: var(--err-bg); border-color: color-mix(in srgb, var(--err-fg) 25%, transparent); }
+  .note.info { background: var(--info-bg); border-color: color-mix(in srgb, var(--info-fg) 25%, transparent); }
+  #toast { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%); background: #333; color: #fff; padding: .5rem 1.2rem; border-radius: 999px; box-shadow: var(--shadow-lg); opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 99; }
   form.inline { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: .5rem; align-items: end; }
   form.inline label { margin: 0; font-size: .85rem; }
   @media (max-width: 800px) { form.inline { grid-template-columns: 1fr; } }
   /* Bulletin board. */
   .bulletin-item { border-left: 4px solid var(--pico-muted-border-color); padding: .6rem .8rem; margin-bottom: .5rem; border-radius: .3rem; background: var(--pico-card-background-color); }
-  .bulletin-item.bull-info { border-left-color: #4a7ddb; }
-  .bulletin-item.bull-warn { border-left-color: #e6a817; }
-  .bulletin-item.bull-imp { border-left-color: #d93535; }
+  .bulletin-item.bull-info { border-left-color: var(--brand); }
+  .bulletin-item.bull-warn { border-left-color: var(--warn-fg); }
+  .bulletin-item.bull-imp { border-left-color: var(--err-fg); }
   .bulletin-item h4 { margin: 0; font-size: 1rem; }
   .bulletin-content img { max-width: 100%; }
-  /* Admin tab navigation.
-     Tabs use flex:1 so they fill the bar evenly on wide screens.
-     min-width (6rem) is enough for the longest label in zh/en
-     ("系统公告" / "Bulletins"). If tabs are added, renamed, or
-     translated into longer labels, review this constant. */
-  .tab-nav { display: flex; gap: .25rem; border-bottom: 2px solid var(--pico-muted-border-color); margin-bottom: 1.25rem; overflow-x: auto; overflow-y: hidden; }
-  .tab-nav .admin-tab { flex: 1 1 auto; min-width: 6rem; padding: .5rem 1rem; border: none; border-radius: .35rem .35rem 0 0; background: none; color: var(--pico-muted-color); cursor: pointer; font-size: .9rem; margin-bottom: -2px; border-bottom: 2px solid transparent; transition: color .15s, border-color .15s; }
-  .tab-nav .admin-tab:hover { color: var(--pico-color); }
-  .tab-nav .admin-tab.active { color: var(--brand); border-bottom-color: var(--brand); font-weight: 600; }
+  /* ---------------- 表格：表头分层 + 斑马纹 + 悬浮行 ---------------- */
+  /* （.table-wrap 容器圆角；结构层保留 横滑 + 窄屏隐藏列 约定） */
+  .table-wrap { border-radius: var(--radius-sm); }
+  table { border-collapse: separate; border-spacing: 0; }
+  table thead th {
+    background: var(--surface-2);
+    color: var(--text-muted);
+    font-size: .78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    border-bottom: 1px solid var(--border-strong);
+    padding: .6rem .75rem;
+  }
+  table tbody tr { transition: background .1s ease; }
+  table tbody tr:nth-child(even) { background: color-mix(in srgb, var(--surface-2) 55%, transparent); }
+  table tbody tr:hover { background: var(--brand-soft); }
+  /* Pico gives body table cells an opaque page background; make them transparent
+     so row-level zebra/hover colors (and full-width empty rows) can show through. */
+  table tbody th, table tbody td { background-color: transparent; }
+  table td { border-bottom: 1px solid var(--border); }
+  /* ---------------- Tab 导航：透明底 + muted 字 + 选中主色下划线 ----------------
+     Admin tab navigation.
+     Tabs use flex so they fill the bar evenly on wide screens
+     （宽屏等宽：basis 0 + grow 1，避免内容长的 tab 更宽、选中加粗再撑宽）。
+     Admin has nine tabs and several long English labels. Give them one
+     readable equal-width floor; narrower viewports use the existing hidden-
+     scrollbar horizontal scroll instead of letting text overlap.
+     R1：保留 overflow-x:auto 但隐藏溢出滚动条（scrollbar-width:none +
+     ::-webkit-scrollbar{display:none}），内容靠横滑而非竖条。 */
+  .tab-nav { display: flex; gap: .25rem; border-bottom: 2px solid var(--border-strong); margin-bottom: 1.25rem; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+  .tab-nav::-webkit-scrollbar { display: none; }
+  /* R2：tab 默认透明底 + muted 字（不被主按钮实心规则盖住）；选中主色
+     下划线 + 加粗。 */
+  .tab-nav .admin-tab { flex: 1 1 0; min-width: 8.5rem; padding: .5rem .6rem; border: none; border-radius: .35rem .35rem 0 0; background: transparent; box-shadow: none; color: var(--text-muted); cursor: pointer; font-size: .8rem; font-weight: 500; margin-bottom: -2px; border-bottom: 2px solid transparent; white-space: nowrap; transition: color .12s ease, background .12s ease, border-color .12s ease; }
+  .tab-nav .admin-tab:hover { color: var(--text); background: color-mix(in srgb, var(--brand-soft) 55%, transparent); }
+  .tab-nav .admin-tab.active { color: var(--brand); background: transparent; border-bottom-color: var(--brand); font-weight: 700; }
   /* Dropdown menu for user table actions. Fixed positioning lets it escape
      the table-wrap overflow clip; admin.js keeps it aligned with its trigger. */
   .dropdown-wrapper { position: relative; display: inline-block; }
   .dropdown-menu { display: none; position: fixed; z-index: 100; background: var(--pico-card-background-color); border: 1px solid var(--pico-muted-border-color); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,.2); min-width: 130px; padding: .25rem 0; }
   .dropdown-menu button:hover { background: var(--pico-primary-hover-background); color: var(--pico-primary-inverse); }
   /* User tab navigation. Same look as admin tabs. */
-  .tab-nav .user-tab { flex: 1 1 auto; min-width: 6rem; padding: .5rem 1rem; border: none; border-radius: .35rem .35rem 0 0; background: none; color: var(--pico-muted-color); cursor: pointer; font-size: .9rem; margin-bottom: -2px; border-bottom: 2px solid transparent; transition: color .15s, border-color .15s; }
-  .tab-nav .user-tab:hover { color: var(--pico-color); }
-  .tab-nav .user-tab.active { color: var(--brand); border-bottom-color: var(--brand); font-weight: 600; }
+  .tab-nav .user-tab { flex: 1 1 0; min-width: 6rem; padding: .5rem 1rem; border: none; border-radius: .35rem .35rem 0 0; background: transparent; box-shadow: none; color: var(--text-muted); cursor: pointer; font-size: .9rem; font-weight: 500; margin-bottom: -2px; border-bottom: 2px solid transparent; white-space: nowrap; transition: color .12s ease, background .12s ease, border-color .12s ease; }
+  .tab-nav .user-tab:hover { color: var(--text); background: color-mix(in srgb, var(--brand-soft) 55%, transparent); }
+  .tab-nav .user-tab.active { color: var(--brand); background: transparent; border-bottom-color: var(--brand); font-weight: 700; }
+  /* ---------------- 按钮：圆润 + 层次 + 主色实心/描边 ----------------
+     主按钮选择器必须排除 tab，否则它们的「无类 button」会被误上实心底，
+     盖住 tab 透明背景。 */
+  button:not(.secondary):not(.contrast):not(.outline):not(.user-tab):not(.admin-tab),
+  input[type=submit] {
+    background: var(--brand);
+    border-color: var(--brand);
+    box-shadow: 0 1px 2px rgba(37, 99, 235, .3);
+  }
+  button:not(.secondary):not(.contrast):not(.outline):not(.user-tab):not(.admin-tab):hover,
+  input[type=submit]:hover {
+    background: var(--brand-hover);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 10px -2px rgba(37, 99, 235, .4);
+  }
+  button, [role=button], input[type=submit] {
+    font-weight: 600;
+    transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
+  }
+  /* 圆角只作用于非 tab 的真实按钮，避免在 tab 上叠出圆角色块。 */
+  button:not(.user-tab):not(.admin-tab), [role=button], input[type=submit] { border-radius: var(--radius-sm); }
+  button.secondary { background: var(--surface-2); border-color: var(--border-strong); color: var(--text); }
+  button.secondary:hover { background: var(--border); }
+  /* ---------------- 表单控件：柔和边框 + 聚焦主色环 ---------------- */
+  input, select, textarea {
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    transition: border-color .12s ease, box-shadow .12s ease;
+  }
+  input:focus, select:focus, textarea:focus {
+    border-color: var(--brand);
+    box-shadow: 0 0 0 3px var(--pico-primary-focus);
+    outline: none;
+  }
+  /* ---------------- 对话框：大圆角 + 深投影 ---------------- */
+  dialog { border-radius: var(--radius); box-shadow: var(--shadow-lg); border: 1px solid var(--border); }
+  /* ---------------- 链接 / 页脚 ---------------- */
+  footer { color: var(--text-muted); }
+  a { color: var(--brand); }
+  a:hover { color: var(--brand-hover); }
   /* Key + data cards above user tabs: side-by-side on small screens. */
   .user-top-cards { display: flex; flex-wrap: wrap; gap: 1.25rem; }
   .user-top-cards > .card { flex: 1 1 16rem; margin-bottom: 1.25rem; }
@@ -73,8 +297,8 @@
      with a lightweight CSS gradient shift (GPU-composited background
      position, no canvas / JS loop), not closable. */
   #level-area { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; margin-bottom: .75rem; }
-  .level-badge { display: inline-flex; align-items: center; padding: .15rem .7rem; border-radius: 1rem; background: var(--pico-primary); color: var(--pico-primary-inverse); font-size: .85rem; font-weight: 600; line-height: 1.5; }
-  .level-banner { flex: 1 1 100%; padding: .6rem 1rem; border-radius: .4rem; border: 1px solid rgba(74,125,219,.45); background: linear-gradient(90deg, rgba(74,125,219,.10) 0%, rgba(74,125,219,.22) 50%, rgba(74,125,219,.10) 100%); background-size: 200% 100%; animation: levelBannerShift 8s linear infinite; font-weight: 600; }
+  .level-badge { display: inline-flex; align-items: center; padding: .15rem .7rem; border-radius: 999px; background: linear-gradient(135deg, var(--brand), var(--brand-hover)); color: var(--pico-primary-inverse); font-size: .85rem; font-weight: 600; line-height: 1.5; box-shadow: 0 2px 6px rgba(37, 99, 235, .35); }
+  .level-banner { flex: 1 1 100%; padding: .6rem 1rem; border-radius: var(--radius-sm); border: 1px solid var(--brand-border); background: linear-gradient(90deg, var(--brand-soft), color-mix(in srgb, var(--brand-soft) 60%, var(--brand-border)), var(--brand-soft)); background-size: 200% 100%; animation: levelBannerShift 8s linear infinite; font-weight: 600; }
   @keyframes levelBannerShift { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
   @media (prefers-reduced-motion: reduce) { .level-banner { animation: none; } }
   /* Admin logs filter grid layout — 3 rows. */
@@ -106,14 +330,28 @@
   .activity-heading, .activity-chart-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .75rem; }
   .activity-heading h3, .activity-heading p, .activity-chart-toolbar h4, .activity-chart-toolbar label { margin-bottom: 0; }
   .activity-summary-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: .75rem; margin: 1rem 0; }
-  .activity-metric { margin: 0; padding: .75rem; border: 1px solid var(--pico-muted-border-color); border-radius: .4rem; background: var(--pico-card-background-color); }
+  /* ---------------- 统计 / KPI 卡：大数字 + 标签 + 悬停浮起 ---------------- */
+  .activity-metric { margin: 0; padding: 1rem 1.25rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-sm); transition: box-shadow .18s ease, transform .18s ease; }
+  .activity-metric:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); }
   .activity-metric span, .activity-metric strong, .activity-metric small { display: block; }
-  .activity-metric strong { font-size: 1.55rem; line-height: 1.3; margin: .2rem 0; }
+  .activity-metric span { color: var(--text-muted); font-size: .82rem; font-weight: 600; }
+  .activity-metric strong { font-size: 1.9rem; line-height: 1.3; margin: .2rem 0; font-weight: 800; letter-spacing: -.02em; color: var(--text); }
+  /* The activation card carries a textual fallback ("Unavailable") plus a hint.
+     Keep that value on one line without shrinking the ordinary numeric KPIs. */
+  @media (min-width: 769px) {
+    .activity-metric:has(> small) { padding-inline: .5rem; }
+    .activity-metric:has(> small) strong { font-size: 1.55rem; overflow-wrap: normal; white-space: nowrap; }
+  }
   .activity-chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; margin: .75rem 0 1rem; }
   .activity-chart { position: relative; min-width: 0; height: 20rem; padding: .5rem; border: 1px solid var(--pico-muted-border-color); border-radius: 4px; }
   .activity-ranges button[aria-pressed="true"] { font-weight: 700; }
   @media (max-width: 800px) {
     #admin-logs-filter { grid-template-columns: 1fr; }
+    /* Reset every explicit desktop grid position; otherwise column 2 remains
+       implicit and pushes the admin log page wider than the phone viewport. */
+    #admin-logs-filter .afl-user, #admin-logs-filter .afl-status,
+    #admin-logs-filter .afl-svc, #admin-logs-filter .afl-model,
+    #admin-logs-filter .afl-since, #admin-logs-filter .afl-until { grid-column: 1; grid-row: auto; }
     #admin-logs-filter .afl-actions { grid-column: 1; grid-row: auto; flex-direction: row; }
     /* The alf-no-user placement rules above must collapse too. */
     #admin-logs-filter.alf-no-user .afl-svc, #admin-logs-filter.alf-no-user .afl-status,
@@ -130,9 +368,12 @@
     .admin-log-chart { height: 16rem; padding: .25rem; }
     .activity-chart { height: 16rem; padding: .25rem; }
     .activity-summary-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .card { padding: .75rem; }
-    body > nav { flex-wrap: wrap; gap: .5rem; padding: .5rem; }
-    .tab-nav .admin-tab, .tab-nav .user-tab { min-width: 4.5rem; padding: .35rem .6rem; font-size: .8rem; }
+    .card { padding: .9rem .9rem; }
+    body > nav { flex-wrap: wrap; gap: .5rem; padding: .5rem .75rem; }
+    /* 窄屏 tab 改自然宽度 + 隐藏式横向滑动（tab 多时可滚），字不再被压缩折行。 */
+    .tab-nav .admin-tab, .tab-nav .user-tab { flex: 0 0 auto; min-width: 0; padding: .45rem .8rem; font-size: .8rem; }
+    .activity-metric { padding: .7rem .9rem; }
+    .activity-metric strong { font-size: 1.55rem; }
     /* Full-screen dialogs so they stay usable & closable on phones. */
     dialog { max-width: 100vw; max-height: 100vh; width: 100%; margin: 0; border-radius: 0; }
     dialog article { max-height: calc(100vh - 2rem); overflow-y: auto; padding: 1rem; }
@@ -144,6 +385,10 @@
     .admin-log-chart { height: 14rem; }
     .activity-chart { height: 14rem; }
     .activity-summary-cards { grid-template-columns: 1fr; }
+    .card { padding: .75rem; }
+    .card h3 { font-size: 1rem; }
+    .activity-metric strong { font-size: 1.4rem; }
+    /* 结构层在 480px 给所有 button 设 44px 触控高度；tab 保持原触控高度即可。 */
     .tab-nav .admin-tab, .tab-nav .user-tab { min-width: auto; padding: .25rem .4rem; font-size: .75rem; }
     body > nav .logo { font-size: .95rem; }
     table td, table th { font-size: .85rem; padding: .4rem .5rem; }
