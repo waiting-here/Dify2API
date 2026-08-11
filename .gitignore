@@ -29,6 +29,7 @@ dify2api.service
 # Local planning docs
 requirements/
 AGENTS.md
+AGENT_BROWSER_NOTES.md
 
 # Local task documents (multi-agent workflow, see AGENTS.md §8)
 tasks/
