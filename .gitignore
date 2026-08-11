@@ -48,3 +48,5 @@ dify2api.exe
 
 # Migration scripts (manual, version-specific, not for git)
 *.sql
+
+tmp/
