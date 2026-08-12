@@ -920,8 +920,16 @@ func (g *Gateway) handlePutAntiAbuse(w http.ResponseWriter, r *http.Request) {
 }
 
 func antiAbuseJSON(c *db.AntiAbuseConfig) map[string]interface{} {
+	deprecated := false
+	for _, service := range translator.SupportedServices() {
+		if service.Name == c.Service {
+			deprecated = service.Deprecated
+			break
+		}
+	}
 	return map[string]interface{}{
 		"service":                c.Service,
+		"deprecated":             deprecated,
 		"mode":                   c.Mode,
 		"min_chars":              c.MinChars,
 		"penalty_deduct_credits": c.PenaltyDeductCredits,

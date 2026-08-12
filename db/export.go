@@ -24,6 +24,48 @@ type ExportBundle struct {
 	Activity             []UserActivityDaily        `json:"user_activity_daily"`
 	DonationApplications []ExportDonationApp        `json:"donation_applications"`
 	CharityReservations  []ExportCharityReservation `json:"charity_reservations"`
+	Games                ExportGamesData            `json:"games"`
+	TemplateDownloads    []ExportServiceGeneration  `json:"template_downloads"`
+}
+
+// ExportServiceGeneration mirrors one service_generations row (mapping
+// included so the user can recover their imported App's variable meaning).
+type ExportServiceGeneration struct {
+	ID            int64  `json:"id"`
+	Service       string `json:"service"`
+	ModelKey      string `json:"model_key"`
+	Purpose       string `json:"purpose"`
+	Seed          string `json:"seed"`
+	MappingJSON   string `json:"mapping_json"`
+	DummyJSON     string `json:"dummy_json"`
+	DummyCount    int    `json:"dummy_count"`
+	DownloadCount int    `json:"download_count"`
+	CreatedAt     int64  `json:"created_at"`
+}
+
+// ExportGamesData is the mini-game portion of an export: the user's game
+// rounds within the rolling retention window, their per-game best catches,
+// and the leaderboard anonymity switch.
+type ExportGamesData struct {
+	LeaderboardAnon bool              `json:"leaderboard_anon"`
+	Rounds          []ExportGameRound `json:"rounds"`
+	Best            []GameBestRow     `json:"best"`
+}
+
+// ExportGameRound mirrors one game_rounds row.
+type ExportGameRound struct {
+	ID         string `json:"id"`
+	GameID     string `json:"game_id"`
+	BaitTier   string `json:"bait_tier"`
+	Price      int    `json:"price"`
+	Status     string `json:"status"`
+	SpeciesKey string `json:"species_key"`
+	SizeCM     int    `json:"size_cm"`
+	IsJunk     bool   `json:"is_junk"`
+	IsTreasure bool   `json:"is_treasure"`
+	CreditsWon int    `json:"credits_won"`
+	CreatedAt  int64  `json:"created_at"`
+	SettledAt  int64  `json:"settled_at"`
 }
 
 // ExportUser mirrors the users row without internal sentinel fields.
@@ -46,6 +88,8 @@ type ExportUser struct {
 	DonationCredit int    `json:"donation_credit"`
 	CharityEnabled bool   `json:"charity_enabled"`
 	Lang           string `json:"lang"`
+	// LeaderboardAnon hides the username on game leaderboards.
+	LeaderboardAnon bool `json:"leaderboard_anon"`
 	// Level is the manual level override (null = automatic). EffectiveLevel
 	// is the lazily computed effective level 1-5; LevelManual reports whether
 	// it comes from a manual override rather than automatic computation.
@@ -83,6 +127,8 @@ type ExportDonationApp struct {
 	ReviewNote  string `json:"review_note"`
 	DonationID  *int64 `json:"donation_id"`
 	CreatedAt   int64  `json:"created_at"`
+	// MappingJSON is the template variable snapshot (B' services only).
+	MappingJSON string `json:"mapping_json"`
 }
 
 // ExportCharityReservation exposes the user's role in a recent accounting
@@ -206,6 +252,43 @@ func (s *Store) ExportUserData(userID int64) (*ExportBundle, error) {
 	}
 	bundle.Activity = activity
 
+	// Mini-game data: rounds within the rolling retention window, best
+	// catches, and the leaderboard anonymity switch.
+	rounds, err := s.ListGameRounds(userID, 0, time.Now().Unix())
+	if err != nil {
+		return nil, err
+	}
+	bundle.Games.LeaderboardAnon = false
+	if anon, err := s.LeaderboardAnon(userID); err == nil {
+		bundle.Games.LeaderboardAnon = anon
+	}
+	bundle.Games.Rounds = make([]ExportGameRound, 0, len(rounds))
+	for _, r := range rounds {
+		bundle.Games.Rounds = append(bundle.Games.Rounds, ExportGameRound{
+			ID: r.ID, GameID: r.GameID, BaitTier: r.BaitTier, Price: r.Price,
+			Status: r.Status, SpeciesKey: r.SpeciesKey, SizeCM: r.SizeCM,
+			IsJunk: r.IsJunk, IsTreasure: r.IsTreasure, CreditsWon: r.CreditsWon,
+			CreatedAt: r.CreatedAt, SettledAt: r.SettledAt,
+		})
+	}
+	if best, err := s.ListGameBest(userID); err == nil {
+		bundle.Games.Best = best
+	}
+
+	// Template download records (mappings included for portability).
+	gens, err := s.ListServiceGenerations(userID)
+	if err != nil {
+		return nil, err
+	}
+	bundle.TemplateDownloads = make([]ExportServiceGeneration, 0, len(gens))
+	for _, g := range gens {
+		bundle.TemplateDownloads = append(bundle.TemplateDownloads, ExportServiceGeneration{
+			ID: g.ID, Service: g.Service, ModelKey: g.ModelKey, Purpose: g.Purpose, Seed: g.Seed,
+			MappingJSON: g.MappingJSON, DummyJSON: g.DummyJSON, DummyCount: g.DummyCount,
+			DownloadCount: g.DownloadCount, CreatedAt: g.CreatedAt,
+		})
+	}
+
 	// Donation applications with decrypted API keys.
 	apps, err := s.ListApplicationsByUser(userID)
 	if err != nil {
@@ -230,6 +313,7 @@ func (s *Store) ExportUserData(userID int64) (*ExportBundle, error) {
 			Status:      a.Status,
 			ReviewNote:  a.ReviewNote,
 			CreatedAt:   a.CreatedAt,
+			MappingJSON: a.MappingJSON,
 		}
 		if a.ReviewerID.Valid {
 			expApp.ReviewerID = &a.ReviewerID.Int64

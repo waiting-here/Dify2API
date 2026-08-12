@@ -205,6 +205,14 @@ func startCleanupWorker(ctx context.Context, store *db.Store, requestLogInterval
 			if donationErr != nil {
 				log.Printf("[CLEANUP] donations: %v", donationErr)
 			}
+			gameRoundsPurged, gameErr := store.PurgeExpiredGameRounds(now)
+			if gameErr != nil {
+				log.Printf("[CLEANUP] game rounds: %v", gameErr)
+			}
+			generationsPurged, genErr := store.PurgeExpiredServiceGenerations(now)
+			if genErr != nil {
+				log.Printf("[CLEANUP] service generations: %v", genErr)
+			}
 			logsDeleted, alertsDeleted, logErr := store.PurgeExpiredRequestLogs(now)
 			if logErr != nil {
 				log.Printf("[CLEANUP] request logs: %v", logErr)
@@ -217,8 +225,8 @@ func startCleanupWorker(ctx context.Context, store *db.Store, requestLogInterval
 			if reservationErr != nil {
 				log.Printf("[CLEANUP] charity reservations: %v", reservationErr)
 			}
-			log.Printf("[CLEANUP] expired %d donations; purged %d request logs, %d bound alerts, %d sessions, %d charity reservations",
-				donationsExpired, logsDeleted, alertsDeleted, sessionsDeleted, reservationsDeleted)
+			log.Printf("[CLEANUP] expired %d donations; purged %d request logs, %d bound alerts, %d sessions, %d charity reservations, %d game rounds, %d service generations",
+				donationsExpired, logsDeleted, alertsDeleted, sessionsDeleted, reservationsDeleted, gameRoundsPurged, generationsPurged)
 		}
 		select {
 		case <-ctx.Done():

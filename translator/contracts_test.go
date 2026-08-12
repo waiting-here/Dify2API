@@ -91,6 +91,30 @@ func TestTranslateForService_SillyTavern(t *testing.T) {
 	}
 }
 
+func TestServiceRegistryTemplateCapabilities(t *testing.T) {
+	var v1, old200, trimmed *ServiceInfo
+	for i := range serviceRegistry {
+		svc := &serviceRegistry[i]
+		switch svc.Name {
+		case "sillytavern-main-v1":
+			v1 = svc
+		case "sillytavern-main-200":
+			old200 = svc
+		case "sillytavern-main-trimmed":
+			trimmed = svc
+		}
+	}
+	if v1 == nil || !v1.Downloadable || v1.Deprecated {
+		t.Fatalf("v1 capability = %+v", v1)
+	}
+	if old200 == nil || !old200.Deprecated || old200.Downloadable {
+		t.Fatalf("200 capability = %+v", old200)
+	}
+	if trimmed == nil || !trimmed.Deprecated || trimmed.Downloadable {
+		t.Fatalf("trimmed capability = %+v", trimmed)
+	}
+}
+
 func TestTranslateForService_UnknownRejected(t *testing.T) {
 	_, _, err := TranslateForService("general-preview", msgs([2]string{"user", "u"}))
 	if err == nil {

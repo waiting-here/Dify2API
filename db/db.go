@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS users (
 	lang            TEXT NOT NULL DEFAULT '',
 	created_at      INTEGER NOT NULL,
 	updated_at      INTEGER NOT NULL,
-	level           INTEGER
+	level           INTEGER,
+	leaderboard_anon INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -111,6 +112,7 @@ CREATE TABLE IF NOT EXISTS user_activity_daily (
 	api_successes   INTEGER NOT NULL DEFAULT 0,
 	console_actions INTEGER NOT NULL DEFAULT 0,
 	checkins        INTEGER NOT NULL DEFAULT 0,
+	game_rounds     INTEGER NOT NULL DEFAULT 0,
 	updated_at      INTEGER NOT NULL,
 	PRIMARY KEY (day, user_id)
 );
@@ -126,6 +128,7 @@ CREATE TABLE IF NOT EXISTS site_activity_daily (
 	checkin_only_active   INTEGER,
 	api_attempts          INTEGER,
 	api_successes         INTEGER,
+	game_active           INTEGER,
 	wau                   INTEGER,
 	active_28d            INTEGER,
 	engaged_28d           INTEGER,
@@ -234,6 +237,33 @@ CREATE TABLE IF NOT EXISTS charity_pricing (
     PRIMARY KEY (service, model)
 );
 
+CREATE TABLE IF NOT EXISTS game_rounds (
+	id           TEXT PRIMARY KEY,
+	game_id      TEXT NOT NULL DEFAULT 'fishing',
+	user_id      INTEGER NOT NULL,
+	bait_tier    TEXT NOT NULL DEFAULT '',
+	price        INTEGER NOT NULL DEFAULT 0,
+	status       TEXT NOT NULL DEFAULT 'started',
+	species_key  TEXT NOT NULL DEFAULT '',
+	size_cm      INTEGER NOT NULL DEFAULT 0,
+	is_junk      INTEGER NOT NULL DEFAULT 0,
+	is_treasure  INTEGER NOT NULL DEFAULT 0,
+	credits_won  INTEGER NOT NULL DEFAULT 0,
+	created_at   INTEGER NOT NULL,
+	settled_at   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_game_rounds_game_created ON game_rounds(game_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_game_rounds_user_game ON game_rounds(user_id, game_id, created_at);
+
+CREATE TABLE IF NOT EXISTS game_best (
+	user_id     INTEGER NOT NULL REFERENCES users(id),
+	game_id     TEXT NOT NULL DEFAULT 'fishing',
+	species_key TEXT NOT NULL DEFAULT '',
+	size_cm     INTEGER NOT NULL DEFAULT 0,
+	caught_at   INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (user_id, game_id)
+);
+
 CREATE TABLE IF NOT EXISTS service_anti_abuse (
     service                TEXT PRIMARY KEY,
     mode                   INTEGER NOT NULL DEFAULT 2,
@@ -244,6 +274,35 @@ CREATE TABLE IF NOT EXISTS service_anti_abuse (
     created_at             INTEGER NOT NULL DEFAULT 0,
     updated_at             INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS dify_model_configs (
+    model_key           TEXT PRIMARY KEY,
+    display_name        TEXT NOT NULL DEFAULT '',
+    provider            TEXT NOT NULL DEFAULT '',
+    dependency_plugin   TEXT NOT NULL DEFAULT '',
+    dependency_version  TEXT NOT NULL DEFAULT '',
+    dependency_hash     TEXT NOT NULL DEFAULT '',
+    params_json         TEXT NOT NULL DEFAULT '',
+    enabled             INTEGER NOT NULL DEFAULT 1,
+    sort_order          INTEGER NOT NULL DEFAULT 0,
+    manual              INTEGER NOT NULL DEFAULT 0,
+    updated_at          INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS service_generations (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id        INTEGER NOT NULL,
+    service        TEXT NOT NULL DEFAULT '',
+    model_key      TEXT NOT NULL DEFAULT '',
+    purpose        TEXT NOT NULL DEFAULT 'personal',
+    seed           TEXT NOT NULL DEFAULT '',
+    mapping_json   TEXT NOT NULL DEFAULT '',
+    dummy_json     TEXT NOT NULL DEFAULT '[]',
+    dummy_count    INTEGER NOT NULL DEFAULT 0,
+    download_count INTEGER NOT NULL DEFAULT 1,
+    created_at     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sg_user ON service_generations(user_id, service, created_at);
 `
 
 // Store wraps the SQLite handle and the master encryption key.
@@ -303,11 +362,56 @@ func Open(path, keyPath string) (*Store, error) {
 			return nil, fmt.Errorf("migrate users.level: %w", err)
 		}
 	}
+	// v1.4.0 games: per-user leaderboard anonymity switch.
+	if _, err := sqldb.Exec(`ALTER TABLE users ADD COLUMN leaderboard_anon INTEGER NOT NULL DEFAULT 0`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			sqldb.Close()
+			return nil, fmt.Errorf("migrate users.leaderboard_anon: %w", err)
+		}
+	}
+	// v1.4.0 downloadable-template generation metadata.
+	if _, err := sqldb.Exec(`ALTER TABLE service_generations ADD COLUMN dummy_json TEXT NOT NULL DEFAULT '[]'`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			sqldb.Close()
+			return nil, fmt.Errorf("migrate service_generations.dummy_json: %w", err)
+		}
+	}
+	// v1.4.0 B': mapping snapshots for downloadable-template donations.
+	if _, err := sqldb.Exec(`ALTER TABLE donation_applications ADD COLUMN mapping_json TEXT NOT NULL DEFAULT ''`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			sqldb.Close()
+			return nil, fmt.Errorf("migrate donation_applications.mapping_json: %w", err)
+		}
+	}
+	if _, err := sqldb.Exec(`ALTER TABLE donations ADD COLUMN mapping_json TEXT NOT NULL DEFAULT ''`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			sqldb.Close()
+			return nil, fmt.Errorf("migrate donations.mapping_json: %w", err)
+		}
+	}
+	// v1.4.0 games: daily game-round counters (product-activity scope B).
+	if _, err := sqldb.Exec(`ALTER TABLE user_activity_daily ADD COLUMN game_rounds INTEGER NOT NULL DEFAULT 0`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			sqldb.Close()
+			return nil, fmt.Errorf("migrate user_activity_daily.game_rounds: %w", err)
+		}
+	}
+	// v1.4.0 games: site-level daily game-active count (k-anonymity alike).
+	if _, err := sqldb.Exec(`ALTER TABLE site_activity_daily ADD COLUMN game_active INTEGER`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			sqldb.Close()
+			return nil, fmt.Errorf("migrate site_activity_daily.game_active: %w", err)
+		}
+	}
 
 	store := &Store{db: sqldb, key: key}
 	if err := store.initializeActivity(time.Now()); err != nil {
 		sqldb.Close()
 		return nil, fmt.Errorf("initialize activity data: %w", err)
+	}
+	if err := store.SeedModelConfigs(); err != nil {
+		sqldb.Close()
+		return nil, fmt.Errorf("seed model configs: %w", err)
 	}
 	return store, nil
 }

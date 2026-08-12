@@ -32,6 +32,24 @@ func stripV131ActivitySchema(t *testing.T, input string) string {
 	return input[:start] + input[end:]
 }
 
+// stripV140GamesSchema removes the v1.4.0 mini-game additions (game_rounds
+// and game_best tables) so migration fixtures reproduce pre-games databases
+// exactly.
+func stripV140GamesSchema(t *testing.T, input string) string {
+	t.Helper()
+	start := strings.Index(input, "CREATE TABLE IF NOT EXISTS game_rounds")
+	end := strings.Index(input, "CREATE TABLE IF NOT EXISTS service_anti_abuse")
+	if start < 0 || end < 0 || end <= start {
+		t.Fatal("fixture broken: games schema block not found")
+	}
+	input = input[:start] + input[end:]
+	modelStart := strings.Index(input, "CREATE TABLE IF NOT EXISTS dify_model_configs")
+	if modelStart < 0 {
+		t.Fatal("fixture broken: v1.4.0 model schema block not found")
+	}
+	return input[:modelStart]
+}
+
 // TestV120ToV121MigrationCompatibility verifies that a production database
 // created by the v1.2.0 binary opens cleanly with the current code and that
 // the v1.2.1 schema additions (alert_prefs table, donation_selectable
@@ -45,7 +63,7 @@ func TestV120ToV121MigrationCompatibility(t *testing.T) {
 	// schema and remove the v1.2.1 additions (alert_prefs table and the
 	// donation_selectable column) plus the v1.3.0 addition (users.level).
 	// Guards below ensure the removals matched.
-	oldSchema := stripV131ActivitySchema(t, stripV131RuntimeIndexes(t, schema))
+	oldSchema := stripV140GamesSchema(t, stripV131ActivitySchema(t, stripV131RuntimeIndexes(t, schema)))
 	alertPrefsBlock := `
 CREATE TABLE IF NOT EXISTS alert_prefs (
 	event_type     TEXT PRIMARY KEY,
@@ -55,7 +73,7 @@ CREATE TABLE IF NOT EXISTS alert_prefs (
 );
 `
 	donSelLine := "    donation_selectable    INTEGER NOT NULL DEFAULT 1,\n"
-	levelBlock := "updated_at      INTEGER NOT NULL,\n\tlevel           INTEGER\n"
+	levelBlock := "updated_at      INTEGER NOT NULL,\n\tlevel           INTEGER,\n\tleaderboard_anon INTEGER NOT NULL DEFAULT 0\n"
 	if !strings.Contains(oldSchema, alertPrefsBlock) {
 		t.Fatal("fixture broken: alert_prefs block not found in current schema")
 	}
@@ -173,8 +191,8 @@ func TestV121ToV130MigrationCompatibility(t *testing.T) {
 	// 1. Build a database with the EXACT v1.2.1 schema: take the current
 	// schema and remove the v1.3.0 addition (users.level). The guard below
 	// ensures the removal matched.
-	oldSchema := stripV131ActivitySchema(t, stripV131RuntimeIndexes(t, schema))
-	levelBlock := "updated_at      INTEGER NOT NULL,\n\tlevel           INTEGER\n"
+	oldSchema := stripV140GamesSchema(t, stripV131ActivitySchema(t, stripV131RuntimeIndexes(t, schema)))
+	levelBlock := "updated_at      INTEGER NOT NULL,\n\tlevel           INTEGER,\n\tleaderboard_anon INTEGER NOT NULL DEFAULT 0\n"
 	if !strings.Contains(oldSchema, levelBlock) {
 		t.Fatal("fixture broken: users.level block not found in current schema")
 	}

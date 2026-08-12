@@ -39,6 +39,9 @@ type Donation struct {
 	Note                string
 	CreatedAt           int64
 	UpdatedAt           int64
+	// MappingJSON is the canonical->obfuscated variable snapshot for
+	// downloadable-template donations (v1.4.0 B'); empty for regular apps.
+	MappingJSON string
 }
 
 // DonationPatch contains optional donation fields. Nil means that a field was
@@ -126,7 +129,7 @@ func scanDonation(row interface{ Scan(...interface{}) error }) (*Donation, error
 		&d.Deadline, &d.TotalCount, &d.RemainingCount,
 		&d.SuccessCount, &d.FailureCount, &d.ConsecutiveFailures,
 		&d.RpmLimit,
-		&d.Status, &d.Note, &d.CreatedAt, &d.UpdatedAt,
+		&d.Status, &d.Note, &d.CreatedAt, &d.UpdatedAt, &d.MappingJSON,
 	); err != nil {
 		return nil, err
 	}
@@ -166,12 +169,12 @@ func (s *Store) CreateDonation(d *Donation, apiKeyPlain string) (*Donation, erro
 		`INSERT INTO donations (service, model, dify_base_url, dify_api_key_enc, dify_api_key_sha256,
 		 source_user_id, source_discord_id, source_username, source_text,
 		 deadline, total_count, remaining_count, rpm_limit, status, note,
-		 created_at, updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 created_at, updated_at, mapping_json)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		d.Service, d.Model, d.DifyBaseURL, enc, keySHA256,
 		d.SourceUserID, d.SourceDiscordID, d.SourceUsername, d.SourceText,
 		d.Deadline, d.TotalCount, d.TotalCount, rpmLimit, status, d.Note,
-		now, now,
+		now, now, d.MappingJSON,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create donation: %w", err)
@@ -188,7 +191,7 @@ func (s *Store) GetDonation(id int64) (*Donation, error) {
 		 deadline, total_count, remaining_count,
 		 success_count, failure_count, consecutive_failures,
 		 rpm_limit,
-		 status, note, created_at, updated_at
+		 status, note, created_at, updated_at, mapping_json
 		 FROM donations WHERE id=?`, id,
 	))
 	if err == sql.ErrNoRows {
@@ -229,7 +232,7 @@ func (s *Store) PatchDonation(id int64, patch DonationPatch) (*DonationPatchResu
 		 deadline, total_count, remaining_count,
 		 success_count, failure_count, consecutive_failures,
 		 rpm_limit,
-		 status, note, created_at, updated_at
+		 status, note, created_at, updated_at, mapping_json
 		 FROM donations WHERE id=?`, id,
 	))
 	if err == sql.ErrNoRows {
@@ -352,7 +355,7 @@ func (s *Store) PatchDonation(id int64, patch DonationPatch) (*DonationPatchResu
 		 deadline, total_count, remaining_count,
 		 success_count, failure_count, consecutive_failures,
 		 rpm_limit,
-		 status, note, created_at, updated_at
+		 status, note, created_at, updated_at, mapping_json
 		 FROM donations WHERE id=?`, id,
 	))
 	if err == sql.ErrNoRows {
@@ -383,7 +386,7 @@ func (s *Store) ListDonations() ([]*Donation, error) {
 		 deadline, total_count, remaining_count,
 		 success_count, failure_count, consecutive_failures,
 		 rpm_limit,
-		 status, note, created_at, updated_at
+		 status, note, created_at, updated_at, mapping_json
 		 FROM donations ORDER BY created_at DESC`,
 	)
 	if err != nil {
@@ -411,7 +414,7 @@ func (s *Store) ListRoutableDonations(service, model string) ([]*Donation, error
 		 deadline, total_count, remaining_count,
 		 success_count, failure_count, consecutive_failures,
 		 rpm_limit,
-		 status, note, created_at, updated_at
+		 status, note, created_at, updated_at, mapping_json
 		 FROM donations
 		 WHERE service=? AND model=? AND status=? AND deadline > ? AND remaining_count > 0
 		 ORDER BY deadline ASC`,

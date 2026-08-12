@@ -64,6 +64,10 @@ func (g *Gateway) checkAppBinding(ctx context.Context, userID int64, model, base
 	if err != nil {
 		return map[string]interface{}{"service": service, "error": probeError(err, lang)}
 	}
+	// Template services expose obfuscated parameter names; translate them
+	// back through the user's mapping so the contract check sees canonical
+	// names (dummy variables are ignored).
+	params = g.normalizeAppParamsForBinding(userID, service, params)
 	res := translator.CheckAppParams(service, params)
 	out := map[string]interface{}{
 		"service":    service,

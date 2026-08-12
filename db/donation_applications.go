@@ -12,9 +12,10 @@ import (
 
 // DonationApplication status constants.
 const (
-	AppStatusPending  = "pending"
-	AppStatusApproved = "approved"
-	AppStatusRejected = "rejected"
+	AppStatusPending     = "pending"
+	AppStatusApproved    = "approved"
+	AppStatusRejected    = "rejected"
+	AppStatusInvalidated = "invalidated"
 )
 
 // ErrPendingApplicationLimit is returned when an atomic application insert
@@ -66,6 +67,9 @@ type DonationApplication struct {
 	ReviewNote    string
 	DonationID    sql.NullInt64
 	CreatedAt     int64
+	// MappingJSON is the canonical->obfuscated variable snapshot for
+	// downloadable-template services (v1.4.0 B').
+	MappingJSON string
 	// Joined fields (populated by list queries).
 	Username       string // applicant username
 	DiscordID      string // applicant discord_id
@@ -77,7 +81,7 @@ func scanDonationApplication(row interface{ Scan(...interface{}) error }) (*Dona
 	if err := row.Scan(
 		&a.ID, &a.UserID, &a.Service, &a.Model, &a.DifyBaseURL, &a.DifyAPIKeyEnc,
 		&a.TotalCount, &a.Deadline, &a.RpmLimit, &a.Note, &a.Status,
-		&a.ReviewerID, &a.ReviewNote, &a.DonationID, &a.CreatedAt,
+		&a.ReviewerID, &a.ReviewNote, &a.DonationID, &a.CreatedAt, &a.MappingJSON,
 	); err != nil {
 		return nil, err
 	}
@@ -131,11 +135,18 @@ func (s *Store) CreateDonationApplicationWithLimit(userID int64, service, model,
 }
 
 // GetApplication fetches a donation application by ID. Returns (nil, nil) when absent.
+// SetApplicationMapping attaches the canonical->obfuscated variable
+// snapshot to an application (downloadable-template services only).
+func (s *Store) SetApplicationMapping(id int64, mappingJSON string) error {
+	_, err := s.db.Exec(`UPDATE donation_applications SET mapping_json=? WHERE id=?`, mappingJSON, id)
+	return err
+}
+
 func (s *Store) GetApplication(id int64) (*DonationApplication, error) {
 	a, err := scanDonationApplication(s.db.QueryRow(
 		`SELECT id, user_id, service, model, dify_base_url, dify_api_key_enc,
 		 total_count, deadline, rpm_limit, note, status,
-		 reviewer_id, review_note, donation_id, created_at
+		 reviewer_id, review_note, donation_id, created_at, mapping_json
 		 FROM donation_applications WHERE id=?`, id,
 	))
 	if err == sql.ErrNoRows {
@@ -149,7 +160,7 @@ func (s *Store) ListApplicationsByUser(userID int64) ([]*DonationApplication, er
 	rows, err := s.db.Query(
 		`SELECT da.id, da.user_id, da.service, da.model, da.dify_base_url, da.dify_api_key_enc,
 		 da.total_count, da.deadline, da.rpm_limit, da.note, da.status,
-		 da.reviewer_id, da.review_note, da.donation_id, da.created_at
+		 da.reviewer_id, da.review_note, da.donation_id, da.created_at, da.mapping_json
 		 FROM donation_applications da
 		 WHERE da.user_id=?
 		 ORDER BY da.created_at DESC`,
@@ -175,7 +186,7 @@ func (s *Store) ListPendingApplications() ([]*DonationApplication, error) {
 	rows, err := s.db.Query(
 		`SELECT da.id, da.user_id, da.service, da.model, da.dify_base_url, da.dify_api_key_enc,
 		 da.total_count, da.deadline, da.rpm_limit, da.note, da.status,
-		 da.reviewer_id, da.review_note, da.donation_id, da.created_at,
+		 da.reviewer_id, da.review_note, da.donation_id, da.created_at, da.mapping_json,
 		 u.username, u.discord_id
 		 FROM donation_applications da
 		 JOIN users u ON u.id = da.user_id
@@ -194,7 +205,7 @@ func (s *Store) ListPendingApplications() ([]*DonationApplication, error) {
 			&a.ID, &a.UserID, &a.Service, &a.Model, &a.DifyBaseURL, &a.DifyAPIKeyEnc,
 			&a.TotalCount, &a.Deadline, &a.RpmLimit, &a.Note, &a.Status,
 			&a.ReviewerID, &a.ReviewNote, &a.DonationID, &a.CreatedAt,
-			&a.Username, &a.DiscordID,
+			&a.MappingJSON, &a.Username, &a.DiscordID,
 		); err != nil {
 			return nil, err
 		}
@@ -287,7 +298,7 @@ func (s *Store) approveApplicationTx(tx *sql.Tx, id int64, reviewerID int64, m *
 	app, err := scanDonationApplication(tx.QueryRow(
 		`SELECT id, user_id, service, model, dify_base_url, dify_api_key_enc,
 		 total_count, deadline, rpm_limit, note, status,
-		 reviewer_id, review_note, donation_id, created_at
+		 reviewer_id, review_note, donation_id, created_at, mapping_json
 		 FROM donation_applications WHERE id=?`, id,
 	))
 	if err != nil {
@@ -360,12 +371,12 @@ func (s *Store) approveApplicationTx(tx *sql.Tx, id int64, reviewerID int64, m *
 		`INSERT INTO donations (service, model, dify_base_url, dify_api_key_enc, dify_api_key_sha256,
 		 source_user_id, source_discord_id, source_username, source_text,
 		 deadline, total_count, remaining_count, rpm_limit, status, note,
-		 created_at, updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 created_at, updated_at, mapping_json)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		service, model, baseURL, apiKeyEnc, keySHA256,
 		sql.NullInt64{Int64: app.UserID, Valid: true}, sourceDiscordID, sourceUsername, "",
 		deadline, totalCount, totalCount, rpmLimit, DonationInactive, app.Note,
-		now, now,
+		now, now, app.MappingJSON,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create donation from application: %w", err)
@@ -397,7 +408,7 @@ func (s *Store) approveApplicationTx(tx *sql.Tx, id int64, reviewerID int64, m *
 		SourceDiscordID: sourceDiscordID, SourceUsername: sourceUsername,
 		Deadline: deadline, TotalCount: totalCount, RemainingCount: totalCount,
 		RpmLimit: rpmLimit, Status: DonationInactive, Note: app.Note,
-		CreatedAt: now, UpdatedAt: now,
+		CreatedAt: now, UpdatedAt: now, MappingJSON: app.MappingJSON,
 	}
 	return app, donation, nil
 }
@@ -452,7 +463,7 @@ func rejectApplicationTx(tx *sql.Tx, id int64, reviewerID int64, reviewNote stri
 	return scanDonationApplication(tx.QueryRow(
 		`SELECT id, user_id, service, model, dify_base_url, dify_api_key_enc,
 		 total_count, deadline, rpm_limit, note, status,
-		 reviewer_id, review_note, donation_id, created_at
+		 reviewer_id, review_note, donation_id, created_at, mapping_json
 		 FROM donation_applications WHERE id=?`, id,
 	))
 }
@@ -534,7 +545,7 @@ func (s *Store) ListApplicationsFiltered(status string, userID int64, service st
 
 	query := `SELECT da.id, da.user_id, da.service, da.model, da.dify_base_url, da.dify_api_key_enc,
 		da.total_count, da.deadline, da.rpm_limit, da.note, da.status,
-		da.reviewer_id, da.review_note, da.donation_id, da.created_at,
+		da.reviewer_id, da.review_note, da.donation_id, da.created_at, da.mapping_json,
 		u.username, u.discord_id
 		FROM donation_applications da
 		LEFT JOIN users u ON u.id = da.user_id` +
@@ -554,7 +565,7 @@ func (s *Store) ListApplicationsFiltered(status string, userID int64, service st
 			&a.ID, &a.UserID, &a.Service, &a.Model, &a.DifyBaseURL, &a.DifyAPIKeyEnc,
 			&a.TotalCount, &a.Deadline, &a.RpmLimit, &a.Note, &a.Status,
 			&a.ReviewerID, &a.ReviewNote, &a.DonationID, &a.CreatedAt,
-			&a.Username, &a.DiscordID,
+			&a.MappingJSON, &a.Username, &a.DiscordID,
 		); err != nil {
 			return nil, 0, err
 		}

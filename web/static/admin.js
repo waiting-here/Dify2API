@@ -158,7 +158,8 @@ function renderAdminLogin() {
   _adminActivityStats = null;
   $("#nav-user").textContent = "";
   $("#app").innerHTML = `
-    <article class="card" style="max-width:24rem;margin:4rem auto">
+    <article class="card login-card" style="max-width:24rem;margin:4rem auto">
+      <span class="login-mark" aria-hidden="true"></span>
       <h3>${T('adminLoginTitle')}</h3>
       <form id="admin-login-form">
         <label>${T('username')}<input name="username" required autocomplete="username"></label>
@@ -204,14 +205,17 @@ function switchAdminTab(tab) {
   document.querySelectorAll(".admin-tab-content").forEach((c) => (c.style.display = "none"));
   const btn = document.querySelector(`.admin-tab[data-tab="${tab}"]`);
   if (btn) btn.classList.add("active");
-  const content = $(`#tab-${tab}`);
+  const content = $(`#tab-${tab}`) || $(`#atab-${tab}`);
   if (content) content.style.display = "";
+  scrollActiveTabIntoView(document.querySelector(".tab-nav"));
   // Lazy load on first activation. Mark the tab loaded only after its async
   // init succeeds, so a failed load can be retried by leaving and re-entering.
   if (!_adminTabLoaded[tab]) {
     const inits = {
       users: initAdminUsersTab,
       levels: initAdminLevelsTab,
+      games: initAdminGamesTab,
+      models: initAdminModelsTab,
       activity: initAdminActivityTab,
       logs: initAdminLogsTab,
       donations: initAdminDonationsTab,
@@ -289,7 +293,273 @@ async function initAdminLevelsTab() {
   };
 }
 
+function adminGameParamFields() {
+  return [
+    { key: "bait_worm_price", label: T('adminGamesBaitWormPrice') },
+    { key: "bait_lure_price", label: T('adminGamesBaitLurePrice') },
+    { key: "bait_premium_price", label: T('adminGamesBaitPremiumPrice') },
+    { key: "rtp", label: T('adminGamesRtp') },
+    { key: "rtp_premium", label: T('adminGamesRtpPremium') },
+    { key: "treasure_bottle", label: T('adminGamesTreasureBottle') },
+    { key: "treasure_clover", label: T('adminGamesTreasureClover') },
+    { key: "treasure_shell", label: T('adminGamesTreasureShell') },
+  ];
+}
+
+function adminGameTitle(id) {
+  return id === "fishing" ? T('gamesFishingName') : id;
+}
+
+function renderAdminGames(data) {
+  const form = $("#admin-games-form");
+  const list = $("#admin-games-list");
+  if (!form || !list) return;
+
+  form.master_enabled.checked = !!data.master_enabled;
+  const games = Array.isArray(data.games) ? data.games : [];
+  if (games.length === 0) {
+    list.innerHTML = `<p class="empty-state">${T('empty')}</p>`;
+    return;
+  }
+
+  const fields = adminGameParamFields();
+  list.innerHTML = games.map((game) => {
+    const params = game.params || {};
+    return `
+      <article class="card admin-game-card" data-game-id="${esc(game.id)}" style="padding:1rem;margin-bottom:1rem">
+        <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:.75rem;margin-bottom:.75rem">
+          <div>
+            <h4 style="margin:0">${esc(adminGameTitle(game.id))}</h4>
+            <small class="muted mono">${esc(game.id)}</small>
+          </div>
+          <label style="display:flex;align-items:center;gap:.5rem;width:auto;margin:0">
+            <input type="checkbox" role="switch" class="admin-game-enabled" ${game.enabled ? "checked" : ""}>
+            <span>${T('adminGamesEnabled')}</span>
+          </label>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(12rem,1fr));gap:.75rem">
+          ${fields.map((field) => `<label>${esc(field.label)}<input class="admin-game-param" data-param="${field.key}" type="number" min="1" max="1000" step="1" value="${esc(params[field.key] ?? "")}" required></label>`).join("")}
+        </div>
+      </article>`;
+  }).join("");
+}
+
+function collectAdminGamesForm() {
+  const form = $("#admin-games-form");
+  const games = Array.from(form.querySelectorAll(".admin-game-card")).map((card) => {
+    const params = {};
+    card.querySelectorAll(".admin-game-param").forEach((input) => {
+      params[input.dataset.param] = parseInt(input.value, 10);
+    });
+    return {
+      id: card.dataset.gameId,
+      enabled: card.querySelector(".admin-game-enabled").checked,
+      params,
+    };
+  });
+  return { master_enabled: form.master_enabled.checked, games };
+}
+
+async function loadAdminGames() {
+  const form = $("#admin-games-form");
+  const msg = $("#admin-games-msg");
+  if (!form || !msg) return;
+
+  form.setAttribute("aria-busy", "true");
+  msg.innerHTML = `<p class="muted">${T('loading')}</p>`;
+  try {
+    const data = await api("/api/admin/games");
+    renderAdminGames(data || {});
+    msg.innerHTML = "";
+  } catch (err) {
+    msg.innerHTML = `<div class="note err">${esc(T('adminGamesLoadError').replace("{msg}", err.message))}</div>`;
+    throw err;
+  } finally {
+    form.removeAttribute("aria-busy");
+  }
+}
+
+async function initAdminGamesTab() {
+  const form = $("#admin-games-form");
+  const restoreButton = $("#admin-games-restore");
+  const msg = $("#admin-games-msg");
+  if (!form || !restoreButton || !msg) return;
+
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    if (!form.reportValidity()) return;
+    const buttons = form.querySelectorAll("button");
+    buttons.forEach((button) => { button.disabled = true; });
+    msg.innerHTML = `<p class="muted">${T('loading')}</p>`;
+    try {
+      await api("/api/admin/games", { method: "PUT", body: collectAdminGamesForm() });
+      toast(T('adminGamesSaved'));
+      try { await loadAdminGames(); } catch (_) { /* load error is shown inline */ }
+    } catch (err) {
+      msg.innerHTML = `<div class="note err">${esc(err.message)}</div>`;
+    } finally {
+      buttons.forEach((button) => { button.disabled = false; });
+    }
+  };
+
+  restoreButton.onclick = async () => {
+    if (!confirm(T('adminGamesRestoreConfirm'))) return;
+    const buttons = form.querySelectorAll("button");
+    buttons.forEach((button) => { button.disabled = true; });
+    msg.innerHTML = `<p class="muted">${T('loading')}</p>`;
+    try {
+      await api("/api/admin/games/restore-defaults", { method: "POST" });
+      toast(T('adminGamesSaved'));
+      try { await loadAdminGames(); } catch (_) { /* load error is shown inline */ }
+    } catch (err) {
+      msg.innerHTML = `<div class="note err">${esc(err.message)}</div>`;
+    } finally {
+      buttons.forEach((button) => { button.disabled = false; });
+    }
+  };
+
+  await loadAdminGames();
+}
+
+let _adminModelConfigs = [];
+
+function adminModelRow(model) {
+  return `<tr data-model-key="${esc(model.model_key)}">
+    <td class="mono">${esc(model.model_key)}</td>
+    <td>${esc(model.display_name)}</td>
+    <td>${esc(model.provider)}</td>
+    <td class="mono">${esc(model.dependency_plugin)}</td>
+    <td class="mono">${esc(model.dependency_version)}</td>
+    <td><span class="badge ${model.enabled ? "ok" : "off"}">${model.enabled ? T('bulletinClosableYes') : T('bulletinClosableNo')}</span></td>
+    <td class="mono">${esc(String(model.sort_order ?? 0))}</td>
+    <td><span class="badge ${model.manual ? "warn" : "off"}">${model.manual ? T('bulletinClosableYes') : T('bulletinClosableNo')}</span></td>
+    <td><div class="row-actions">
+      <button type="button" class="secondary admin-model-edit">${T('editConfig')}</button>
+      <button type="button" class="contrast outline admin-model-delete">${T('deleteConfig')}</button>
+    </div></td>
+  </tr>`;
+}
+
+function resetAdminModelForm() {
+  const form = $("#admin-model-form");
+  if (!form) return;
+  form.reset();
+  form.enabled.checked = true;
+  form.sort_order.value = "0";
+  form.model_key.disabled = false;
+  form.dataset.editing = "";
+  $("#admin-model-save").textContent = T('adminModelsAdd');
+  $("#admin-model-cancel").style.display = "none";
+  $("#admin-model-edit-note").innerHTML = "";
+}
+
+function fillAdminModelForm(model) {
+  const form = $("#admin-model-form");
+  form.model_key.value = model.model_key || "";
+  form.display_name.value = model.display_name || "";
+  form.provider.value = model.provider || "";
+  form.dependency_plugin.value = model.dependency_plugin || "";
+  form.dependency_version.value = model.dependency_version || "";
+  form.dependency_hash.value = model.dependency_hash || "";
+  form.params_json.value = model.params_json || "";
+  form.enabled.checked = !!model.enabled;
+  form.sort_order.value = String(model.sort_order ?? 0);
+  form.manual.checked = !!model.manual;
+  form.model_key.disabled = true;
+  form.dataset.editing = model.model_key;
+  $("#admin-model-save").textContent = T('adminModelsSave');
+  $("#admin-model-cancel").style.display = "";
+  $("#admin-model-edit-note").innerHTML = `<div class="note info">${esc(T('adminModelsEditHint').replace('{key}', model.model_key))}</div>`;
+  form.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function bindAdminModelRows() {
+  document.querySelectorAll(".admin-model-edit").forEach((button) => {
+    button.onclick = () => {
+      const key = button.closest("tr").dataset.modelKey;
+      const model = _adminModelConfigs.find((item) => item.model_key === key);
+      if (model) fillAdminModelForm(model);
+    };
+  });
+  document.querySelectorAll(".admin-model-delete").forEach((button) => {
+    button.onclick = async () => {
+      const key = button.closest("tr").dataset.modelKey;
+      if (!confirm(T('adminModelsDeleteConfirm').replace('{key}', key))) return;
+      try {
+        await api(`/api/admin/model-configs/${encodeURIComponent(key)}`, { method: "DELETE" });
+        toast(T('adminModelsDeleted'));
+        if ($("#admin-model-form")?.dataset.editing === key) resetAdminModelForm();
+        await loadAdminModels();
+      } catch (err) {
+        $("#admin-model-msg").innerHTML = `<div class="note err">${esc(err.message)}</div>`;
+      }
+    };
+  });
+}
+
+async function loadAdminModels() {
+  const rows = $("#admin-model-rows");
+  rows.innerHTML = skeletonRows(9, 3);
+  const data = await api("/api/admin/model-configs");
+  _adminModelConfigs = Array.isArray(data.models) ? data.models : [];
+  rows.innerHTML = _adminModelConfigs.length
+    ? _adminModelConfigs.map(adminModelRow).join("")
+    : `<tr><td colspan="9" class="empty-state">${T('empty')}</td></tr>`;
+  bindAdminModelRows();
+}
+
+async function initAdminModelsTab() {
+  const form = $("#admin-model-form");
+  const msg = $("#admin-model-msg");
+  if (!form || !msg) return;
+  resetAdminModelForm();
+  $("#admin-model-cancel").onclick = resetAdminModelForm;
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    if (!form.reportValidity()) return;
+    const paramsRaw = form.params_json.value.trim();
+    if (paramsRaw) {
+      try {
+        const parsed = JSON.parse(paramsRaw);
+        if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") throw new Error("object required");
+      } catch (_) {
+        msg.innerHTML = `<div class="note err">${T('adminModelsInvalidParams')}</div>`;
+        return;
+      }
+    }
+    const body = {
+      model_key: form.dataset.editing || form.model_key.value.trim(),
+      display_name: form.display_name.value.trim(),
+      provider: form.provider.value.trim(),
+      dependency_plugin: form.dependency_plugin.value.trim(),
+      dependency_version: form.dependency_version.value.trim(),
+      dependency_hash: form.dependency_hash.value.trim(),
+      params_json: paramsRaw,
+      enabled: form.enabled.checked,
+      sort_order: parseInt(form.sort_order.value, 10) || 0,
+      manual: form.manual.checked,
+    };
+    const buttons = form.querySelectorAll("button");
+    buttons.forEach((button) => { button.disabled = true; });
+    msg.innerHTML = `<p class="muted">${T('loading')}</p>`;
+    try {
+      await api("/api/admin/model-configs", { method: "PUT", body });
+      toast(T('adminModelsSaved'));
+      resetAdminModelForm();
+      msg.innerHTML = "";
+      await loadAdminModels();
+    } catch (err) {
+      msg.innerHTML = `<div class="note err">${esc(err.message)}</div>`;
+    } finally {
+      buttons.forEach((button) => { button.disabled = false; });
+    }
+  };
+  await loadAdminModels();
+}
+
 async function initAdminLogsTab() {
+  const alfRows = $("#alf-rows");
+  if (alfRows) alfRows.innerHTML = skeletonRows(12, 6);
   const data = await loadAdminCommonData();
   const userList = $("#alf-user-list");
   if (userList) userList.innerHTML = data.users.map(adminUserOption).join("");
@@ -359,10 +629,12 @@ async function renderAdminDashboard() {
   bindLogout("#logout");
 
   // Tab navigation bar
-  const tabs = ["settings", "antiabuse", "users", "levels", "activity", "logs", "donations", "alerts", "bulletins"];
+  const tabs = ["settings", "antiabuse", "users", "levels", "games", "models", "activity", "logs", "donations", "alerts", "bulletins"];
   const tabLabels = {
     settings: T('adminTabSettings'), antiabuse: T('adminTabAntiAbuse'), users: T('adminTabUsers'),
     levels: T('adminTabLevels'),
+    games: T('adminTabGames'),
+    models: T('adminTabModels'),
     activity: T('adminTabActivity'),
     logs: T('adminTabLogs'), donations: T('adminTabDonations'), alerts: T('adminTabAlerts'),
     bulletins: T('adminTabBulletins'),
@@ -515,6 +787,58 @@ async function renderAdminDashboard() {
       </section>
     </div>
 
+    <!-- Games tab -->
+    <div id="atab-games" class="admin-tab-content" style="display:none">
+      <section class="card">
+        <h3>${T('adminGamesTitle')}</h3>
+        <form id="admin-games-form">
+          <label style="display:flex;align-items:center;gap:.5rem;width:auto;margin-bottom:1rem">
+            <input name="master_enabled" type="checkbox" role="switch">
+            <span>${T('adminGamesMasterSwitch')}</span>
+          </label>
+          <div id="admin-games-list">${skeletonBlock(3)}</div>
+          <div id="admin-games-msg" role="status" aria-live="polite"></div>
+          <div class="row-actions">
+            <button type="button" id="admin-games-restore" class="secondary outline">${T('adminGamesRestoreDefaults')}</button>
+            <button type="submit" id="admin-games-save">${T('adminGamesSave')}</button>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    <!-- Downloadable-template model configurations -->
+    <div id="atab-models" class="admin-tab-content" style="display:none">
+      <section class="card">
+        <h3>${T('adminModelsTitle')}</h3>
+        <p class="muted">${T('adminModelsIntro')}</p>
+        <div class="table-wrap"><table><thead><tr>
+          <th>${T('adminModelsKey')}</th><th>${T('adminModelsDisplayName')}</th><th>${T('adminModelsProvider')}</th>
+          <th>${T('adminModelsDependencyPlugin')}</th><th>${T('adminModelsDependencyVersion')}</th>
+          <th>${T('adminModelsEnabled')}</th><th>${T('adminModelsSort')}</th><th>${T('adminModelsManual')}</th><th>${T('thActions')}</th>
+        </tr></thead><tbody id="admin-model-rows">${skeletonRows(9, 3)}</tbody></table></div>
+        <form id="admin-model-form" style="margin-top:1rem">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(14rem,1fr));gap:.75rem">
+            <label>${T('adminModelsKey')}<input name="model_key" required></label>
+            <label>${T('adminModelsDisplayName')}<input name="display_name" required></label>
+            <label>${T('adminModelsProvider')}<input name="provider" required></label>
+            <label>${T('adminModelsDependencyPlugin')}<input name="dependency_plugin" placeholder="langgenius/openai" required></label>
+            <label>${T('adminModelsDependencyVersion')}<input name="dependency_version" required></label>
+            <label>${T('adminModelsDependencyHash')}<input name="dependency_hash" required></label>
+            <label>${T('adminModelsSort')}<input name="sort_order" type="number" value="0" required></label>
+            <label style="display:flex;align-items:center;gap:.5rem"><input name="enabled" type="checkbox" role="switch" checked><span>${T('adminModelsEnabled')}</span></label>
+            <label style="display:flex;align-items:center;gap:.5rem"><input name="manual" type="checkbox" role="switch"><span>${T('adminModelsManual')}</span></label>
+          </div>
+          <label>${T('adminModelsParams')}<textarea name="params_json" rows="4" placeholder='{"max_tokens":128000}'></textarea></label>
+          <div id="admin-model-edit-note"></div>
+          <div id="admin-model-msg" role="status" aria-live="polite"></div>
+          <div class="row-actions">
+            <button type="submit" id="admin-model-save">${T('adminModelsAdd')}</button>
+            <button type="button" id="admin-model-cancel" class="secondary" style="display:none">${T('cancelEdit')}</button>
+          </div>
+        </form>
+      </section>
+    </div>
+
     <!-- Activity tab -->
     <div id="tab-activity" class="admin-tab-content" style="display:none">
       <section class="card" id="activity-panel" aria-busy="false">
@@ -554,6 +878,7 @@ async function renderAdminDashboard() {
               <th scope="col">${T('activitySuccessfulAPIActive')}</th>
               <th scope="col">${T('activityAttemptedAPIActive')}</th>
               <th scope="col">${T('activityConsoleActive')}</th>
+              <th scope="col">${T('activityGameActive')}</th>
               <th scope="col">${T('activityAPIAttempts')}</th>
               <th scope="col">${T('activityAPISuccesses')}</th>
               <th scope="col">${T('activitySuccessRate')}</th>
@@ -716,6 +1041,8 @@ async function renderAdminDashboard() {
   document.querySelectorAll(".admin-tab").forEach((btn) => {
     btn.onclick = () => switchAdminTab(btn.dataset.tab);
   });
+  initTabScroll(document.querySelector(".tab-nav"));
+  bindCellToggles(document);
 
   // Reset tab state for fresh render
   for (const k of Object.keys(_adminTabLoaded)) delete _adminTabLoaded[k];
@@ -870,7 +1197,7 @@ function levelNameFor(n) {
 function userRow(u) {
   const fmtLim = (v) => (v == null ? "" : String(v));
   const rpm = `
-    <span style="display:inline-flex;align-items:center;gap:2px">
+    <span style="display:inline-flex;align-items:center;gap:2px;white-space:nowrap">
       <input class="u-rpm" data-id="${u.id}" data-class="a" type="number" min="1" value="${fmtLim(u.rpm_limit_a)}" placeholder="${T('rpmA')}" style="width:3.5rem;padding:0 .25rem;font-size:.75rem;margin-bottom:0">
       <input class="u-rpm" data-id="${u.id}" data-class="b" type="number" min="1" value="${fmtLim(u.rpm_limit_b)}" placeholder="${T('rpmB')}" style="width:3.5rem;padding:0 .25rem;font-size:.75rem;margin-bottom:0">
       <input class="u-rpm" data-id="${u.id}" data-class="c" type="number" min="1" value="${fmtLim(u.rpm_limit_c)}" placeholder="${T('rpmC')}" style="width:3.5rem;padding:0 .25rem;font-size:.75rem;margin-bottom:0">
@@ -890,7 +1217,7 @@ function userRow(u) {
       <td><input type="checkbox" class="user-chk" data-id="${u.id}"></td>
       <td class="mono muted">${u.id}</td>
       <td style="max-width:10rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${titleTxt}">${esc(u.username)} <span class="id-badge mono" data-copy-id="${esc(u.discord_id)}" title="${T('clickToCopy')}: ${esc(u.discord_id)}" style="cursor:pointer">(${esc(u.discord_id)})</span></td>
-      <td class="wrap"><div>${lvlText}</div>
+      <td class="wrap-badges"><div>${lvlText}</div>
         <div class="row-actions" style="margin-top:.15rem">
           <select class="u-level-set" data-id="${u.id}" title="${T('levelSet')}" style="width:auto;margin:0;padding:.15rem .3rem;font-size:.75rem"><option value="">—</option>${lvlOpts}</select>
           <button class="secondary outline u-level-reset" data-id="${u.id}" title="${T('levelReset')}" style="padding:.15rem .5rem;font-size:.75rem;width:auto;margin:0">${T('levelReset')}</button>
@@ -900,7 +1227,7 @@ function userRow(u) {
       <td class="mono">${u.donation_credit != null ? String(u.donation_credit) : "0"}</td>
       <td>${rpm}</td>
       <td class="muted" title="${fmtT(u.created_at)}" style="white-space:nowrap">${fmtDate(u.created_at)}</td>
-      <td class="wrap">${userStatusBadges(u)}</td>
+      <td class="wrap-badges">${userStatusBadges(u)}</td>
       <td><div class="row-actions">
         <button class="secondary u-ban">${T('ban')}</button>
         <button class="secondary u-unban">${T('unban')}</button>
@@ -1124,7 +1451,7 @@ function adminLogRow(l) {
       <td><span class="badge ${statusClass}">${statusText}</span></td>
       <td class="mono muted">${l.http_status ? esc(String(l.http_status)) : "—"}</td>
       <td class="mono muted">${esc(l.error_code)}</td>
-      <td class="muted wrap" style="max-width:48rem">${esc(l.error_detail || "")}</td>
+      <td class="muted wrap-clamp">${cellClamp(l.error_detail)}</td>
       <td class="mono muted">${l.credits_consumed ? esc(String(l.credits_consumed)) : "0"}</td>
       <td class="mono muted" style="max-width:16rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(l.anti_abuse_info || "")}">${esc(l.anti_abuse_info || "")}</td>
       <td class="muted">${esc(donationSrc)}</td>
@@ -1182,7 +1509,7 @@ function renderAdminLogs(data) {
 
   $("#alf-rows").innerHTML = logs.length
     ? logs.map(adminLogRow).join("")
-    : `<tr><td colspan="12" class="muted">${T('empty')}</td></tr>`;
+    : `<tr><td colspan="12" class="empty-state">${T('empty')}</td></tr>`;
 
   $("#alf-pager").innerHTML = `
     <select class="pg-size">
@@ -1443,7 +1770,7 @@ function renderActivityLoading() {
   const panel = $("#activity-panel");
   if (panel) panel.setAttribute("aria-busy", "true");
   $("#activity-content").style.display = "none";
-  $("#activity-status").innerHTML = `<p class="muted">${T('loading')}</p>`;
+  $("#activity-status").innerHTML = `<span class="sr-only">${esc(T('loading'))}</span>${skeletonLines(3)}`;
 }
 
 function bindActivityRetry() {
@@ -1469,10 +1796,10 @@ function renderActivityError(err) {
 }
 
 function activitySummaryCard(label, value, hint = "") {
-  return `<article class="activity-metric">
-    <span class="muted">${esc(label)}</span>
-    <strong>${esc(value)}</strong>
-    ${hint ? `<small class="muted">${esc(hint)}</small>` : ""}
+  return `<article class="kpi-card">
+    <span class="kpi-label">${esc(label)}</span>
+    <strong class="kpi-value">${esc(value)}</strong>
+    ${hint ? `<small class="kpi-sub">${esc(hint)}</small>` : ""}
   </article>`;
 }
 
@@ -1502,10 +1829,11 @@ function renderActivityTable(rows) {
       <td>${formatActivityCount(row.successful_api_active)}</td>
       <td>${formatActivityCount(row.attempted_api_active)}</td>
       <td>${formatActivityCount(row.console_active)}</td>
+      <td>${formatActivityCount(row.game_active)}</td>
       <td>${formatActivityCount(row.api_attempts)}</td>
       <td>${formatActivityCount(row.api_successes)}</td>
       <td>${formatActivityRate(row.api_successes, row.api_attempts)}</td>
-    </tr>`).join("") : `<tr><td colspan="9" class="muted">${T('empty')}</td></tr>`;
+    </tr>`).join("") : `<tr><td colspan="10" class="empty-state">${T('empty')}</td></tr>`;
 }
 
 function renderActivityData(stats) {
@@ -1603,6 +1931,7 @@ async function renderAdminActivityCharts(stats) {
   });
   const userDatasets = [
     { label: T('activityProductActive'), data: rows.map((row) => row.product_active), borderColor: "#4a7ddb", backgroundColor: "#4a7ddb", spanGaps: false },
+    { label: T('activityGameActive'), data: rows.map((row) => row.game_active), borderColor: "#0d9488", backgroundColor: "#0d9488", spanGaps: false },
     { label: T('activitySuccessfulAPIActive'), data: rows.map((row) => row.successful_api_active), borderColor: "#1a7f1a", backgroundColor: "#1a7f1a", spanGaps: false },
     { label: T('activityAttemptedAPIActive'), data: rows.map((row) => row.attempted_api_active), borderColor: "#d9822b", backgroundColor: "#d9822b", spanGaps: false },
   ];
@@ -1681,7 +2010,7 @@ function renderAlertPrefs(prefs) {
   if (!tbody) return;
   const meta = alertPrefMeta();
   if (prefs.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="4" class="muted">${T('empty')}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="4" class="empty-state">${T('empty')}</td></tr>`;
     return;
   }
   tbody.innerHTML = prefs.map((p) => {
@@ -1755,7 +2084,7 @@ function renderAdminAlerts(data) {
 
   $("#alert-rows").innerHTML = alerts.length
     ? alerts.map(alertRow).join("")
-    : `<tr><td colspan="5" class="muted">${T('empty')}</td></tr>`;
+    : `<tr><td colspan="5" class="empty-state">${T('empty')}</td></tr>`;
 
   $("#alert-pager").innerHTML = `
     <select class="pg-size">
@@ -1837,7 +2166,7 @@ function renderAntiAbuseRows() {
   const tbody = $("#antiabuse-rows");
   if (!tbody) return;
   if (antiAbuseConfigs.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="6" class="muted">${T('empty')}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="empty-state">${T('empty')}</td></tr>`;
     return;
   }
   const modeLabels = [
@@ -1850,7 +2179,7 @@ function renderAntiAbuseRows() {
       `<option value="${i}" ${c.mode === i ? "selected" : ""}>${esc(label)}</option>`
     ).join("");
     return `<tr data-service="${esc(c.service)}">
-      <td>${esc(c.service)}</td>
+      <td>${esc(c.service)}${c.deprecated ? ` <span class="badge warn">${T('serviceDeprecated')}</span>` : ""}</td>
       <td><select class="aa-mode">${modeOpts}</select></td>
       <td><input type="number" class="aa-min-chars" value="${c.min_chars}" min="0" style="width:5rem;margin-bottom:0"></td>
       <td><input type="number" class="aa-penalty-credits" value="${c.penalty_deduct_credits}" min="0" style="width:5rem;margin-bottom:0"></td>
@@ -2012,7 +2341,7 @@ function renderPricingRows() {
   const tbody = $("#pricing-rows");
   if (!tbody) return;
   if (pricingData.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="7" class="muted">${T('empty')}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="empty-state">${T('empty')}</td></tr>`;
     return;
   }
   tbody.innerHTML = pricingData.map((p) => `
@@ -2410,7 +2739,7 @@ async function loadDonationAppHistory() {
     donAppHistoryPager.page = Math.min(Math.max(1, donAppHistoryPager.page), pages);
 
     if (apps.length === 0) {
-      container.innerHTML = `<p class="muted">${T('empty')}</p>`;
+      container.innerHTML = `<p class="empty-state">${T('empty')}</p>`;
       if (pagerContainer) pagerContainer.innerHTML = "";
       return;
     }

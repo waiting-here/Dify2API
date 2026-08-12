@@ -51,3 +51,4 @@ dify2api.exe
 *.sql
 
 tmp/
+dify_app/

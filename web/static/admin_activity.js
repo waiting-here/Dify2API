@@ -38,7 +38,7 @@
   function hasReportableData(rows) {
     const fields = [
       "new_users", "product_active", "successful_api_active", "attempted_api_active",
-      "console_active", "api_attempts", "api_successes",
+      "console_active", "game_active", "api_attempts", "api_successes",
     ];
     return Array.isArray(rows) && rows.some((row) => fields.some((field) => valueState(row?.[field]).available));
   }

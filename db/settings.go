@@ -20,9 +20,9 @@ const (
 	SettingRPMBanHours       = "rpm_ban_hours"       // auto-ban duration in hours (default 24)
 	// App probe per-user cap (per-minute sliding window; admin-tunable).
 	SettingProbeLimitPerUser = "probe_limit_per_user" // Dify compatibility probes per user per minute (default 5)
-	SettingCheckinMin        = "checkin_min"          // check-in credit lower bound (default 45)
-	SettingCheckinMax        = "checkin_max"          // check-in credit upper bound (default 55)
-	SettingCreditsCap        = "credits_cap"          // check-in credits ceiling (default 250)
+	SettingCheckinMin        = "checkin_min"          // check-in credit lower bound (default 140)
+	SettingCheckinMax        = "checkin_max"          // check-in credit upper bound (default 160)
+	SettingCreditsCap        = "credits_cap"          // check-in credits ceiling (default 500)
 	// alpha.3 — tunable thresholds.
 	SettingDonationFailLimit = "donation_fail_limit" // consecutive failures before auto-inactive (default 10)
 	SettingMailerCoolMinutes = "mailer_cool_minutes" // email aggregation window in minutes (default 10)
@@ -44,6 +44,19 @@ const (
 	SettingLevelName4      = "level_name_4"
 	SettingLevelName5      = "level_name_5"
 	SettingLevelBannerText = "level_banner_text"
+	// v1.4.0 — mini-games (fishing ships first; keys are per-game prefixed
+	// to leave room for future games without schema changes).
+	SettingGamesEnabled = "games_enabled" // master switch for all mini-games
+	// fishing economy (admin-tunable; defaults match the frozen design).
+	SettingGameFishingEnabled          = "game_fishing_enabled"
+	SettingGameFishingBaitWormPrice    = "game_fishing_bait_worm_price"
+	SettingGameFishingBaitLurePrice    = "game_fishing_bait_lure_price"
+	SettingGameFishingBaitPremiumPrice = "game_fishing_bait_premium_price"
+	SettingGameFishingRTP              = "game_fishing_rtp"
+	SettingGameFishingRTPPremium       = "game_fishing_rtp_premium"
+	SettingGameFishingTreasureBottle   = "game_fishing_treasure_bottle_mult"
+	SettingGameFishingTreasureClover   = "game_fishing_treasure_clover_mult"
+	SettingGameFishingTreasureShell    = "game_fishing_treasure_shell_mult"
 )
 
 // Global defaults for the three-class RPM system (alpha.3 F4).
@@ -60,9 +73,9 @@ const DefaultProbeLimitPerUser = 5
 
 // Global defaults for the check-in system (alpha.3 F2).
 const (
-	DefaultCheckinMin = 45  // minimum credits awarded per successful check-in
-	DefaultCheckinMax = 55  // maximum credits awarded per successful check-in
-	DefaultCreditsCap = 250 // check-in fails when credits >= this cap
+	DefaultCheckinMin = 140 // minimum credits awarded per successful check-in
+	DefaultCheckinMax = 160 // maximum credits awarded per successful check-in
+	DefaultCreditsCap = 500 // check-in fails when credits >= this cap
 )
 
 // Global defaults for tunable thresholds.
@@ -80,6 +93,22 @@ const (
 	DefaultLevelThreshold2 = 1
 	DefaultLevelThreshold3 = 100
 	DefaultLevelThreshold4 = 500
+)
+
+// Global defaults for the v1.4.0 mini-game system (frozen design: bait
+// prices 5/10/15, RTP 90% / premium 88%, treasures 2x/3x/5x).
+const (
+	DefaultGamesEnabled = true
+
+	DefaultGameFishingEnabled          = true
+	DefaultGameFishingBaitWormPrice    = 5
+	DefaultGameFishingBaitLurePrice    = 10
+	DefaultGameFishingBaitPremiumPrice = 15
+	DefaultGameFishingRTP              = 90
+	DefaultGameFishingRTPPremium       = 88
+	DefaultGameFishingTreasureBottle   = 2
+	DefaultGameFishingTreasureClover   = 3
+	DefaultGameFishingTreasureShell    = 5
 )
 
 // GetSettingInt returns the setting parsed as a positive integer, falling

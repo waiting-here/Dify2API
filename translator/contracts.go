@@ -12,6 +12,13 @@ import (
 type ServiceInfo struct {
 	Name  string `json:"name"`
 	Label string `json:"label"`
+	// Deprecated marks services scheduled for removal in v2 (still fully
+	// supported during v1.x; surfaced as badges in both sites).
+	Deprecated bool `json:"deprecated"`
+	// Downloadable marks services whose Dify App template can be generated
+	// by the authenticated download endpoints. It keeps the SPA capability-
+	// driven instead of hard-coding a specific service name.
+	Downloadable bool `json:"downloadable"`
 }
 
 // serviceRegistry is the ordered list of supported services.
@@ -24,8 +31,9 @@ var serviceRegistry = []ServiceInfo{
 	{Name: "custom", Label: "自定义单轮问答（user_0 + 可选 system_prompt）"},
 	{Name: "website-summary", Label: "网页总结（request_url + 可选 request_instruction）"},
 	{Name: "image-processing", Label: "图片理解（system_prompt 可选 + user_request + 图片）"},
-	{Name: "sillytavern-main-trimmed", Label: "SillyTavern 主对话（1–22 条宽松布局）"},
-	{Name: "sillytavern-main-200", Label: "SillyTavern 主对话（1–403 条宽松布局，200对）"},
+	{Name: "sillytavern-main-trimmed", Label: "SillyTavern 主对话（1–22 条宽松布局）", Deprecated: true},
+	{Name: "sillytavern-main-200", Label: "SillyTavern 主对话（1–403 条宽松布局，200对）", Deprecated: true},
+	{Name: "sillytavern-main-v1", Label: "SillyTavern 主对话 v1（混淆模板，200对）", Downloadable: true},
 	{Name: "sillytavern-SP·数据库-填表", Label: "SillyTavern 数据库·填表（system + 可选 user_0 + assistant 打头交替 + 预填充）"},
 }
 
@@ -83,6 +91,13 @@ func TranslateForService(service string, messages []openai.Message) (map[string]
 		in, err := TranslateToSlots(messages)
 		return in, nil, err
 	case "sillytavern-main-200":
+		in, err := TranslateToSlots200(messages)
+		return in, nil, err
+	case "sillytavern-main-v1":
+		// Identical contract to sillytavern-main-200 (system + 200 pairs /
+		// 403 slots). The gateway remaps canonical keys to the user's
+		// obfuscated keys (from the latest template generation) before
+		// forwarding; dummy variables are never filled.
 		in, err := TranslateToSlots200(messages)
 		return in, nil, err
 	case "sillytavern-SP·数据库-填表":
@@ -216,6 +231,13 @@ func ContractVarsFor(service string) ContractVars {
 			},
 		}
 	case "sillytavern-main-200":
+		opts := make([]string, len(slotNames200))
+		copy(opts, slotNames200)
+		return ContractVars{Required: nil, Optional: opts}
+	case "sillytavern-main-v1":
+		// Contractually identical to sillytavern-main-200. The obfuscated
+		// app's variables are translated back through the user's mapping
+		// before this check (dummies are ignored).
 		opts := make([]string, len(slotNames200))
 		copy(opts, slotNames200)
 		return ContractVars{Required: nil, Optional: opts}

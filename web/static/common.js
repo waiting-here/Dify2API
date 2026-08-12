@@ -7,6 +7,29 @@
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const fmtT = (ts) => (ts ? new Date(ts * 1000).toLocaleString() : "—");
+/* 超长单元格（方案 A+C）：默认三行截断保持行高/列宽稳定，过长时给「展开」切换就地看全文。
+ * 唯一 id 供切换时定位；用事件代理（data-cell-toggle）避免逐行绑定。 */
+let _cellSeq = 0;
+const CELL_CLAMP_LIMIT = 120; // 超过该字符数才显示展开钮
+function cellClamp(text) {
+  const s = String(text ?? "");
+  if (!s) return "";
+  const id = "cell-" + (++_cellSeq);
+  const needToggle = s.length > CELL_CLAMP_LIMIT;
+  return `<div class="cell-clamp" id="${id}">${esc(s)}</div>` +
+    (needToggle ? `<button type="button" class="cell-toggle" data-cell-toggle="${id}" aria-expanded="false">${esc(T("cellShowMore"))}</button>` : "");
+}
+function bindCellToggles(root) {
+  (root || document).addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-cell-toggle]");
+    if (!btn) return;
+    const box = document.getElementById(btn.getAttribute("data-cell-toggle"));
+    if (!box) return;
+    const open = box.classList.toggle("cell-open");
+    btn.setAttribute("aria-expanded", String(open));
+    btn.textContent = open ? T("cellShowLess") : T("cellShowMore");
+  });
+}
 const fmtDate = (ts) => (ts ? new Date(ts * 1000).toLocaleDateString() : "—");
 const fmtLocalDT = (ts) => {
   if (!ts) return "";
@@ -32,6 +55,7 @@ async function api(path, opts = {}) {
     const msg = data?.error?.message || `${res.status}`;
     const e = new Error(msg);
     e.status = res.status;
+    e.code = data?.error?.code || "";
     throw e;
   }
   return data;
@@ -42,6 +66,32 @@ function toast(msg, ms = 2200) {
   t.textContent = msg;
   t.style.opacity = "1";
   setTimeout(() => (t.style.opacity = "0"), ms);
+}
+
+/* ---------------- 骨架屏占位（W1d，共享）----------------
+   替换「加载中…」纯文本为 CSS 骨架屏；保留 role=status / aria-busy 语义
+   （首行带 sr-only 的 T('loading') 供屏幕阅读器播报）。prefers-reduced-motion
+   时 shimmer 动画由 CSS 关闭。仅用于「页面级加载区」，不替换表单提交等
+   瞬时动作反馈。skeletonRows 用于表格 tbody，skeletonBlock/skeletonLines
+   用于卡片/面板占位。 */
+function skeletonRows(cols, n) {
+  n = n || 6;
+  let out = "";
+  for (let i = 0; i < n; i++) {
+    const label = i === 0 ? `<span class="sr-only" role="status">${esc(T('loading'))}</span>` : "";
+    out += `<tr><td colspan="${cols}">${label}<div class="skeleton skeleton-line" aria-hidden="true"></div></td></tr>`;
+  }
+  return out;
+}
+function skeletonLines(n) {
+  n = n || 3;
+  const widths = ["", "mid", "short"];
+  let out = "";
+  for (let i = 0; i < n; i++) out += `<div class="skeleton skeleton-line ${widths[i % 3]}" aria-hidden="true"></div>`;
+  return out;
+}
+function skeletonBlock(n) {
+  return `<div role="status" aria-label="${esc(T('loading'))}">${skeletonLines(n)}</div>`;
 }
 
 /* ---------------- state & init ---------------- */
@@ -197,7 +247,7 @@ function renderPaged(p, rowsSel, ctrlsSel, emptyCols) {
   p.page = Math.min(Math.max(1, p.page), pages);
   const start = p.size === Infinity ? 0 : (p.page - 1) * p.size;
   const items = p.size === Infinity ? p.data : p.data.slice(start, start + p.size);
-  $(rowsSel).innerHTML = items.length ? items.map(p.rowFn).join("") : `<tr><td colspan="${emptyCols}" class="muted">${T('empty')}</td></tr>`;
+  $(rowsSel).innerHTML = items.length ? items.map(p.rowFn).join("") : `<tr><td colspan="${emptyCols}" class="empty-state">${T('empty')}</td></tr>`;
   $(ctrlsSel).innerHTML = `
     <select class="pg-size">
       ${[5, 10, 20, 50].map((n) => `<option value="${n}" ${p.size === n ? "selected" : ""}>${n} ${T('paginationPerPage')}</option>`).join("")}
@@ -430,4 +480,116 @@ function bindIdBadgeClicks() {
       }
     };
   });
+}
+
+/* ---------------- tab-nav overflow scroll (W1b, 方案 A) ----------------
+ * Shared by the user (.user-tab) and admin (.admin-tab) sites, which both
+ * render `<nav class="tab-nav">…</nav>` as a single horizontal row.
+ * When the row overflows we show slim left/right scroll buttons + edge
+ * fades; when it fits, nothing is shown (no reserved space). Buttons live
+ * in a gutter (padding-inline on .tab-scroll) so they never overlap a
+ * tab's hit area; tabs slide under the non-interactive fades as they scroll.
+ * Native touch/trackpad swipe and mouse-wheel are left completely intact
+ * (no wheel/touch interception, no touch-action change). Container-level
+ * scroll only — never scrolls the document/body.
+ *
+ * Call initTabScroll(nav) once after each dashboard render; call
+ * scrollActiveTabIntoView(nav) from the site tab switcher after the active
+ * class is set so the active tab scrolls into view. */
+const TAB_SCROLL_STEP = 0.75; // fraction of the visible width per click
+let _tabScrollRO = null;      // ResizeObserver for the currently live tab bar
+
+function _tabScrollUpdate(nav) {
+  const shell = nav.closest(".tab-nav-shell");
+  const max = nav.scrollWidth - nav.clientWidth;
+  const overflow = max > 1;
+  const left = overflow && nav.scrollLeft > 0;
+  const right = overflow && nav.scrollLeft < max - 1;
+  nav.classList.toggle("tab-scroll", overflow);
+  nav.classList.toggle("tab-scroll-left", left);
+  nav.classList.toggle("tab-scroll-right", right);
+  if (shell) {
+    shell.classList.toggle("tab-scroll", overflow);
+    shell.classList.toggle("tab-scroll-left", left);
+    shell.classList.toggle("tab-scroll-right", right);
+  }
+}
+
+// Scroll the active tab fully into view within the container. Uses
+// getBoundingClientRect vs. the guttered visible region so the math is
+// independent of offsetLeft/padding interpretations; only the container scrolls.
+function scrollActiveTabIntoView(nav) {
+  if (!nav) return;
+  const active = nav.querySelector(".user-tab.active, .admin-tab.active");
+  if (!active) { _tabScrollUpdate(nav); return; }
+  const navRect = nav.getBoundingClientRect();
+  const tabRect = active.getBoundingClientRect();
+  const cs = getComputedStyle(nav);
+  const padL = parseFloat(cs.paddingInlineStart) || 0;
+  const padR = parseFloat(cs.paddingInlineEnd) || 0;
+  const visibleLeft = navRect.left + padL;
+  const visibleRight = navRect.right - padR;
+  let target = nav.scrollLeft;
+  if (tabRect.left < visibleLeft) target -= (visibleLeft - tabRect.left);
+  else if (tabRect.right > visibleRight) target += (tabRect.right - visibleRight);
+  else { _tabScrollUpdate(nav); return; }
+  target = Math.max(0, Math.min(target, nav.scrollWidth - nav.clientWidth));
+  if (Math.abs(target - nav.scrollLeft) > 1) nav.scrollTo({ left: target, behavior: "smooth" });
+  else _tabScrollUpdate(nav);
+}
+
+function initTabScroll(nav) {
+  if (!nav) return;
+  // Re-render replaces the whole nav; drop the previous observer so it does
+  // not keep watching a detached element across many route changes.
+  if (_tabScrollRO) { _tabScrollRO.disconnect(); _tabScrollRO = null; }
+
+  // Edge controls must not be descendants of the scrolling element: an
+  // absolutely-positioned child moves with scrollLeft. Wrap the nav once and
+  // place both controls in the fixed shell instead (idempotent on double init).
+  let shell = nav.parentElement?.classList.contains("tab-nav-shell") ? nav.parentElement : null;
+  if (!shell) {
+    shell = document.createElement("div");
+    shell.className = "tab-nav-shell";
+    nav.parentNode.insertBefore(shell, nav);
+    shell.appendChild(nav);
+  }
+  let leftBtn = shell.querySelector(":scope > .tab-scroll-btn.left");
+  let rightBtn = shell.querySelector(":scope > .tab-scroll-btn.right");
+  if (!leftBtn) {
+    leftBtn = document.createElement("button");
+    leftBtn.type = "button";
+    leftBtn.className = "tab-scroll-btn left";
+    leftBtn.textContent = "‹";
+    shell.appendChild(leftBtn);
+  }
+  if (!rightBtn) {
+    rightBtn = document.createElement("button");
+    rightBtn.type = "button";
+    rightBtn.className = "tab-scroll-btn right";
+    rightBtn.textContent = "›";
+    shell.appendChild(rightBtn);
+  }
+  // Refresh labels every init (language may have changed between renders).
+  leftBtn.setAttribute("aria-label", T("tabScrollLeft"));
+  leftBtn.title = T("tabScrollLeft");
+  rightBtn.setAttribute("aria-label", T("tabScrollRight"));
+  rightBtn.title = T("tabScrollRight");
+
+  leftBtn.onclick = () => nav.scrollBy({ left: -Math.round(nav.clientWidth * TAB_SCROLL_STEP), behavior: "smooth" });
+  rightBtn.onclick = () => nav.scrollBy({ left: Math.round(nav.clientWidth * TAB_SCROLL_STEP), behavior: "smooth" });
+
+  // Scroll position changes update per-side button/fade visibility.
+  nav.addEventListener("scroll", () => _tabScrollUpdate(nav), { passive: true });
+
+  // Re-detect on viewport resize and on content/font-size changes: observe
+  // the shell/nav widths and each tab button (a late font swap widens tabs).
+  _tabScrollRO = new ResizeObserver(() => _tabScrollUpdate(nav));
+  _tabScrollRO.observe(shell);
+  _tabScrollRO.observe(nav);
+  nav.querySelectorAll(".user-tab, .admin-tab").forEach((t) => _tabScrollRO.observe(t));
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => _tabScrollUpdate(nav)).catch(() => {});
+  }
+  _tabScrollUpdate(nav);
 }

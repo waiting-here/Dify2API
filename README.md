@@ -137,9 +137,20 @@ v1.2.0 的公益记账在**预留时**即扣减捐赠 `remaining_count` 与消�
 | `custom` | `user` 必填，`system` 可选 | `user_0`、`system_prompt` |
 | `website-summary` | `user` URL 必填，`system` 要求可选 | `request_url`、`request_instruction` |
 | `image-processing` | `user` + 1–10 张图片，`system` 可选 | `user_request`、`system_prompt`、`input_image_list` |
-| `sillytavern-main-trimmed` | 可选 system + 最多 10 组 assistant/user | `system_prompt`、`user_0`、`assistant_1..10`、`user_1..10` |
-| `sillytavern-main-200` | 可选 system + 最多 200 组 assistant/user | `system_prompt`、`user_0`、`assistant_1..200`、`user_1..200`、`assistant_prefill` |
+| `sillytavern-main-trimmed`（弃用，v2 移除） | 可选 system + 最多 10 组 assistant/user | `system_prompt`、`user_0`、`assistant_1..10`、`user_1..10` |
+| `sillytavern-main-200`（弃用，v2 移除） | 可选 system + 最多 200 组 assistant/user | `system_prompt`、`user_0`、`assistant_1..200`、`user_1..200`、`assistant_prefill` |
+| `sillytavern-main-v1` | 同 `sillytavern-main-200`（可选 system + 最多 200 组 assistant/user） | 同 200 契约变量；变量经服务端混淆映射重命名并含不定量 dummy（下载说明见下） |
 | `sillytavern-SP·数据库-填表` | system 必填，之后严格交替 | `system_prompt`、`user_0..3`、`assistant_0..2`、`assistant_prefill` |
+
+**`sillytavern-main-v1` 模板下载与弃用说明**：该服务的 Dify App 模板由服务端按每用户随机种子
+生成混淆版本（变量 key / prompt 引用 / 描述备注 / app 名 / 节点标题 / 节点 ID 同步替换，并随机
+添加不定量仅混淆用 dummy 变量），生成后自校验 YAML 可解析与导入结构合法再提供下载。在
+「我的配置」对应服务卡片点「获取我的 App」、选择模型后下载 DSL 文件，自行导入 Dify 即可；每次
+重新下载会生成新种子并使上一次下载的 Dify App 立即失效。管理员可在「模型配置管理」tab 维护
+model/provider、依赖版本@hash、参数 JSON、启用状态与排序；非手动依赖 pin 每日 UTC 03:00 从
+Dify marketplace manifest 同步，失败会进入告警中心并保留旧值。`sillytavern-main-200` 与
+`sillytavern-main-trimmed` 已标记弃用，在 v1.x.x 期间继续支持，计划于 v2 移除，建议新用户
+直接使用 `sillytavern-main-v1`。
 
 契约必选变量必须存在于 App；App 的必选变量也必须被契约覆盖。data URI 图片由网关
 先上传至 Dify；远程 URL 仅在精确 origin allowlist 中时放行。
@@ -164,8 +175,9 @@ v1.2.0 的公益记账在**预留时**即扣减捐赠 `remaining_count` 与消�
   管理台或启动文件调整。
 - **日志留存**：request log 仅存元数据；普通、公益、活跃 donation 和 orphan 日志都按
   自身时间严格滚动保留 30 天，读取、统计和导出也按请求时刻限窗，绑定告警同事务清理。
-- **活跃度聚合**：第一方 SQLite 按 UTC 日记录用户的 API 尝试/成功次数、控制台业务写操作和
-  签到次数，用于管理员站汇总统计；用户级日聚合最多保留 400 天，仅管理员可查看全站汇总，
+- **活跃度聚合**：第一方 SQLite 按 UTC 日记录用户的 API 尝试/成功次数、控制台业务写操作、
+  签到次数和小游戏对局数（game_rounds，v1.4.0 起计入产品活跃口径），用于管理员站汇总统计；
+  用户级日聚合最多保留 400 天，仅管理员可查看全站汇总，
   随个人导出提供并在删号时删除。已结束 UTC 日另存 k=5 抑制的不可逆全站匿名快照（不含用户
   标识或可筛选维度），最多保留 400 天，删号后可继续保留且不能回连个人。
 - **数据权利**：用户可导出完整个人数据（包括解密后的自有凭据、公益结算记录和用户级活跃度
@@ -209,6 +221,22 @@ v1.2.0 的公益记账在**预留时**即扣减捐赠 `remaining_count` 与消�
 - **升级说明**：无手工迁移 —— `users.level` 列（NULL=自动，1–5=手动）在启动时幂等创建，
   旧数据默认按自动模式计算等级。
 
+## 小游戏（池塘垂钓）
+
+用户站「积分签到」与「公益与捐赠」之间新增「小游戏」标签页，v1.4.0 首期上线「池塘垂钓」并预留
+多游戏扩展接口（按 `game_id` 维度建模）。
+
+- **玩法**：门票制三档鱼饵（蚯蚓 5 / 商品饵 10 / 拟饵 15 积分，全部负期望；回收率 90%，拟饵 88%），
+  下注后服务端签发随机种子决定渔获（品种 × 尺寸，倍率 0x–40x），客户端纯演出动画；极小概率钓上
+  宝物（漂流瓶 / 幸运四叶草 / 神秘贝壳，固定 2x/3x/5x 倍率），输局触发「永不空军」彩蛋（0 回收）。
+  共 23 鱼种 + 8 彩蛋 + 3 宝物。
+- **积分与防刷**：游戏只动用普通积分，输赢直接增减，与签到积分上限 `credits_cap` 无额外交互；
+  积分 0 封底，输到 0 需签到回血。防刷为限流 + 幂等 + 随机种子校验 + 0 封底，不设每日局数/亏损上限。
+- **排行榜**：单鱼榜（单条鱼尺寸，长期累计）+ 总渔获榜（近 30 天滚动窗口），各 Top 20 并展示
+  我的排名；用户名默认展示，可切换匿名上榜。
+- **管理端**：管理员站「小游戏管理」标签页提供总开关、单游戏开关、全部经济参数（饵价/回收率/
+  宝物倍率）可调与一键恢复默认；v1.4.0 暂不引入专用管理员操作审计。
+
 ## SMTP 提醒
 
 配置 `SMTP_HOST` 后启用；为空时静默关闭。支持 587 STARTTLS 与 465 implicit TLS。
@@ -251,7 +279,7 @@ SSE 已开始后发生错误时，会发送 OpenAI 风格错误帧且不再发�
 
 - Pi 插件位于 `integrations/pi-dify-subagent/`；安装、参数和 preset 格式见该目录 README。
 - 主要包：`config`、`db`、`auth`、`translator`、`dify`、`handler`、`openai`。
-- 内嵌前端位于 `web/static/`；参考 Dify Workflow 位于 `dify_app/`。
+- 内嵌前端位于 `web/static/`；v1.4.0 起参考 Dify Workflow 模板不再随仓库分发（`dify_app/` 已移出版本库），`sillytavern-main-v1` 等可下载服务的 Dify App 由服务端生成混淆模板。
 - 安全报告见 [SECURITY.md](SECURITY.md)，贡献规则见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 合规与许可证

@@ -544,6 +544,9 @@ func (s *Store) deleteUserAt(id int64, now time.Time) error {
 		`DELETE FROM request_logs WHERE user_id=?`,
 		`DELETE FROM user_activity_daily WHERE user_id=?`,
 		`DELETE FROM donation_applications WHERE user_id=?`,
+		`DELETE FROM game_rounds WHERE user_id=?`,
+		`DELETE FROM game_best WHERE user_id=?`,
+		`DELETE FROM service_generations WHERE user_id=?`,
 		`UPDATE donations SET source_user_id=NULL, source_discord_id='', source_username='' WHERE source_user_id=?`,
 	} {
 		if _, err := tx.Exec(q, id); err != nil {

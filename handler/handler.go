@@ -57,6 +57,12 @@ type Gateway struct {
 	// probeLimiter caps per-user App compatibility probes (5/min) so the
 	// informational check cannot be used as an unlimited Dify cannon.
 	probeLimiter *probeLimiter
+	// gameStartLimiter caps per-user mini-game round starts (ticket buys).
+	gameStartLimiter *probeLimiter
+	// templateLimiter caps per-user template downloads.
+	templateLimiter *probeLimiter
+	// marketplaceCancel stops the daily Dify marketplace dependency sync.
+	marketplaceCancel context.CancelFunc
 	// remoteContentOrigins gates URLs fetched inside remote Dify workflows.
 	remoteContentOrigins map[string]struct{}
 	// antiAbuseCache maps service -> per-service anti-abuse config (hot path).
@@ -118,6 +124,8 @@ func NewGateway(cfg *config.Config, store *db.Store) *Gateway {
 		difyPolicy:           difyPolicy,
 		difyProbeSem:         make(chan struct{}, probeLimit),
 		probeLimiter:         newProbeLimiter(),
+		gameStartLimiter:     newProbeLimiter(),
+		templateLimiter:      newProbeLimiter(),
 		remoteContentOrigins: remoteOrigins,
 	}
 	settlementAttemptSec := cfg.CharitySettlementAttemptTimeoutSec
@@ -162,6 +170,10 @@ func NewGateway(cfg *config.Config, store *db.Store) *Gateway {
 	if gw.mailer != nil {
 		gw.mailer.Start()
 	}
+	// Daily Dify marketplace dependency sync (UTC 03:00 + initial run).
+	mpCtx, mpCancel := context.WithCancel(context.Background())
+	gw.marketplaceCancel = mpCancel
+	go gw.marketplaceWorker(mpCtx)
 	return gw
 }
 
@@ -185,6 +197,9 @@ func (g *Gateway) Shutdown(ctx context.Context) error {
 		if err := g.mailer.Shutdown(ctx); err != nil {
 			errs = append(errs, err)
 		}
+	}
+	if g.marketplaceCancel != nil {
+		g.marketplaceCancel()
 	}
 	return errors.Join(errs...)
 }
@@ -285,6 +300,27 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/me/checkin", g.handleCheckin)
 	mux.HandleFunc("GET /api/me/checkin/status", g.handleCheckinStatus)
 	mux.HandleFunc("PUT /api/me/lang", g.handleSetLang)
+
+	// Downloadable template services (v1.4.0: sillytavern-main-v1)
+	mux.HandleFunc("GET /api/me/services/{service}/models", g.handleServiceModels)
+	mux.HandleFunc("GET /api/me/services/{service}/download", g.handleServiceDownload)
+
+	// Model configuration management (admin)
+	mux.HandleFunc("GET /api/admin/model-configs", g.handleAdminListModelConfigs)
+	mux.HandleFunc("PUT /api/admin/model-configs", g.handleAdminPutModelConfig)
+	mux.HandleFunc("DELETE /api/admin/model-configs/{model_key}", g.handleAdminDeleteModelConfig)
+
+	// Mini-games (user site)
+	mux.HandleFunc("GET /api/me/games", g.handleGamesList)
+	mux.HandleFunc("POST /api/me/games/fishing/start", g.handleFishingStart)
+	mux.HandleFunc("POST /api/me/games/fishing/settle", g.handleFishingSettle)
+	mux.HandleFunc("GET /api/me/games/fishing/leaderboard", g.handleFishingLeaderboard)
+	mux.HandleFunc("PUT /api/me/games/anonymous", g.handleGamesAnonymous)
+
+	// Mini-game admin (games tab)
+	mux.HandleFunc("GET /api/admin/games", g.handleAdminGamesGet)
+	mux.HandleFunc("PUT /api/admin/games", g.handleAdminGamesPut)
+	mux.HandleFunc("POST /api/admin/games/restore-defaults", g.handleAdminGamesRestoreDefaults)
 
 	// R-A level-gated user-site endpoints (v1.3.0): level 4 review,
 	// level 5 charity co-admin + all-site logs. Only reachable on the user
@@ -653,9 +689,22 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	wfInputs := make(map[string]interface{}, len(inputs)+1)
-	for k, v := range inputs {
-		wfInputs[k] = v
+	// Template services (v1): translate canonical inputs into the user's
+	// latest obfuscated keys. Without a download, no mapping exists and the
+	// call is refused with a clear hint.
+	wfInputs, mapped, err := g.remapInputsForService(user.ID, service, inputs, "personal")
+	if err != nil {
+		g.logRequest(user.ID, req.Model, service, startedAt, "error", "internal",
+			http.StatusInternalServerError, "mapping lookup failed", "")
+		g.writeError(writer, http.StatusInternalServerError, "internal", "mapping lookup failed")
+		return
+	}
+	if !mapped {
+		g.logRequest(user.ID, req.Model, service, startedAt, "error", "template_not_downloaded",
+			http.StatusBadRequest, "no template generation mapping", "")
+		g.writeError(writer, http.StatusBadRequest, "template_not_downloaded",
+			t(userLang(user), "尚未下载该服务的 App 模板，请先在「模型配置」中下载并导入 Dify", "Download the service's App template first (Model Config > download) and import it into Dify"))
+		return
 	}
 
 	// 6. Images (image-processing): http(s) URLs pass through as remote_url;
@@ -877,6 +926,33 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 	wfInputs := make(map[string]interface{}, len(inputs)+1)
 	for k, v := range inputs {
 		wfInputs[k] = v
+	}
+	// Template services (v1 B'): route against the donation row's mapping
+	// snapshot (dummies ignored). Rows without a snapshot are legacy and
+	// cannot be routed — reject rather than send canonical keys.
+	if serviceHasTemplate(service) {
+		snapshot := map[string]string{}
+		if picked.MappingJSON != "" {
+			if err := json.Unmarshal([]byte(picked.MappingJSON), &snapshot); err != nil {
+				snapshot = nil
+			}
+		}
+		if len(snapshot) == 0 {
+			g.releaseCharitySetup(reservation)
+			releaseRPM()
+			g.logRequestDonation(user.ID, logModel, service, startedAt, "error", "service_unavailable",
+				http.StatusServiceUnavailable, "template donation without mapping snapshot", picked.ID, 0, "")
+			g.writeError(charityWriter, http.StatusServiceUnavailable, "service_unavailable",
+				t(g.resolveLang(r), "该捐赠条目缺少模板映射，无法路由", "This donation entry lacks a template mapping and cannot be routed"))
+			return
+		}
+		remapped := make(map[string]interface{}, len(inputs))
+		for canonical, val := range inputs {
+			if key, ok := snapshot[canonical]; ok {
+				remapped[key] = val
+			}
+		}
+		wfInputs = remapped
 	}
 
 	// Mark before the first upload/workflow request. If the process dies after

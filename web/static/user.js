@@ -42,9 +42,11 @@ async function copyKey() {
 
 /* ---------------- user site: login ---------------- */
 function renderUserLogin() {
+  stopFishingParticles();
   $("#nav-user").textContent = "";
   $("#app").innerHTML = `
-    <article class="card" style="max-width:28rem;margin:4rem auto;text-align:center">
+    <article class="card login-card" style="max-width:28rem;margin:4rem auto">
+      <span class="login-mark" aria-hidden="true"></span>
       <h3>${T('userLoginTitle')} · ${esc(state.site.site_name || T('siteName'))}</h3>
       <p class="muted">${T('userLoginHint')}</p>
       <a role="button" href="/auth/discord/login">${T('loginWithDiscord')}</a>
@@ -52,6 +54,7 @@ function renderUserLogin() {
 }
 
 function renderAdminNotice() {
+  stopFishingParticles();
   $("#nav-user").textContent = state.me.username;
   $("#app").innerHTML = `
     <article class="card" style="max-width:32rem;margin:4rem auto;text-align:center">
@@ -63,18 +66,19 @@ function renderAdminNotice() {
 
 /* ---------------- user site: dashboard ---------------- */
 async function renderUserDashboard() {
+  stopFishingParticles();
   $("#nav-user").innerHTML = `${esc(T('welcome').replace("{name}", state.me.username))} · <a href="#" id="logout">${T('logout')}</a>`;
   bindLogout("#logout");
 
   const me = state.me;
   // R-A: level-gated tabs. 4+ users get the co-admin panel (review at 4,
   // + resources/pricing at 5); 5-only users get the all-site logs tab.
-  const tabs = ["configs", "credits", "charity", "logs", "debug"];
+  const tabs = ["configs", "credits", "games", "charity", "logs", "debug"];
   if (me.level >= 4) tabs.splice(tabs.indexOf("charity") + 1, 0, "coadmin");
   if (me.level >= 5) tabs.splice(tabs.indexOf("logs") + 1, 0, "alllogs");
   const tabLabels = {
-    configs: T('userTabConfigs'), credits: T('userTabCredits'), charity: T('userTabCharity'),
-    logs: T('userTabLogs'), debug: T('userTabDebug'),
+    configs: T('userTabConfigs'), credits: T('userTabCredits'), games: T('userTabGames'),
+    charity: T('userTabCharity'), logs: T('userTabLogs'), debug: T('userTabDebug'),
     coadmin: T('tabCharityCoAdmin'), alllogs: T('tabAllLogs'),
   };
   const tabNav = tabs.map((t, i) =>
@@ -120,12 +124,16 @@ async function renderUserDashboard() {
       <section class="card">
         <h3>${T('configsTitle')}</h3>
         <div id="check-note"></div>
-        <div class="table-wrap"><table><thead><tr><th>${T('thModel')}</th><th>${T('thNote')}</th><th>${T('thEnabled')}</th><th>${T('thActions')}</th></tr></thead><tbody id="cfg-rows"></tbody></table></div>
+        <div class="table-wrap"><table><thead><tr><th>${T('thModel')}</th><th>${T('thNote')}</th><th>${T('thEnabled')}</th><th>${T('thActions')}</th></tr></thead><tbody id="cfg-rows">${skeletonRows(4, 5)}</tbody></table></div>
         <div class="row-actions" id="cfg-pager" style="margin:.5rem 0 1rem"></div>
         <form id="cfg-form">
           <div style="display:grid;grid-template-columns:${isNarrowScreen()?'1fr':'auto 1fr'};gap:.5rem;align-items:end">
             <label>${T('thService')}<select name="service" id="cfg-service"></select></label>
             <label>${T('thModel')}<input name="backend" placeholder="${T('fieldBackend')}${T('fieldBackendHint')}" required></label>
+          </div>
+          <div id="cfg-service-extra" style="margin:.25rem 0 .5rem">
+            <span id="cfg-service-deprecated" class="badge warn" style="display:none;vertical-align:middle">${T('serviceDeprecated')}</span>
+            <button type="button" id="cfg-getapp-btn" class="secondary" style="display:none;margin-left:.5rem">${T('serviceGetMyApp')}</button>
           </div>
           <label>${T('thBaseURL')}<input name="dify_base_url" placeholder="${T('fieldBaseURL')}" required></label>
           <div id="cfg-base-url-warn"></div>
@@ -140,10 +148,17 @@ async function renderUserDashboard() {
     <div id="utab-credits" class="user-tab-content" style="display:none">
       <section class="card" id="credits-card">
         <h3>${T('creditsTitle')}</h3>
-        <div id="credits-info"><p class="muted">${T('loading')}</p></div>
+        <div id="credits-info">${skeletonBlock(2)}</div>
         <div class="row-actions" style="margin-top:.5rem">
           <button id="checkin-btn" class="secondary">${T('creditsCheckin')}</button>
         </div>
+      </section>
+    </div>
+
+    <!-- Games tab -->
+    <div id="utab-games" class="user-tab-content" style="display:none">
+      <section id="games-root" aria-live="polite">
+        <article class="card skel-card">${skeletonBlock(3)}</article>
       </section>
     </div>
 
@@ -275,6 +290,8 @@ async function renderUserDashboard() {
   document.querySelectorAll(".user-tab").forEach((btn) => {
     btn.onclick = () => switchUserTab(btn.dataset.tab);
   });
+  initTabScroll(document.querySelector(".tab-nav"));
+  bindCellToggles(document);
 
   // Reset tab lazy-load state for fresh render.
   for (const k of Object.keys(_userTabLoaded)) delete _userTabLoaded[k];
@@ -347,11 +364,13 @@ function switchUserTab(tab) {
   if (btn) btn.classList.add("active");
   const content = $(`#utab-${tab}`);
   if (content) content.style.display = "";
+  scrollActiveTabIntoView(document.querySelector(".tab-nav"));
   // Lazy load on first activation.
   if (!_userTabLoaded[tab]) {
     _userTabLoaded[tab] = true;
     switch (tab) {
       case "credits": renderCreditsCard(); break;
+      case "games": renderGamesTab(); break;
       case "charity": renderCharityCard(); renderMyDonations(); break;
       case "logs": initUserLogsTab(); break;
       case "debug": initUserDebugTab(); break;
@@ -368,9 +387,15 @@ async function initUserConfigsTab() {
   _cfgSelfSitePending = null;
   $("#cfg-form").onsubmit = onConfigSubmit;
   const { services } = await api("/api/services");
-  $("#cfg-service").innerHTML = services
+  _cfgServices = services || [];
+  $("#cfg-service").innerHTML = _cfgServices
     .map((s) => `<option value="${esc(s.name)}" title="${esc(s.label)}">${esc(s.name)}</option>`)
     .join("");
+  // Deprecation badge + "Get My App" button follow the selected service.
+  updateCfgServiceExtras();
+  $("#cfg-service").onchange = updateCfgServiceExtras;
+  const _getappBtn = $("#cfg-getapp-btn");
+  if (_getappBtn) _getappBtn.onclick = showGetMyAppDialog;
   await loadConfigs();
 }
 
@@ -777,6 +802,774 @@ async function renderCreditsCard() {
   }
 }
 
+/* ---------------- user site: mini-games ---------------- */
+function newFishingUIState() {
+  return {
+    entered: false,
+    credits: 0,
+    selectedBait: "",
+    pendingRoundID: "",
+    busy: false,
+    phase: "idle",
+    result: null,
+    errorCode: "",
+    creditBlockedBait: "",
+    unavailable: false,
+    board: "single",
+    leaderboardAnon: false,
+  };
+}
+
+let _gamesOwnerID = null;
+let _gamesCatalog = null;
+let _fishingState = newFishingUIState();
+let _fishingParticleStop = null;
+
+function stopFishingParticles() {
+  if (_fishingParticleStop) _fishingParticleStop();
+  _fishingParticleStop = null;
+}
+
+// Scheme C water atmosphere: a small, lifecycle-bound canvas layer for
+// drifting highlights and bubbles. It is deliberately independent of the
+// fishing phase; phase motion belongs to the CSS rig below.
+function initFishingParticles() {
+  stopFishingParticles();
+  const canvas = $("#fishing-particles");
+  const stage = $("#fishing-stage");
+  if (!canvas || !stage) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  let width = 1;
+  let height = 1;
+  let frameID = 0;
+  let tick = 0;
+  const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+  const bubbles = Array.from({ length: 14 }, () => ({
+    x: Math.random(), y: .55 + Math.random() * .45,
+    r: 1 + Math.random() * 2.4, speed: .0006 + Math.random() * .0012,
+  }));
+  const sparkles = Array.from({ length: 26 }, () => ({
+    x: Math.random(), y: .52 + Math.random() * .46, phase: Math.random() * Math.PI * 2,
+  }));
+  const isDark = () => document.documentElement.dataset.theme === "dark" ||
+    (!document.documentElement.dataset.theme && window.matchMedia?.("(prefers-color-scheme: dark)")?.matches);
+  const resize = () => {
+    const rect = stage.getBoundingClientRect();
+    width = Math.max(1, rect.width);
+    height = Math.max(1, rect.height);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  };
+  const draw = () => {
+    ctx.clearRect(0, 0, width, height);
+    const waterline = height * .52;
+    const dark = isDark();
+    for (const sparkle of sparkles) {
+      const alpha = .06 + .1 * (.5 + .5 * Math.sin(tick * .05 + sparkle.phase));
+      ctx.fillStyle = dark ? `rgba(180,220,255,${alpha})` : `rgba(255,255,255,${alpha})`;
+      const x = sparkle.x * width;
+      const y = waterline + (sparkle.y - .5) * height * .9;
+      ctx.beginPath();
+      ctx.ellipse(x, y, 14, 1.6, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    for (const bubble of bubbles) {
+      if (!reduced) {
+        bubble.y -= bubble.speed;
+        if (bubble.y < .53) {
+          bubble.y = 1;
+          bubble.x = Math.random();
+        }
+      }
+      const x = bubble.x * width + Math.sin(tick * .03 + bubble.x * 10) * 6;
+      const y = bubble.y * height;
+      ctx.strokeStyle = dark ? "rgba(190,225,255,.5)" : "rgba(255,255,255,.6)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(x, y, bubble.r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  };
+  const onResize = () => { resize(); draw(); };
+  const stop = () => {
+    if (frameID) cancelAnimationFrame(frameID);
+    window.removeEventListener("resize", onResize);
+    ctx.clearRect(0, 0, width, height);
+  };
+  _fishingParticleStop = stop;
+  resize();
+  if (reduced) {
+    draw();
+    return;
+  }
+  const frame = () => {
+    tick += 1;
+    draw();
+    frameID = requestAnimationFrame(frame);
+  };
+  window.addEventListener("resize", onResize, { passive: true });
+  frame();
+}
+
+function finiteGameNumber(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+async function renderGamesTab() {
+  const root = $("#games-root");
+  if (!root || !state.me) return;
+  stopFishingParticles();
+
+  const ownerID = state.me.id;
+  if (_gamesOwnerID !== ownerID) {
+    _gamesOwnerID = ownerID;
+    _gamesCatalog = null;
+    _fishingState = newFishingUIState();
+  }
+  root.innerHTML = `<article class="card skel-card">${skeletonBlock(3)}</article>`;
+
+  try {
+    const data = await api("/api/me/games");
+    if (!state.me || state.me.id !== ownerID || !$("#games-root")) return;
+    _gamesCatalog = data || {};
+    _fishingState.credits = finiteGameNumber(data?.credits);
+    _fishingState.leaderboardAnon = !!data?.leaderboard_anon;
+    const fishing = getFishingGame();
+    _fishingState.unavailable = !data?.master_enabled || !fishing?.enabled;
+    renderGamesCatalog();
+    if (_fishingState.entered && !_fishingState.unavailable) {
+      loadFishingLeaderboard(_fishingState.board);
+    }
+  } catch (_) {
+    root.innerHTML = `
+      <article class="card">
+        <h3>${T('gamesTitle')}</h3>
+        <div class="note err">${T('gamesNetworkError')}</div>
+        <button type="button" id="games-retry" class="secondary">${T('retry')}</button>
+      </article>`;
+    const retry = $("#games-retry");
+    if (retry) retry.onclick = renderGamesTab;
+  }
+}
+
+function getFishingGame() {
+  const games = Array.isArray(_gamesCatalog?.games) ? _gamesCatalog.games : [];
+  return games.find((game) => game && game.id === "fishing") || null;
+}
+
+function renderGamesCatalog() {
+  const root = $("#games-root");
+  if (!root || !_gamesCatalog) return;
+  stopFishingParticles();
+
+  const games = Array.isArray(_gamesCatalog.games) ? _gamesCatalog.games : [];
+  let cards = "";
+  if (!_gamesCatalog.master_enabled) {
+    cards = `<article class="card games-unavailable"><div class="note info">${T('gamesNotAvailable')}</div></article>`;
+  } else if (games.length === 0) {
+    cards = `<article class="card"><p class="muted games-empty">${T('gamesEmpty')}</p></article>`;
+  } else {
+    cards = games.map(renderUserGameCard).join("");
+  }
+
+  root.innerHTML = `
+    <div class="games-heading">
+      <div>
+        <h2 id="games-title">${T('gamesTitle')}</h2>
+        <p class="muted">${T('gamesIntro')}</p>
+      </div>
+      <span id="games-balance" class="badge ok">${T('creditsBalance').replace("{n}", String(_fishingState.credits))}</span>
+    </div>
+    <div class="games-list">${cards}</div>`;
+
+  const entry = root.querySelector('.games-entry-btn[data-game-id="fishing"]');
+  if (entry) {
+    entry.onclick = () => {
+      _fishingState.entered = true;
+      renderGamesCatalog();
+      bindFishingUI();
+      loadFishingLeaderboard(_fishingState.board);
+      const bait = $("#fishing-baits");
+      if (bait) bait.focus({ preventScroll: false });
+    };
+  }
+  if (_fishingState.entered && !_fishingState.unavailable) bindFishingUI();
+}
+
+function renderUserGameCard(game) {
+  if (!game || typeof game.id !== "string") return "";
+  if (game.id === "fishing") return renderFishingGameCard(game);
+  return `
+    <article class="card game-card" data-game-id="${esc(game.id)}">
+      <div class="game-card-head">
+        <div><h3>${esc(game.id)}</h3></div>
+        <button type="button" class="secondary games-entry-btn" disabled>${T('gamesNotAvailable')}</button>
+      </div>
+    </article>`;
+}
+
+function renderFishingGameCard(game) {
+  const unavailable = _fishingState.unavailable || !game.enabled;
+  const body = _fishingState.entered && !unavailable
+    ? fishingGameBodyHTML(game)
+    : unavailable
+      ? `<div class="note info">${T('gamesNotAvailable')}</div>`
+      : `<button type="button" class="games-entry-btn" data-game-id="fishing">${T('gamesEnter')}</button>`;
+  return `
+    <article class="card game-card fishing-card" data-game-id="fishing">
+      <div class="game-card-head">
+        <div class="game-card-title">
+          <span class="game-card-mark" aria-hidden="true">≈</span>
+          <div>
+            <h3>${T('gamesFishingName')}</h3>
+            <p class="muted">${T('gamesFishingHint')}</p>
+          </div>
+        </div>
+      </div>
+      ${body}
+    </article>`;
+}
+
+function fishingBaitName(key) {
+  const names = {
+    worm: T('gamesBaitWorm'),
+    lure: T('gamesBaitLure'),
+    premium: T('gamesBaitPremium'),
+  };
+  return names[key] || String(key || "");
+}
+
+function gameSpeciesName(key) {
+  const names = {
+    whitebait: T('gameSpeciesWhitebait'),
+    gudgeon: T('gameSpeciesGudgeon'),
+    horse_mouth: T('gameSpeciesHorseMouth'),
+    smelt: T('gameSpeciesSmelt'),
+    loach: T('gameSpeciesLoach'),
+    crucian: T('gameSpeciesCrucian'),
+    tilapia: T('gameSpeciesTilapia'),
+    yellow_catfish: T('gameSpeciesYellowCatfish'),
+    ayu: T('gameSpeciesAyu'),
+    stream_carp: T('gameSpeciesStreamCarp'),
+    common_carp: T('gameSpeciesCommonCarp'),
+    snakehead: T('gameSpeciesSnakehead'),
+    catfish: T('gameSpeciesCatfish'),
+    mandarin_fish: T('gameSpeciesMandarinFish'),
+    rainbow_trout: T('gameSpeciesRainbowTrout'),
+    grass_carp: T('gameSpeciesGrassCarp'),
+    silver_carp: T('gameSpeciesSilverCarp'),
+    bighead_carp: T('gameSpeciesBigheadCarp'),
+    black_carp: T('gameSpeciesBlackCarp'),
+    japanese_eel: T('gameSpeciesJapaneseEel'),
+    yellowcheek: T('gameSpeciesYellowcheek'),
+    taimen: T('gameSpeciesTaimen'),
+    koi: T('gameSpeciesKoi'),
+    boot: T('gameSpeciesBoot'),
+    seaweed: T('gameSpeciesSeaweed'),
+    plastic_bag: T('gameSpeciesPlasticBag'),
+    branch: T('gameSpeciesBranch'),
+    old_tire: T('gameSpeciesOldTire'),
+    glasses: T('gameSpeciesGlasses'),
+    phone_case: T('gameSpeciesPhoneCase'),
+    fry: T('gameSpeciesFry'),
+    bottle: T('gameSpeciesBottle'),
+    clover: T('gameSpeciesClover'),
+    shell: T('gameSpeciesShell'),
+  };
+  return names[key] || String(key || "");
+}
+
+function fishingTierName(tier) {
+  const names = {
+    small: T('gamesTierSmall'),
+    regular: T('gamesTierRegular'),
+    big: T('gamesTierBig'),
+    giant: T('gamesTierGiant'),
+    legend: T('gamesTierLegend'),
+  };
+  return names[tier] || "";
+}
+
+function fishingTreasureText(key) {
+  const messages = {
+    bottle: T('gamesTreasureBottle'),
+    clover: T('gamesTreasureClover'),
+    shell: T('gamesTreasureShell'),
+  };
+  return messages[key] || "";
+}
+
+function fishingBaits(game) {
+  return Array.isArray(game?.params?.baits)
+    ? game.params.baits.filter((b) => b && typeof b.bait === "string")
+    : [];
+}
+
+function selectedFishingBait() {
+  const game = getFishingGame();
+  return fishingBaits(game).find((b) => b.bait === _fishingState.selectedBait) || null;
+}
+
+function fishingGameBodyHTML(game) {
+  const baits = fishingBaits(game);
+  const baitButtons = baits.map((item) => {
+    const selected = item.bait === _fishingState.selectedBait;
+    const price = finiteGameNumber(item.price);
+    return `
+      <button type="button" class="bait-choice secondary${selected ? " selected" : ""}"
+              data-bait="${esc(item.bait)}" aria-pressed="${selected ? "true" : "false"}">
+        <span class="bait-name">${esc(fishingBaitName(item.bait))}</span>
+        <small>${esc(T('gamesBaitPrice').replace("{n}", String(price)))}</small>
+      </button>`;
+  }).join("");
+  const allowedPhases = new Set(["casting", "waiting", "reeling", "result"]);
+  const phase = allowedPhases.has(_fishingState.phase) ? _fishingState.phase : "idle";
+
+  return `
+    <div class="fishing-game-body">
+      <div class="fishing-layout">
+        <section class="fishing-play-panel" aria-labelledby="fishing-bait-title">
+          <h4 id="fishing-bait-title">${T('gamesChooseBait')}</h4>
+          <div id="fishing-baits" class="fishing-baits" tabindex="-1">${baitButtons}</div>
+          <div id="fishing-stage" class="fishing-stage phase-${phase}" aria-label="${esc(fishingStatusText())}">
+            <span class="fishing-celestial" aria-hidden="true"></span>
+            <span class="fishing-cloud cloud-one" aria-hidden="true"></span>
+            <span class="fishing-cloud cloud-two" aria-hidden="true"></span>
+            <span class="fishing-bank" aria-hidden="true"></span>
+            <canvas id="fishing-particles" class="fishing-particles" aria-hidden="true"></canvas>
+            <span class="fishing-rig" aria-hidden="true"><span class="fishing-rod"><span class="fishing-line"><span class="fishing-float"></span><span class="fishing-catch"><span class="fishing-hook"></span><span class="fishing-leash"></span><span class="fishing-fish"></span></span></span></span></span>
+            <span class="fishing-ripple ripple-one" aria-hidden="true"></span>
+            <span class="fishing-ripple ripple-two" aria-hidden="true"></span>
+          </div>
+          <div class="fishing-cast-row">
+            <button type="button" id="fishing-cast">${fishingCastButtonText()}</button>
+            <p id="fishing-status" class="muted" role="status">${esc(fishingStatusText())}</p>
+          </div>
+        </section>
+        <aside id="fishing-result" class="fishing-result-panel" aria-live="polite">
+          ${fishingResultHTML()}
+        </aside>
+      </div>
+      ${fishingLeaderboardShellHTML()}
+    </div>`;
+}
+
+function fishingCastButtonText() {
+  if (_fishingState.busy) {
+    if (_fishingState.phase === "waiting") return T('gamesWaiting');
+    if (_fishingState.phase === "reeling") return T('gamesReeling');
+    return T('gamesCasting');
+  }
+  if (_fishingState.pendingRoundID) return T('retry');
+  return T('gamesCast');
+}
+
+function fishingErrorText(code) {
+  switch (code) {
+    case "no_bait": return T('gamesNoBait');
+    case "insufficient_credits": return T('gamesInsufficientCredits');
+    case "rate_limited": return T('gamesRateLimited');
+    case "unavailable": return T('gamesNotAvailable');
+    default: return T('gamesNetworkError');
+  }
+}
+
+function normalizeGameError(err) {
+  if (err?.code === "insufficient_credits") return "insufficient_credits";
+  if (err?.code === "rate_limited") return "rate_limited";
+  if (err?.code === "games_disabled" || err?.code === "game_disabled") return "unavailable";
+  return "network";
+}
+
+function fishingStatusText() {
+  if (_fishingState.errorCode) return fishingErrorText(_fishingState.errorCode);
+  if (_fishingState.busy) {
+    if (_fishingState.phase === "waiting") return T('gamesWaiting');
+    if (_fishingState.phase === "reeling") return T('gamesReeling');
+    return T('gamesCasting');
+  }
+  const bait = selectedFishingBait();
+  if (!bait) return T('gamesNoBait');
+  if (_fishingState.creditBlockedBait === bait.bait || _fishingState.credits < finiteGameNumber(bait.price)) {
+    return T('gamesInsufficientCredits');
+  }
+  return T('gamesReady');
+}
+
+function fishingResultHTML() {
+  if (_fishingState.result) return fishingOutcomeHTML(_fishingState.result);
+  if (_fishingState.errorCode) {
+    return `<h4>${T('gamesResultTitle')}</h4><div class="note err">${esc(fishingErrorText(_fishingState.errorCode))}</div>`;
+  }
+  if (_fishingState.busy || _fishingState.pendingRoundID) {
+    return `<h4>${T('gamesResultTitle')}</h4><p class="muted">${T('loading')}</p>`;
+  }
+  return `<h4>${T('gamesResultTitle')}</h4><p class="muted games-empty">${T('gamesResultEmpty')}</p>`;
+}
+
+function fishingOutcomeHTML(result) {
+  const species = gameSpeciesName(result.species_key);
+  const isJunk = !!result.is_junk;
+  const isTreasure = !!result.is_treasure;
+  const isFish = !isJunk && !isTreasure;
+  const tier = fishingTierName(result.tier);
+  const size = finiteGameNumber(result.size_cm);
+  const glyph = isTreasure ? "✦" : isJunk ? "≈" : "◈";
+  let badges = "";
+  if (isFish && tier) {
+    badges += `<span class="badge game-tier tier-${esc(result.tier)}">${esc(tier)}</span>`;
+  }
+  if (result.meter) badges += `<span class="badge game-meter">${T('gamesMeter')}</span>`;
+
+  let special = "";
+  if (isJunk) {
+    special = result.species_key === "fry"
+      ? T('gamesReleaseFry')
+      : T('gamesJunkX').replace("{item}", species);
+  } else if (isTreasure) {
+    special = fishingTreasureText(result.species_key);
+  }
+  const sizeHTML = isFish ? `<span class="catch-size">× ${size} cm</span>` : "";
+  const specialHTML = special ? `<p class="catch-special">${esc(special)}</p>` : "";
+  return `
+    <h4>${T('gamesResultTitle')}</h4>
+    <div class="game-catch${isTreasure ? " treasure" : ""}${isJunk ? " junk" : ""}">
+      <span class="catch-glyph" aria-hidden="true">${glyph}</span>
+      <div class="catch-main">
+        <div class="catch-name">${esc(species)} ${sizeHTML}</div>
+        <div class="catch-badges">${badges}</div>
+      </div>
+      ${specialHTML}
+      <p class="game-reward"><strong>${esc(T('gamesCreditsWon').replace("{n}", String(finiteGameNumber(result.credits_won))))}</strong></p>
+      <p class="muted game-balance-result">${esc(T('creditsBalance').replace("{n}", String(finiteGameNumber(result.credits))))}</p>
+    </div>`;
+}
+
+function fishingLeaderboardShellHTML() {
+  const single = _fishingState.board === "single";
+  return `
+    <section class="games-leaderboard" aria-labelledby="games-leaderboard-title">
+      <div class="games-leaderboard-head">
+        <div>
+          <h4 id="games-leaderboard-title">${T('gamesLeaderboard')}</h4>
+          <div class="row-actions games-board-switch" role="group" aria-label="${esc(T('gamesLeaderboard'))}">
+            <button type="button" class="secondary games-board-btn${single ? " active" : ""}" data-board="single" aria-pressed="${single ? "true" : "false"}">${T('gamesBoardSingle')}</button>
+            <button type="button" class="secondary games-board-btn${single ? "" : " active"}" data-board="total" aria-pressed="${single ? "false" : "true"}">${T('gamesBoardTotal')}</button>
+          </div>
+        </div>
+        <label class="games-anon-control">
+          <input type="checkbox" id="games-anon-toggle" role="switch" ${_fishingState.leaderboardAnon ? "checked" : ""}>
+          <span>${T('gamesAnonToggle')}</span>
+        </label>
+      </div>
+      <div id="games-leaderboard-content"><p class="muted">${T('loading')}</p></div>
+    </section>`;
+}
+
+function bindFishingUI() {
+  document.querySelectorAll("#utab-games .bait-choice").forEach((button) => {
+    button.onclick = () => {
+      if (_fishingState.busy || _fishingState.pendingRoundID) return;
+      _fishingState.selectedBait = button.dataset.bait || "";
+      _fishingState.errorCode = "";
+      if (_fishingState.creditBlockedBait !== _fishingState.selectedBait) {
+        _fishingState.creditBlockedBait = "";
+      }
+      renderFishingResultPanel();
+      updateFishingControls();
+    };
+  });
+  const cast = $("#fishing-cast");
+  if (cast) cast.onclick = onFishingCast;
+  document.querySelectorAll("#utab-games .games-board-btn").forEach((button) => {
+    button.onclick = () => loadFishingLeaderboard(button.dataset.board);
+  });
+  const anon = $("#games-anon-toggle");
+  if (anon) {
+    anon.onchange = async () => {
+      const wanted = anon.checked;
+      anon.disabled = true;
+      try {
+        const saved = await api("/api/me/games/anonymous", { method: "PUT", body: { anonymous: wanted } });
+        _fishingState.leaderboardAnon = !!saved?.anonymous;
+        anon.checked = _fishingState.leaderboardAnon;
+        toast(T('gamesAnonSaved'));
+        await loadFishingLeaderboard(_fishingState.board);
+      } catch (err) {
+        anon.checked = _fishingState.leaderboardAnon;
+        toast(fishingErrorText(normalizeGameError(err)), 3200);
+      } finally {
+        if (document.body.contains(anon)) anon.disabled = false;
+      }
+    };
+  }
+  initFishingParticles();
+  updateFishingControls();
+}
+
+function updateFishingControls() {
+  const game = getFishingGame();
+  if (!game) return;
+  const pending = !!_fishingState.pendingRoundID;
+  const unavailable = _fishingState.unavailable || !game.enabled;
+  document.querySelectorAll("#utab-games .bait-choice").forEach((button) => {
+    const selected = button.dataset.bait === _fishingState.selectedBait;
+    button.classList.toggle("selected", selected);
+    button.setAttribute("aria-pressed", selected ? "true" : "false");
+    button.disabled = unavailable || _fishingState.busy || pending;
+  });
+
+  const bait = selectedFishingBait();
+  const insufficient = !!bait && (_fishingState.creditBlockedBait === bait.bait || _fishingState.credits < finiteGameNumber(bait.price));
+  const cast = $("#fishing-cast");
+  if (cast) {
+    cast.textContent = fishingCastButtonText();
+    cast.disabled = _fishingState.busy || unavailable || (!pending && (!bait || insufficient));
+  }
+  const status = $("#fishing-status");
+  if (status) {
+    status.textContent = fishingStatusText();
+    status.classList.toggle("game-error-text", !!_fishingState.errorCode || insufficient || unavailable);
+  }
+  const stage = $("#fishing-stage");
+  if (stage) stage.setAttribute("aria-label", fishingStatusText());
+  updateGamesBalance();
+}
+
+function updateGamesBalance() {
+  const balance = $("#games-balance");
+  if (balance) balance.textContent = T('creditsBalance').replace("{n}", String(_fishingState.credits));
+}
+
+function renderFishingResultPanel() {
+  const panel = $("#fishing-result");
+  if (panel) panel.innerHTML = fishingResultHTML();
+}
+
+function setFishingPhase(phase) {
+  _fishingState.phase = phase;
+  const stage = $("#fishing-stage");
+  if (stage) {
+    ["idle", "casting", "waiting", "reeling", "result"].forEach((name) => stage.classList.remove(`phase-${name}`));
+    void stage.offsetWidth;
+    stage.classList.add(`phase-${phase}`);
+  }
+  updateFishingControls();
+}
+
+function gameDelay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function fishingAnimationDelay(ms) {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ? Math.min(ms, 80) : ms;
+}
+
+async function onFishingCast() {
+  if (_fishingState.busy) return;
+  if (_fishingState.pendingRoundID) {
+    await retryFishingSettle();
+    return;
+  }
+  const bait = selectedFishingBait();
+  if (!bait) {
+    _fishingState.errorCode = "no_bait";
+    renderFishingResultPanel();
+    updateFishingControls();
+    return;
+  }
+  if (_fishingState.credits < finiteGameNumber(bait.price)) {
+    _fishingState.errorCode = "insufficient_credits";
+    _fishingState.creditBlockedBait = bait.bait;
+    renderFishingResultPanel();
+    updateFishingControls();
+    return;
+  }
+
+  _fishingState.busy = true;
+  _fishingState.phase = "idle";
+  _fishingState.errorCode = "";
+  _fishingState.result = null;
+  renderFishingResultPanel();
+  updateFishingControls();
+  try {
+    const started = await api("/api/me/games/fishing/start", {
+      method: "POST",
+      body: { bait: bait.bait },
+    });
+    if (!started?.round_id) throw new Error("missing round_id");
+    _fishingState.pendingRoundID = started.round_id;
+    _fishingState.credits = finiteGameNumber(started.credits, _fishingState.credits);
+    _fishingState.creditBlockedBait = "";
+    if (state.me) state.me.credits = _fishingState.credits;
+    updateGamesBalance();
+  } catch (err) {
+    _fishingState.busy = false;
+    _fishingState.errorCode = normalizeGameError(err);
+    if (_fishingState.errorCode === "insufficient_credits") {
+      _fishingState.creditBlockedBait = bait.bait;
+      refreshFishingBalance();
+    }
+    if (_fishingState.errorCode === "unavailable") _fishingState.unavailable = true;
+    setFishingPhase("idle");
+    renderFishingResultPanel();
+    return;
+  }
+
+  await playFishingAnimation();
+  await settleFishingPending();
+}
+
+async function playFishingAnimation() {
+  setFishingPhase("casting");
+  await gameDelay(fishingAnimationDelay(700));
+  setFishingPhase("waiting");
+  await gameDelay(fishingAnimationDelay(1100));
+  setFishingPhase("reeling");
+  await gameDelay(fishingAnimationDelay(700));
+}
+
+async function retryFishingSettle() {
+  if (!_fishingState.pendingRoundID || _fishingState.busy) return;
+  _fishingState.busy = true;
+  _fishingState.errorCode = "";
+  renderFishingResultPanel();
+  setFishingPhase("reeling");
+  await gameDelay(fishingAnimationDelay(500));
+  await settleFishingPending();
+}
+
+async function settleFishingPending() {
+  const roundID = _fishingState.pendingRoundID;
+  if (!roundID) return;
+  try {
+    const result = await api("/api/me/games/fishing/settle", {
+      method: "POST",
+      body: { round_id: roundID },
+    });
+    _fishingState.pendingRoundID = "";
+    _fishingState.busy = false;
+    _fishingState.errorCode = "";
+    _fishingState.result = result;
+    _fishingState.credits = finiteGameNumber(result?.credits, _fishingState.credits);
+    _fishingState.creditBlockedBait = "";
+    if (state.me) state.me.credits = _fishingState.credits;
+    setFishingPhase("result");
+    renderFishingResultPanel();
+    loadFishingLeaderboard(_fishingState.board);
+  } catch (err) {
+    _fishingState.busy = false;
+    _fishingState.errorCode = normalizeGameError(err);
+    setFishingPhase("idle");
+    renderFishingResultPanel();
+  }
+}
+
+async function refreshFishingBalance() {
+  try {
+    const latest = await api("/api/me/games");
+    _fishingState.credits = finiteGameNumber(latest?.credits, _fishingState.credits);
+    _fishingState.leaderboardAnon = !!latest?.leaderboard_anon;
+    if (state.me) state.me.credits = _fishingState.credits;
+    const bait = selectedFishingBait();
+    if (bait && _fishingState.credits >= finiteGameNumber(bait.price)) {
+      _fishingState.creditBlockedBait = "";
+    }
+    updateFishingControls();
+  } catch (_) { /* keep the safe, disabled state until a later refresh */ }
+}
+
+function updateFishingBoardButtons() {
+  document.querySelectorAll("#utab-games .games-board-btn").forEach((button) => {
+    const active = button.dataset.board === _fishingState.board;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+}
+
+async function loadFishingLeaderboard(board) {
+  if (board !== "single" && board !== "total") board = "single";
+  _fishingState.board = board;
+  updateFishingBoardButtons();
+  const content = $("#games-leaderboard-content");
+  if (!content) return;
+  content.innerHTML = `<p class="muted">${T('loading')}</p>`;
+  const requestedBoard = board;
+  try {
+    const data = await api(`/api/me/games/fishing/leaderboard?board=${requestedBoard}`);
+    if (_fishingState.board !== requestedBoard || !$("#games-leaderboard-content")) return;
+    renderFishingLeaderboard(data || {}, requestedBoard);
+  } catch (_) {
+    if (_fishingState.board !== requestedBoard || !$("#games-leaderboard-content")) return;
+    content.innerHTML = `
+      <div class="note err">${T('gamesNetworkError')}</div>
+      <button type="button" id="games-lb-retry" class="secondary">${T('retry')}</button>`;
+    const retry = $("#games-lb-retry");
+    if (retry) retry.onclick = () => loadFishingLeaderboard(requestedBoard);
+  }
+}
+
+function isMyLeaderboardEntry(entry, me, board) {
+  if (!entry || !me || entry.rank !== me.rank) return false;
+  const sameValue = board === "single"
+    ? entry.size_cm === me.size_cm && entry.species_key === me.species_key
+    : entry.total === me.total;
+  if (!sameValue) return false;
+  return me.anonymous ? !!entry.anonymous : entry.username === me.username;
+}
+
+function fishingLeaderboardRow(entry, board, isMe) {
+  const rank = finiteGameNumber(entry?.rank);
+  const anonymous = !!entry?.anonymous || !entry?.username;
+  const username = anonymous ? T('gamesAnonymousUser') : esc(entry.username);
+  const meBadge = isMe ? `<span class="badge game-my-rank">${T('gamesMyRank')}</span>` : "";
+  let value = "—";
+  if (board === "single") {
+    const species = entry?.species_key ? esc(gameSpeciesName(entry.species_key)) : "";
+    const size = finiteGameNumber(entry?.size_cm);
+    value = `${species ? `<span class="game-lb-species">${species}</span> · ` : ""}<strong>${size} cm</strong>`;
+  } else {
+    value = `<strong>${finiteGameNumber(entry?.total)}</strong>`;
+  }
+  return `
+    <tr${isMe ? ' class="game-lb-me"' : ""}>
+      <td class="mono">#${rank}</td>
+      <td>${username} ${meBadge}</td>
+      <td>${value}</td>
+    </tr>`;
+}
+
+function renderFishingLeaderboard(data, board) {
+  const content = $("#games-leaderboard-content");
+  if (!content) return;
+  const entries = Array.isArray(data?.entries) ? data.entries.slice(0, 20) : [];
+  // The list endpoint is authoritative for the user's current toggle. Apply
+  // it to `me` as well so both boards render consistently even if an older
+  // backend omits the flag from the personal total-board row.
+  const me = data?.me ? { ...data.me, anonymous: _fishingState.leaderboardAnon } : null;
+  let markedMe = false;
+  const rows = entries.map((entry) => {
+    const mine = isMyLeaderboardEntry(entry, me, board);
+    if (mine) markedMe = true;
+    return fishingLeaderboardRow(entry, board, mine);
+  });
+  if (me && !markedMe) rows.push(fishingLeaderboardRow(me, board, true));
+  const valueHeading = board === "single" ? T('gamesSize') : T('gamesTotal');
+  content.innerHTML = `
+    <div class="table-wrap">
+      <table aria-label="${esc(T('gamesLeaderboard'))}">
+        <thead><tr><th>${T('gamesRank')}</th><th>${T('username')}</th><th>${valueHeading}</th></tr></thead>
+        <tbody>${rows.length ? rows.join("") : `<tr><td colspan="3" class="empty-state games-empty">${T('gamesEmpty')}</td></tr>`}</tbody>
+      </table>
+    </div>`;
+}
+
 async function renderCharityCard() {
   const card = $("#charity-card");
   if (!card) return;
@@ -929,7 +1722,7 @@ async function renderMyDonations() {
     }
     html += `</tbody></table></div>`;
   } else {
-    html += `<p class="muted">${T('empty')}</p>`;
+    html += `<p class="empty-state">${T('empty')}</p>`;
   }
 
   container.innerHTML = html;
@@ -1023,9 +1816,12 @@ const cfgPager = newPager(cfgRow);
 const logPager = newPager(logRow);
 
 function cfgRow(c) {
+  const svcName = (String(c.model || "").match(/^\[([^\]]+)\]/) || [])[1] || "";
+  const svc = _cfgServices.find((item) => item.name === svcName);
+  const deprecated = svc?.deprecated ? ` <span class="badge warn">${T('serviceDeprecated')}</span>` : "";
   return `
     <tr data-id="${c.id}">
-      <td class="mono">${esc(c.model)}</td>
+      <td class="mono">${esc(c.model)}${deprecated}</td>
       <td class="muted wrap">${esc(c.note || "—")}</td>
       <td><input type="checkbox" class="cfg-toggle" ${c.enabled ? "checked" : ""} role="switch"></td>
       <td><div class="row-actions">
@@ -1077,17 +1873,19 @@ async function showConfigEditDialog(c) {
   if (m) { svc = m[1]; backend = m[2]; }
 
   // Populate services dropdown
+  let svcList = [];
   let svcOpts = "";
   try {
     const { services } = await api("/api/services");
-    svcOpts = (services || []).map((s) => `<option value="${esc(s.name)}" ${s.name === svc ? "selected" : ""}>${esc(s.name)}</option>`).join("");
+    svcList = services || [];
+    svcOpts = svcList.map((s) => `<option value="${esc(s.name)}" ${s.name === svc ? "selected" : ""}>${esc(s.name)}</option>`).join("");
   } catch (_) { /* keep empty */ }
 
   dialog.innerHTML = `
     <article>
       <header><h3>${T('editConfig')}</h3></header>
       <form id="cfg-edit-form">
-        <label>${T('thService')}<select name="service">${svcOpts}</select></label>
+        <label>${T('thService')}<select name="service" id="cfg-edit-service">${svcOpts}</select><span id="cfg-edit-deprecated" class="badge warn" style="display:none;margin-left:.5rem;vertical-align:middle">${T('serviceDeprecated')}</span></label>
         <label>${T('thModel')}<input name="backend" value="${esc(backend)}" placeholder="${T('fieldBackend')}${T('fieldBackendHint')}" required></label>
         <label>${T('thBaseURL')}<input name="dify_base_url" value="${esc(c.dify_base_url)}" placeholder="${T('fieldBaseURL')}" required></label>
         <label>API Key<input name="dify_api_key" placeholder="${T('fieldAPIKey')}"></label>
@@ -1101,12 +1899,26 @@ async function showConfigEditDialog(c) {
     </article>`;
   dialog.showModal();
 
+  // Deprecation badge follows the edited service selection.
+  const updateEditDeprecated = () => {
+    const sel = $("#cfg-edit-service");
+    const name = sel ? sel.value : "";
+    const s = svcList.find((x) => x.name === name);
+    const badge = $("#cfg-edit-deprecated");
+    if (badge) badge.style.display = s && s.deprecated ? "" : "none";
+  };
+  updateEditDeprecated();
+  const _editSvcSel = $("#cfg-edit-service");
+  if (_editSvcSel) _editSvcSel.onchange = updateEditDeprecated;
+
   const close = () => { dialog.close(); dialog.remove(); };
   $("#cfg-edit-cancel").onclick = close;
   dialog.addEventListener("click", (e) => { if (e.target === dialog) close(); });
 
   $("#cfg-edit-save").onclick = async () => {
     const f = $("#cfg-edit-form");
+    const _editSvc = svcList.find((x) => x.name === f.service.value);
+    if (_editSvc && _editSvc.deprecated && !confirm(T('serviceDeprecated') + ' · ' + f.service.value)) return;
     const body = {
       model: `[${f.service.value}]${f.backend.value.trim()}`,
       dify_base_url: f.dify_base_url.value,
@@ -1150,6 +1962,202 @@ async function showConfigEditDialog(c) {
   };
 }
 
+// Services cached for the configs form: drives the deprecation badge and
+// the "Get My App" button. Refreshed in initUserConfigsTab.
+let _cfgServices = [];
+
+function selectedCfgService() {
+  const sel = $("#cfg-service");
+  if (!sel) return null;
+  const name = sel.value || "";
+  return _cfgServices.find((s) => s.name === name) || null;
+}
+
+// Show/hide the deprecation badge and the "Get My App" button based on the
+// service currently selected in the configs form.
+function updateCfgServiceExtras() {
+  const svc = selectedCfgService();
+  const badge = $("#cfg-service-deprecated");
+  const btn = $("#cfg-getapp-btn");
+  if (badge) badge.style.display = svc && svc.deprecated ? "" : "none";
+  if (btn) btn.style.display = svc && svc.downloadable ? "" : "none";
+}
+
+// Build the label for a model option in the Get-My-App dialog:
+// "Display Name · provider · v1.2.3".
+function getMyAppModelLabel(m) {
+  const parts = [m.display_name || m.model_key];
+  if (m.provider) parts.push(m.provider);
+  if (m.dependency_version) parts.push("v" + m.dependency_version);
+  return parts.join(" · ");
+}
+
+// "Get My App" dialog: list downloadable models for sillytavern-main-v1 and
+// fetch a fresh obfuscated DSL (personal or donation purpose). Reuses the
+// same <dialog> pattern as the config edit dialog.
+async function showGetMyAppDialog() {
+  const old = $("#cfg-getapp-dialog");
+  if (old) old.remove();
+
+  const dialog = document.createElement("dialog");
+  dialog.id = "cfg-getapp-dialog";
+  document.body.appendChild(dialog);
+  dialog.innerHTML = `
+    <article>
+      <header><h3>${T('serviceGetMyApp')}</h3></header>
+      <p class="muted">${T('loading')}</p>
+      <footer style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:.5rem">
+        <button type="button" id="getapp-close" class="secondary">${T('bulletinClose')}</button>
+      </footer>
+    </article>`;
+  dialog.showModal();
+
+  const close = () => { dialog.close(); dialog.remove(); };
+  $("#getapp-close").onclick = close;
+  dialog.addEventListener("click", (e) => { if (e.target === dialog) close(); });
+
+  let models = null;
+  let fetchErr = null;
+  try {
+    const service = selectedCfgService()?.name || "";
+    if (!service) throw new Error("service is required");
+    dialog.dataset.service = service;
+    const data = await api(`/api/me/services/${encodeURIComponent(service)}/models`);
+    models = data.models || [];
+  } catch (err) {
+    fetchErr = err;
+  }
+  // The user may have closed the dialog while the fetch was in flight.
+  if (!document.body.contains(dialog)) return;
+
+  let bodyHtml;
+  if (fetchErr) {
+    bodyHtml = `<div class="note err">${T('serviceDownloadError').replace("{msg}", esc(fetchErr.message))}</div>`;
+  } else if (!models.length) {
+    bodyHtml = `<p class="empty-state">${T('empty')}</p>`;
+  } else {
+    const opts = models.map((m) => {
+      const disabled = m.enabled === false;
+      return `<option value="${esc(m.model_key)}"${disabled ? " disabled" : ""}>${esc(getMyAppModelLabel(m))}</option>`;
+    }).join("");
+    bodyHtml = `
+        <label>${T('serviceDownloadModel')}<select id="getapp-model">${opts}</select></label>
+        <div class="note warn" style="margin:.5rem 0">${T('serviceRedownloadWarning')}</div>
+        <div class="row-actions" style="margin:.5rem 0">
+          <button type="button" id="getapp-download">${T('serviceDownloadDsl')}</button>
+          <button type="button" id="getapp-donate" class="secondary">${T('serviceDonate')}</button>
+        </div>
+        <div id="getapp-msg" aria-live="polite"></div>`;
+  }
+  dialog.innerHTML = `
+    <article>
+      <header><h3>${T('serviceGetMyApp')}</h3></header>
+      ${bodyHtml}
+      <footer style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:.5rem">
+        <button type="button" id="getapp-close" class="secondary">${T('bulletinClose')}</button>
+      </footer>
+    </article>`;
+  // innerHTML reset cleared the close-button handler; rebind it. The backdrop
+  // listener lives on `dialog` itself and survives the child replacement.
+  $("#getapp-close").onclick = close;
+  if (models && models.length) {
+    $("#getapp-download").onclick = () => downloadMyApp("personal");
+    $("#getapp-donate").onclick = () => downloadMyApp("donation");
+  }
+}
+
+// Toggle download buttons + aria-busy while a download is in flight.
+function setGetAppBusy(busy) {
+  const dl = $("#getapp-download");
+  const don = $("#getapp-donate");
+  [dl, don].forEach((b) => {
+    if (!b) return;
+    b.disabled = busy;
+    if (busy) b.setAttribute("aria-busy", "true"); else b.removeAttribute("aria-busy");
+  });
+}
+
+// Download a DSL template for the selected model. `purpose` is "personal" or
+// "donation". Donation downloads gate on a 409 confirm_required second step.
+async function downloadMyApp(purpose) {
+  const modelSel = $("#getapp-model");
+  const modelKey = modelSel ? modelSel.value : "";
+  if (!modelKey) return;
+  const msg = $("#getapp-msg");
+  setGetAppBusy(true);
+  if (msg) msg.innerHTML = `<p class="muted">${T('loading')}</p>`;
+
+  const run = async (confirmFlag) => {
+    const service = $("#cfg-getapp-dialog")?.dataset.service || selectedCfgService()?.name || "";
+    let url = `/api/me/services/${encodeURIComponent(service)}/download?model=${encodeURIComponent(modelKey)}&purpose=${encodeURIComponent(purpose)}`;
+    if (confirmFlag) url += "&confirm=true";
+    const resp = await fetch(url, { credentials: "same-origin" });
+    if (resp.ok) {
+      const blob = await resp.blob();
+      const m = (resp.headers.get("Content-Disposition") || "").match(/filename="?([^"]+)"?/);
+      return { ok: true, blob: blob, filename: m ? m[1] : `sillytavern-main-v1-${modelKey}.yml` };
+    }
+    let body = null;
+    try { body = await resp.json(); } catch (_) { /* non-JSON error body */ }
+    return { ok: false, status: resp.status, code: (body && body.error && body.error.code) || "", message: (body && body.error && body.error.message) || `HTTP ${resp.status}` };
+  };
+
+  let result;
+  try {
+    result = await run(false);
+  } catch (err) {
+    setGetAppBusy(false);
+    if (msg) msg.innerHTML = `<div class="note err">${T('serviceDownloadError').replace("{msg}", esc(err.message))}</div>`;
+    return;
+  }
+
+  // Donation second confirmation: 409 confirm_required → re-run with confirm.
+  if (!result.ok && result.status === 409 && result.code === "confirm_required" && purpose === "donation") {
+    if (confirm(T('serviceConfirmRequired'))) {
+      try {
+        result = await run(true);
+      } catch (err) {
+        setGetAppBusy(false);
+        if (msg) msg.innerHTML = `<div class="note err">${T('serviceDownloadError').replace("{msg}", esc(err.message))}</div>`;
+        return;
+      }
+    } else {
+      setGetAppBusy(false);
+      if (msg) msg.innerHTML = "";
+      return;
+    }
+  }
+
+  if (!result.ok) {
+    setGetAppBusy(false);
+    if (result.status === 403 && result.code === "donation_locked") {
+      if (msg) msg.innerHTML = `<div class="note err">${T('serviceDonationLocked')}</div>`;
+    } else {
+      if (msg) msg.innerHTML = `<div class="note err">${T('serviceDownloadError').replace("{msg}", esc(result.message))}</div>`;
+    }
+    return;
+  }
+
+  // Success: trigger a browser download of the YAML attachment.
+  try {
+    const url = URL.createObjectURL(result.blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = result.filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    if (msg) msg.innerHTML = `<div class="note ok">${T('serviceDownloadedHint')}</div><div class="note info">${T('serviceImportGuide')}</div>`;
+    toast(T('serviceDownloadedHint'));
+  } catch (err) {
+    setGetAppBusy(false);
+    if (msg) msg.innerHTML = `<div class="note err">${T('serviceDownloadError').replace("{msg}", esc(err.message))}</div>`;
+    return;
+  }
+  setGetAppBusy(false);
+}
+
 // Self-site hint state for the create form. Set when the create API answers
 // with a `notice` (base URL looks like this console). The config is already
 // saved; we keep the form values, pin a persistent warning next to the field,
@@ -1160,6 +2168,8 @@ let _cfgSelfSitePending = null; // {id: number} | null
 async function onConfigSubmit(e) {
   e.preventDefault();
   const f = e.target;
+  const _selSvc = _cfgServices.find((s) => s.name === f.service.value);
+  if (_selSvc && _selSvc.deprecated && !confirm(T('serviceDeprecated') + ' · ' + f.service.value)) return;
   const body = {
     model: `[${f.service.value}]${f.backend.value.trim()}`,
     dify_base_url: f.dify_base_url.value,
@@ -1264,7 +2274,7 @@ function logRow(l) {
       <td class="mono">${esc(l.model)}</td>
       <td><span class="badge ${l.status === "success" ? "ok" : "err"}">${esc(l.status)}</span></td>
       <td class="mono muted">${esc(l.error_code || "")}</td>
-      <td class="muted wrap" style="max-width:48rem">${esc(l.error_detail || "")}</td>
+      <td class="muted wrap-clamp">${cellClamp(l.error_detail)}</td>
       <td class="mono muted">${l.credits_consumed ? esc(String(l.credits_consumed)) : "0"}</td>
       <td class="muted">${esc(aaText)}</td>
     </tr>`;
@@ -1308,6 +2318,8 @@ async function initUserCoAdminTab() {
 /* ---------------- R-A: all-site logs tab (level 5, no export) ---------------- */
 async function initUserAllLogsTab() {
   _allLogsMode = "me";
+  const alfRows = $("#alf-rows");
+  if (alfRows) alfRows.innerHTML = skeletonRows(12, 6);
   try {
     const { services } = await api("/api/services");
     $("#alf-service").innerHTML = `<option value="">${T('adminLogsAllServices')}</option>` +

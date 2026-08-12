@@ -12,8 +12,8 @@ import (
 func TestActivitySchemaContract(t *testing.T) {
 	st, _ := openTemp(t)
 	for table, want := range map[string][]string{
-		"user_activity_daily": {"day", "user_id", "api_attempts", "api_successes", "console_actions", "checkins", "updated_at"},
-		"site_activity_daily": {"day", "new_users", "product_active", "successful_api_active", "attempted_api_active", "console_active", "checkin_only_active", "api_attempts", "api_successes", "wau", "active_28d", "engaged_28d", "finalized_at"},
+		"user_activity_daily": {"day", "user_id", "api_attempts", "api_successes", "console_actions", "checkins", "game_rounds", "updated_at"},
+		"site_activity_daily": {"day", "new_users", "product_active", "successful_api_active", "attempted_api_active", "console_active", "checkin_only_active", "api_attempts", "api_successes", "game_active", "wau", "active_28d", "engaged_28d", "finalized_at"},
 	} {
 		rows, err := st.db.Query(`PRAGMA table_info(` + table + `)`)
 		if err != nil {

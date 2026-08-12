@@ -25,6 +25,7 @@ test("suppressed values never become zero or rates", () => {
   assert.equal(activity.successRate(7, 10), 0.7);
   assert.equal(activity.hasReportableData([{ product_active: null, api_attempts: null }]), false);
   assert.equal(activity.hasReportableData([{ product_active: 0 }]), true);
+  assert.equal(activity.hasReportableData([{ game_active: 1 }]), true);
 });
 
 test("only the newest range request may update the view", () => {

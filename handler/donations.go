@@ -129,6 +129,14 @@ func pickWeightedDonation(candidates []*db.Donation, limiter *donationRateLimite
 // compatibility for a donation entry. Returns a validation result map
 // suitable for inclusion in API responses (informational, never blocks).
 func (g *Gateway) validateDonationApp(ctx context.Context, userID int64, service, baseURL, apiKey string) map[string]interface{} {
+	return g.validateDonationAppWithMapping(ctx, userID, service, baseURL, apiKey, nil)
+}
+
+// validateDonationAppWithMapping additionally accepts a canonical->obfuscated
+// mapping snapshot (template services): the App's parameter names are
+// translated back to canonical names before the contract check, and dummy
+// variables are ignored.
+func (g *Gateway) validateDonationAppWithMapping(ctx context.Context, userID int64, service, baseURL, apiKey string, mapping map[string]string) map[string]interface{} {
 	release, err := g.acquireDifyProbe(ctx)
 	if err != nil {
 		return map[string]interface{}{"compatible": false, "message": err.Error()}
@@ -144,6 +152,20 @@ func (g *Gateway) validateDonationApp(ctx context.Context, userID int64, service
 			"compatible": false,
 			"message":    fmt.Sprintf("App 不可达: %v", err),
 		}
+	}
+	if len(mapping) > 0 {
+		rev := make(map[string]string, len(mapping))
+		for canonical, obf := range mapping {
+			rev[obf] = canonical
+		}
+		normalized := make(map[string]bool, len(params))
+		for obf, required := range params {
+			if canonical, ok := rev[obf]; ok {
+				normalized[canonical] = required
+			}
+			// Unmapped (dummy) variables are ignored.
+		}
+		params = normalized
 	}
 	res := translator.CheckAppParams(service, params)
 	out := map[string]interface{}{
@@ -1226,6 +1248,24 @@ func (g *Gateway) handleCreateDonationApp(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Template services (v1): the donation App must come from a prior
+	// donation-purpose download; its mapping snapshot is attached to the
+	// application and later copied into the approved donation row.
+	var mappingSnapshot map[string]string
+	if serviceHasTemplate(req.Service) {
+		var mapErr error
+		mappingSnapshot, mapErr = g.Store.LatestGenerationMapping(u.ID, req.Service, "donation")
+		if mapErr != nil {
+			g.writeError(w, http.StatusInternalServerError, "internal", mapErr.Error())
+			return
+		}
+		if len(mappingSnapshot) == 0 {
+			g.writeError(w, http.StatusBadRequest, "template_not_downloaded",
+				t(g.resolveLang(r), "请先下载捐赠版 App 模板（下载时选择「捐出」）再提交申请", "Download the donation App template first (choose \"Donate\" when downloading) before submitting"))
+			return
+		}
+	}
+
 	app, err := g.Store.CreateDonationApplicationWithLimit(u.ID, req.Service, req.Model, req.DifyBaseURL, req.DifyAPIKey, req.TotalCount, req.Deadline, req.RpmLimit, strings.TrimSpace(req.Note), limit)
 	if err != nil {
 		if errors.Is(err, db.ErrPendingApplicationLimit) {
@@ -1245,6 +1285,16 @@ func (g *Gateway) handleCreateDonationApp(w http.ResponseWriter, r *http.Request
 		return
 	}
 	g.recordConsoleActivity(u.ID)
+
+	// Attach the template mapping snapshot (B'): the approved donation row
+	// will carry it for routing and validation.
+	if len(mappingSnapshot) > 0 {
+		if raw, marshalErr := json.Marshal(mappingSnapshot); marshalErr == nil {
+			if err := g.Store.SetApplicationMapping(app.ID, string(raw)); err != nil {
+				log.Printf("[ERROR] attach donation mapping snapshot (app %d): %v", app.ID, err)
+			}
+		}
+	}
 
 	resp := map[string]interface{}{
 		"ok":          true,
