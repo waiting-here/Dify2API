@@ -12,7 +12,7 @@ import (
 // gameStartLimitPerUser caps fishing round starts per user per minute
 // (ticket purchases are the money gate; this bounds automation on top of
 // the credits floor).
-const gameStartLimitPerUser = 10
+const gameStartLimitPerUser = 30
 
 // GET /api/me/games — game list with live switches, economy params, the
 // caller's credits and leaderboard anonymity switch.

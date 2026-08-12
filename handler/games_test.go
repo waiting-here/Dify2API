@@ -328,7 +328,7 @@ func TestGames_DisabledSwitches(t *testing.T) {
 	})
 }
 
-// --- 6. per-user start rate limit (10/min) ---
+// --- 6. per-user start rate limit (30/min) ---
 
 func TestGames_StartRateLimit(t *testing.T) {
 	gw, store := setupAuthGateway(t, "s3cret")
@@ -350,10 +350,10 @@ func TestGames_StartRateLimit(t *testing.T) {
 	if c := errCode(rec.Body.Bytes()); c != "rate_limited" {
 		t.Errorf("code=%q want rate_limited; body=%s", c, rec.Body.String())
 	}
-	// Credits untouched by the rejected attempt: 1000 - 10*5 = 950.
+	// Credits untouched by the rejected attempt: 1000 - 30*5 = 850.
 	got, _ := store.GetUserByID(u.ID)
-	if got.Credits != 950 {
-		t.Errorf("credits after rate-limited attempt=%d want 950", got.Credits)
+	if want := 1000 - gameStartLimitPerUser*5; got.Credits != want {
+		t.Errorf("credits after rate-limited attempt=%d want %d", got.Credits, want)
 	}
 }
 

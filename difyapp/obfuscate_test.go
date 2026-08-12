@@ -124,6 +124,17 @@ func TestGenerateObfuscated(t *testing.T) {
 				t.Fatalf("canonical leak %q in generation %d", name, i)
 			}
 		}
+		// Sticky notes are removed and no Dify2API signature survives.
+		for _, marker := range []string{"custom-note", "Dify2API", "Dify2API generated workflow"} {
+			if strings.Contains(string(res.DSL), marker) {
+				t.Fatalf("signature marker %q leaked into generation %d", marker, i)
+			}
+		}
+		// App icon must come from the randomised pool, never the fixed
+		// template/obfuscator default.
+		if strings.Contains(string(res.DSL), "icon: 🎣") || strings.Contains(string(res.DSL), "icon: 🔗") {
+			t.Fatalf("fixed app icon leaked into generation %d", i)
+		}
 		// Mapping round-trips: every canonical maps to one of the start vars.
 		seen := map[string]bool{}
 		for _, v := range vars {

@@ -64,6 +64,41 @@ func dummyTitle(i int) string {
 	return fmt.Sprintf("%s %d", words[idx], i+1)
 }
 
+// randomChoice returns a uniformly random element of items.
+func randomChoice(items []string) (string, error) {
+	if len(items) == 0 {
+		return "", nil
+	}
+	i, err := randInt(len(items))
+	if err != nil {
+		return "", err
+	}
+	return items[i], nil
+}
+
+// appNamePool / appDescPool / appIconPool are generic, human-looking app
+// identities. They are deliberately varied so downloaded apps do not share
+// a single recognisable "Dify2API" signature.
+var appNamePool = []string{
+	"Chat Workspace", "Assistant Studio", "AI Copilot", "Prompt Studio",
+	"Workflow Hub", "Smart Assistant", "Task Forge", "Idea Lab",
+	"Automation Desk", "Neural Desk", "Query Deck", "Flow Canvas",
+}
+
+var appDescPool = []string{
+	"AI workflow for everyday tasks.",
+	"Automated assistant pipeline.",
+	"Multi-step AI automation.",
+	"Reusable prompt workspace.",
+	"Intelligent task orchestration.",
+	"Streamlined AI processing.",
+}
+
+var appIconPool = []string{
+	"🧠", "📊", "🤖", "📝", "🚀", "💡", "🛠️", "⚡", "🎯", "📚",
+	"🗂️", "🔎", "🧩", "⚙️", "✨",
+}
+
 // GenerateObfuscated produces a fresh obfuscated DSL from the base template
 // with a per-download random seed: renamed variable keys and labels, renamed
 // node ids (all references synchronized), random app name/description/node
@@ -96,18 +131,72 @@ func GenerateObfuscated(base []byte, seed []byte) (*ObfuscationResult, error) {
 	if !ok || appNode.Kind != yaml.MappingNode {
 		return nil, fmt.Errorf("difyapp: app block missing")
 	}
+	namePrefix, err := randomChoice(appNamePool)
+	if err != nil {
+		return nil, err
+	}
+	desc, err := randomChoice(appDescPool)
+	if err != nil {
+		return nil, err
+	}
+	icon, err := randomChoice(appIconPool)
+	if err != nil {
+		return nil, err
+	}
 	randHex, err := randomHex(6)
 	if err != nil {
 		return nil, err
 	}
-	setMapScalar(appNode, "name", "Chat Workspace "+randHex)
-	setMapScalar(appNode, "description", "Dify2API generated workflow (v1).")
-	setMapScalar(appNode, "icon", "🎣")
+	setMapScalar(appNode, "name", namePrefix+" "+randHex)
+	setMapScalar(appNode, "description", desc)
+	setMapScalar(appNode, "icon", icon)
 
 	// --- 2. Rename node ids (deterministic fresh ids, no collisions) ----
 	workflow, _ := mapChild(root, "workflow")
 	graph, _ := mapChild(workflow, "graph")
 	nodes, _ := seqChild(graph, "nodes")
+
+	// --- 2. Drop custom-note nodes ------------------------------------
+	// Sticky notes are pure decoration and can leak template language or
+	// model hints (e.g. a Chinese note referencing Claude). They are never
+	// referenced by edges in the official export, but any edge touching a
+	// removed note is dropped as well to keep the graph consistent.
+	removedNotes := map[string]bool{}
+	keptNodes := nodes.Content[:0]
+	for _, n := range nodes.Content {
+		// Dify sticky notes carry type on the node itself (not data.type).
+		if t, ok := mapScalar(n, "type"); ok && t == "custom-note" {
+			if id, ok := mapScalar(n, "id"); ok {
+				removedNotes[id] = true
+			}
+			continue
+		}
+		if data, ok := mapChild(n, "data"); ok {
+			if t, ok := mapScalar(data, "type"); ok && t == "custom-note" {
+				if id, ok := mapScalar(n, "id"); ok {
+					removedNotes[id] = true
+				}
+				continue
+			}
+		}
+		keptNodes = append(keptNodes, n)
+	}
+	nodes.Content = keptNodes
+	if len(removedNotes) > 0 {
+		if edges, ok := seqChild(graph, "edges"); ok {
+			keptEdges := edges.Content[:0]
+			for _, e := range edges.Content {
+				src, _ := mapScalar(e, "source")
+				tgt, _ := mapScalar(e, "target")
+				if removedNotes[src] || removedNotes[tgt] {
+					continue
+				}
+				keptEdges = append(keptEdges, e)
+			}
+			edges.Content = keptEdges
+		}
+	}
+
 	origIDs := make(map[string]bool)
 	idMap := make(map[string]string)
 	newID := func() (string, error) {
