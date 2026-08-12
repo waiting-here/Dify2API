@@ -2043,9 +2043,15 @@ async function showGetMyAppDialog() {
     bodyHtml = `
         <label>${T('serviceDownloadModel')}<select id="getapp-model">${opts}</select></label>
         <div class="note warn" style="margin:.5rem 0">${T('serviceRedownloadWarning')}</div>
-        <div class="row-actions" style="margin:.5rem 0">
-          <button type="button" id="getapp-download">${T('serviceDownloadDsl')}</button>
-          <button type="button" id="getapp-donate" class="secondary">${T('serviceDonate')}</button>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));gap:.6rem;margin:.75rem 0">
+          <div style="display:flex;flex-direction:column;align-items:stretch;gap:.2rem">
+            <button type="button" id="getapp-download" style="margin:0">${T('serviceDownloadDsl')}</button>
+            <small class="muted" style="line-height:1.35">${T('serviceDownloadDslHint')}</small>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:stretch;gap:.2rem">
+            <button type="button" id="getapp-donate" class="secondary" style="margin:0">${T('serviceDonate')}</button>
+            <small class="muted" style="line-height:1.35">${T('serviceDonateHint')}</small>
+          </div>
         </div>
         <div id="getapp-msg" aria-live="polite"></div>`;
   }
