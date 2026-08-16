@@ -577,13 +577,16 @@ func TestAdminLogs_CSVFormulaPrefixesAcrossColumns(t *testing.T) {
 		t.Fatalf("CSV shape = %d rows / %d columns; body=%q", len(rows), len(rows[1]), rec.Body.String())
 	}
 	wantSafe := map[int]string{
-		2:  "\u00a0+username",
-		3:  "\u2003-model",
-		4:  "\n@service",
-		7:  "\r=status",
-		8:  "\ufeff=error",
-		9:  "-418",
-		10: "\t+detail,\"quoted\"\nnext",
+		2: "\u00a0+username",
+		3: "\u2003-model",
+		4: "\n@service",
+		7: "\r=status",
+		8: "\ufeff=error",
+		9: "-418",
+		// R03's request-log sink normalizes TAB/CR/LF before CSV export. The
+		// CSV boundary must still apostrophe-prefix the first formula marker
+		// after the resulting leading space.
+		10: " +detail,\"quoted\"  next",
 		12: "-7",
 		13: "\u00a0-anti",
 	}
@@ -591,6 +594,13 @@ func TestAdminLogs_CSVFormulaPrefixesAcrossColumns(t *testing.T) {
 		if got, want := rows[1][index], "'"+input; got != want {
 			t.Errorf("column %s = %q, want %q", rows[0][index], got, want)
 		}
+	}
+	detail := rows[1][10]
+	if strings.ContainsAny(detail, "\r\n\t") {
+		t.Fatalf("error detail CSV cell is not single-line: %q", detail)
+	}
+	if !strings.HasPrefix(detail, "'") || !strings.HasPrefix(strings.TrimLeft(detail[1:], " "), "+") {
+		t.Fatalf("error detail CSV cell did not guard the first formula marker: %q", detail)
 	}
 }
 

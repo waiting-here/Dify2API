@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"dify2api/config"
+	"dify2api/diagnostic"
 )
 
 // RequestLogRetention is how long request logs are kept (rolling 30 days).
@@ -58,6 +59,11 @@ func (s *Store) addRequestLogFull(userID int64, model, service string, startedAt
 	if donationID > 0 {
 		don = donationID
 	}
+	// Keep every request-log entry point behind the same final diagnostic
+	// boundary.  antiAbuseInfo is structured internal metadata and remains
+	// untouched so it stays valid JSON for admin consumers.
+	errorCode = diagnostic.Bound(errorCode)
+	errorDetail = diagnostic.Bound(errorDetail)
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, err

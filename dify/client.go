@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"dify2api/diagnostic"
 )
 
 // Client calls the Dify Workflow API.
@@ -66,11 +68,50 @@ type DifyError struct {
 	Status  int    // HTTP status from Dify
 }
 
+// WorkflowFailedCode is the stable machine code used when Dify returned HTTP
+// 200 but reported a failed workflow. The upstream error text belongs only in
+// Message; keeping it out of Code prevents accidental duplication in logs and
+// alerts.
+const WorkflowFailedCode = "workflow_failed"
+
 func (e *DifyError) Error() string {
-	if e.Code != "" {
-		return fmt.Sprintf("[%s] %s", e.Code, e.Message)
+	if e == nil {
+		return ""
 	}
-	return e.Message
+	code := stableDifyErrorCode(e.Code)
+	message := diagnostic.Bound(e.Message)
+	if code == "" {
+		return diagnostic.BoundTo(message, diagnostic.ProcessMaxBytes)
+	}
+	if message == "" {
+		return "[" + code + "]"
+	}
+	// A few upstream versions repeat the free-form error in both fields. Do
+	// not reproduce it a second time in an operational diagnostic.
+	if strings.EqualFold(strings.TrimSpace(e.Code), strings.TrimSpace(e.Message)) {
+		return diagnostic.BoundTo(message, diagnostic.ProcessMaxBytes)
+	}
+	return diagnostic.BoundTo(fmt.Sprintf("[%s] %s", code, message), diagnostic.ProcessMaxBytes)
+}
+
+func stableDifyErrorCode(code string) string {
+	if len(code) > 64 {
+		return "upstream_error"
+	}
+	code = strings.ToLower(strings.TrimSpace(strings.ToValidUTF8(code, "\uFFFD")))
+	if code == "" {
+		return ""
+	}
+	if len(code) > 64 {
+		return "upstream_error"
+	}
+	for _, r := range code {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return "upstream_error"
+	}
+	return code
 }
 
 // parseDifyErrorBody attempts to extract a structured error from a Dify
@@ -82,11 +123,11 @@ func parseDifyErrorBody(statusCode int, bodyBytes []byte) *DifyError {
 		Message string `json:"message"`
 	}
 	if json.Unmarshal(bodyBytes, &raw) == nil {
-		de.Code = raw.Code
-		de.Message = raw.Message
+		de.Code = stableDifyErrorCode(raw.Code)
+		de.Message = diagnostic.Bound(raw.Message)
 	}
 	if de.Message == "" {
-		de.Message = string(bodyBytes)
+		de.Message = diagnostic.Bound(string(bodyBytes))
 	}
 	if de.Message == "" {
 		de.Message = fmt.Sprintf("HTTP %d", statusCode)
@@ -354,7 +395,7 @@ func (c *Client) BlockingWorkflowContext(ctx context.Context, req *WorkflowReque
 	}
 
 	if result.Data.Status == "failed" {
-		return "", &DifyError{Code: result.Data.Error, Message: result.Data.Error, Status: resp.StatusCode}
+		return "", &DifyError{Code: WorkflowFailedCode, Message: diagnostic.Bound(result.Data.Error), Status: resp.StatusCode}
 	}
 
 	// Extract text from outputs — Dify end node maps the LLM's text output
@@ -370,7 +411,8 @@ func (c *Client) BlockingWorkflowContext(ctx context.Context, req *WorkflowReque
 		}
 		sort.Strings(keys)
 		firstKey := keys[0]
-		log.Printf("[WARN] blocking workflow outputs has no \"text\" key; using %q", firstKey)
+		log.Printf("[WARN] blocking workflow outputs has no \"text\" key; using %s",
+			diagnostic.BoundTo(fmt.Sprintf("%q", firstKey), diagnostic.ProcessMaxBytes))
 		return fmt.Sprintf("%v", result.Data.Outputs[firstKey]), nil
 	}
 

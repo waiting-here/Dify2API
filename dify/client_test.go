@@ -307,7 +307,8 @@ func TestBlockingWorkflow_EmptyOutputs(t *testing.T) {
 }
 
 func TestBlockingWorkflow_FailedStatus(t *testing.T) {
-	body := `{"data":{"outputs":{},"status":"failed","error":"something broke"}}`
+	const raw = "something broke\r\nwith tabs\tand a long tail"
+	body := fmt.Sprintf(`{"data":{"outputs":{},"status":"failed","error":%q}}`, raw)
 	srv := blockingServer(t, body, http.StatusOK)
 	defer srv.Close()
 
@@ -319,6 +320,34 @@ func TestBlockingWorkflow_FailedStatus(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for failed status")
+	}
+	var de *DifyError
+	if !errors.As(err, &de) {
+		t.Fatalf("error = %T, want *DifyError", err)
+	}
+	if de.Code != WorkflowFailedCode {
+		t.Fatalf("failed code = %q, want %q", de.Code, WorkflowFailedCode)
+	}
+	if de.Message != strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(raw, "\r", " "), "\n", " "), "\t", " ") {
+		t.Fatalf("failed message = %q, want bounded single-line raw text", de.Message)
+	}
+	if strings.Count(err.Error(), raw) > 1 || strings.Contains(err.Error(), "\r") || strings.Contains(err.Error(), "\n") || strings.Contains(err.Error(), "\t") {
+		t.Fatalf("failed diagnostic duplicated or multiline: %q", err.Error())
+	}
+}
+
+func TestStableDifyErrorCode_RejectsHugeInputBeforeNormalization(t *testing.T) {
+	code := strings.Repeat("x", 32<<20)
+	if got := stableDifyErrorCode(code); got != "upstream_error" {
+		t.Fatalf("huge code = %q, want upstream_error", got)
+	}
+	allocs := testing.AllocsPerRun(5, func() {
+		if stableDifyErrorCode(code) != "upstream_error" {
+			t.Fatal("huge code unexpectedly accepted")
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("huge code allocations = %.1f, want 0 before normalization", allocs)
 	}
 }
 

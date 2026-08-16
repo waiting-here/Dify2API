@@ -73,7 +73,7 @@ func (g *Gateway) stopDifyWorkflow(client *dify.Client, taskID, user string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := client.StopWorkflowContext(ctx, taskID, user); err != nil {
-		log.Printf("[WARN] stop workflow %s: %v", taskID, err)
+		log.Printf("%s", boundedStopWorkflowDiagnostic(taskID, err))
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"dify2api/db"
+	"dify2api/diagnostic"
 	"dify2api/dify"
 	"dify2api/translator"
 )
@@ -1016,7 +1017,7 @@ loop:
 		status, code = "error", "upstream_error"
 		detail = conv.FailMessage()
 		if streamErr != nil {
-			log.Printf("[ERROR] dify charity stream (user %d): %v", userID, streamErr)
+			log.Printf("[ERROR] dify charity stream (user %d): %s", userID, boundedProcessError(streamErr))
 			if detail == "" {
 				detail = streamErr.Error()
 			}
@@ -1028,7 +1029,7 @@ loop:
 		// class B was recorded above. A transport truncation still fails the
 		// user's transfer, but it is not a donation-endpoint failure: do not
 		// refund, increment failure_count, or auto-inactivate the donation.
-		log.Printf("[ERROR] dify charity stream (user %d): %v", userID, streamErr)
+		log.Printf("[ERROR] dify charity stream (user %d): %s", userID, boundedProcessError(streamErr))
 		fmt.Fprint(w, translator.FormatSSEErrorFrame("[Dify] "+sanitizePublicUpstreamError(streamErr, streamErr.Error(), lang)))
 		flusher.Flush()
 		status, code = "error", "upstream_error"
@@ -1177,8 +1178,10 @@ func (g *Gateway) maybeRecordBlockingFailedAlert(userID int64, modelName, servic
 
 // logRequestDonation is like logRequest but includes a donation_id for charity calls.
 func (g *Gateway) logRequestDonation(userID int64, model, service string, startedAt time.Time, status, errorCode string, httpStatus int, detail string, donationID int64, creditsConsumed int, antiAbuseInfo string) int64 {
-	if len(detail) > g.Config.LogDetailMaxChars {
-		detail = detail[:g.Config.LogDetailMaxChars] + "…"
+	if maxChars := g.Config.LogDetailMaxChars; maxChars > 0 && maxChars < diagnostic.MaxBytes {
+		detail = diagnostic.BoundTo(detail, maxChars)
+	} else {
+		detail = diagnostic.Bound(detail)
 	}
 	id, err := g.Store.AddRequestLogFull(userID, model, service, startedAt, time.Now(), status, errorCode, httpStatus, detail, donationID, creditsConsumed, antiAbuseInfo)
 	if err != nil {

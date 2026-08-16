@@ -19,6 +19,7 @@ import (
 
 	"dify2api/config"
 	"dify2api/db"
+	"dify2api/diagnostic"
 	"dify2api/dify"
 	"dify2api/mailer"
 	"dify2api/openai"
@@ -712,7 +713,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if len(images) > 0 {
 		files, err := g.buildImageFiles(r.Context(), client, wfReq_User(user.ID), images)
 		if err != nil {
-			log.Printf("[ERROR] image files (user %d): %v", user.ID, err)
+			log.Printf("[ERROR] image files (user %d): %s", user.ID, boundedProcessError(err))
 			g.logRequest(user.ID, req.Model, service, startedAt, "error", "image_upload_failed",
 				difyErrorStatus(err), err.Error(), "")
 			g.writeDifyError(writer, err, userLang(user))
@@ -981,7 +982,7 @@ func (g *Gateway) handleCharityAfterRPM(w http.ResponseWriter, r *http.Request, 
 					statusClientClosedRequest, "client disconnected during image upload", picked.ID, reservation.Price, "")
 				return
 			}
-			log.Printf("[ERROR] charity image files (user %d): %v", user.ID, err)
+			log.Printf("[ERROR] charity image files (user %d): %s", user.ID, boundedProcessError(err))
 			g.charityCommitAccounting(reservation)
 			g.logRequestDonation(user.ID, logModel, service, startedAt, "error", "image_upload_failed",
 				difyErrorStatus(err), err.Error(), picked.ID, reservation.Price, "")
@@ -1151,7 +1152,7 @@ loop:
 		status, code = "error", "upstream_error"
 		detail = conv.FailMessage()
 		if streamErr != nil {
-			log.Printf("[ERROR] dify stream (user %d): %v", userID, streamErr)
+			log.Printf("[ERROR] dify stream (user %d): %s", userID, boundedProcessError(streamErr))
 			if detail == "" {
 				detail = streamErr.Error()
 			}
@@ -1159,7 +1160,7 @@ loop:
 	case streamErr != nil:
 		// Transport-level failure with no error event: emit the error
 		// frame ourselves, and likewise skip [DONE].
-		log.Printf("[ERROR] dify stream (user %d): %v", userID, streamErr)
+		log.Printf("[ERROR] dify stream (user %d): %s", userID, boundedProcessError(streamErr))
 		fmt.Fprint(w, translator.FormatSSEErrorFrame("[Dify] "+sanitizePublicUpstreamError(streamErr, streamErr.Error(), lang)))
 		flusher.Flush()
 		status, code = "error", "upstream_error"
@@ -1215,13 +1216,13 @@ func (g *Gateway) handleBlocking(w http.ResponseWriter, client *dify.Client, wfR
 		// response body was returned.  Give the caller a clear diagnosis
 		// and suggest switching to streaming mode.
 		if dify.IsTimeoutError(err) {
-			log.Printf("[ERROR] dify blocking timeout (user %d): %v", userID, err)
+			log.Printf("[ERROR] dify blocking timeout (user %d): %s", userID, boundedProcessError(err))
 			g.logRequest(userID, modelName, service, startedAt, "error", "upstream_timeout", http.StatusGatewayTimeout, err.Error(), "")
 			g.writeError(w, http.StatusGatewayTimeout, "upstream_timeout",
 				t(lang, "上游 Dify 服务响应超时：请求可能因 Cloudflare 100 秒限制被截断。建议使用流式传输（stream: true）或拆分任务后重试。", "Upstream Dify service timeout: the request may have been truncated by Cloudflare's 100-second limit. Consider using streaming (stream: true) or splitting the task."))
 			return
 		}
-		log.Printf("[ERROR] dify blocking (user %d): %v", userID, err)
+		log.Printf("[ERROR] dify blocking (user %d): %s", userID, boundedProcessError(err))
 		logID := g.logRequest(userID, modelName, service, startedAt, "error", "upstream_error", difyErrorStatus(err), err.Error(), "")
 		if failed200 {
 			// Write the admin alert after the log row so the alert center's
@@ -1326,8 +1327,10 @@ func parseDataURI(uri string) (mime string, data []byte, err error) {
 // Returns the new log row id (0 when the write failed) so callers can link
 // dependent rows such as admin alerts.
 func (g *Gateway) logRequest(userID int64, model, service string, startedAt time.Time, status, errorCode string, httpStatus int, detail string, antiAbuseInfo string) int64 {
-	if len(detail) > g.Config.LogDetailMaxChars {
-		detail = detail[:g.Config.LogDetailMaxChars] + "…"
+	if maxChars := g.Config.LogDetailMaxChars; maxChars > 0 && maxChars < diagnostic.MaxBytes {
+		detail = diagnostic.BoundTo(detail, maxChars)
+	} else {
+		detail = diagnostic.Bound(detail)
 	}
 	id, err := g.Store.AddRequestLogFull(userID, model, service, startedAt, time.Now(), status, errorCode, httpStatus, detail, 0, 0, antiAbuseInfo)
 	if err != nil {

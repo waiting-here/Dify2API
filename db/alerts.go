@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"dify2api/diagnostic"
 )
 
 // Admin alert type constants.
@@ -49,6 +51,9 @@ func scanAdminAlert(row interface{ Scan(...interface{}) error }) (*AdminAlert, e
 // with show_in_center=0, the record is skipped entirely (the category is
 // turned off in the alert center). Unknown types default to recorded.
 func (s *Store) AddAdminAlert(a *AdminAlert) error {
+	if a == nil {
+		return fmt.Errorf("admin alert is nil")
+	}
 	if !s.IsAlertShownInCenter(a.Type) {
 		return nil
 	}
@@ -62,7 +67,7 @@ func (s *Store) AddAdminAlert(a *AdminAlert) error {
 	now := time.Now().Unix()
 	_, err := s.db.Exec(
 		`INSERT INTO admin_alerts (type, message, request_log_id, donation_id, created_at) VALUES (?,?,?,?,?)`,
-		a.Type, a.Message, reqLogID, donationID, now,
+		a.Type, diagnostic.Bound(a.Message), reqLogID, donationID, now,
 	)
 	return err
 }
