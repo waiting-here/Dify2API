@@ -243,10 +243,17 @@ function switchAdminTab(tab) {
   }
 }
 
-// adminUserOption renders a datalist option value for a user, including the
-// numeric DB id so filters can be picked and searched by id too.
+// adminUserCanonicalValue is the one value format shared by datalist options
+// and resolveLogUserFilter. Keep the raw value here; callers escape it for
+// their specific HTML context.
+function adminUserCanonicalValue(u) {
+  return `${String(u.username ?? "")}（${String(u.discord_id ?? "")}） [${String(u.id ?? "")}]`;
+}
+
+// adminUserOption renders a real, attribute-safe datalist option for a user,
+// including the numeric DB id so filters can be picked and searched by id too.
 function adminUserOption(u) {
-  return `${esc(u.username)}（${esc(u.discord_id)}） [${u.id}]`;
+  return `<option value="${esc(adminUserCanonicalValue(u))}"></option>`;
 }
 
 async function initAdminUsersTab() {
@@ -1119,28 +1126,71 @@ let adminLogUsers = [];
 // { logId, userId } — consumed by loadAdminLogs/renderAdminLogs.
 let alertJump = null;
 
-// resolveLogUserFilter maps the free-text user filter to a user id.
-// Returns { id } on success, { id: null } for "all" (empty input), or
-// { error } when the text matches no user.
+// resolveLogUserFilter maps the free-text user filter to a user id. Every
+// supported interpretation is collected before choosing: composite value,
+// exact username, exact Discord id, and numeric DB id. If they identify
+// different users, return an explicit ambiguity error instead of guessing.
+// Returns { id } on success, { id: null } for "all" (empty input), { error }
+// when the text matches no user, or { ambiguous: true, error } on collision.
 function resolveLogUserFilter(text) {
-  const q = text.trim();
+  const q = String(text ?? "").trim();
   if (!q) return { id: null };
+
+  const candidateIDs = new Map();
+  const addCandidates = (users) => {
+    users.forEach((u) => {
+      if (u && u.id !== null && u.id !== undefined) {
+        candidateIDs.set(String(u.id), u.id);
+      }
+    });
+  };
+  const ambiguous = () => ({
+    ambiguous: true,
+    error: T('adminLogsUserAmbiguous').replace("{name}", q),
+  });
+
+  // These exact interpretations are collected even when q also has the
+  // composite shape. A user can legally choose a username that looks like a
+  // datalist value, so shape alone must not suppress a collision.
+  const exactByName = adminLogUsers.filter((u) => u.username === q);
+  const exactByDiscord = adminLogUsers.filter((u) => u.discord_id === q);
+  const exactByID = /^\d+$/.test(q)
+    ? adminLogUsers.filter((u) => String(u.id) === q)
+    : [];
+
   // Datalist form: "username（discord_id） [id]". The trailing [id] is
   // optional so the older "username（discord_id）" format still parses.
   const m = q.match(/^(.*)（([^（）]*)）(?: \[(\d+)\])?$/);
   if (m) {
-    const hit = adminLogUsers.find((u) => u.username === m[1] && u.discord_id === m[2]);
-    if (hit && (!m[3] || String(hit.id) === m[3])) return { id: hit.id };
+    const compositeByName = adminLogUsers.filter((u) => u.username === m[1]);
+    const compositeByDiscord = adminLogUsers.filter((u) => u.discord_id === m[2]);
+    const compositeByID = m[3]
+      ? adminLogUsers.filter((u) => String(u.id) === m[3])
+      : [];
+    const componentSets = [compositeByName, compositeByDiscord, ...(m[3] ? [compositeByID] : [])]
+      .map((users) => new Set(users.map((u) => String(u.id))))
+      .filter((ids) => ids.size > 0);
+    if (componentSets.length >= 2) {
+      const common = [...componentSets[0]].filter((id) =>
+        componentSets.slice(1).every((ids) => ids.has(id))
+      );
+      if (common.length === 0) return ambiguous();
+    }
+    const composite = adminLogUsers.filter((u) =>
+      u.username === m[1] &&
+      u.discord_id === m[2] &&
+      (!m[3] || String(u.id) === m[3])
+    );
+    addCandidates(composite);
   }
-  // Fallbacks: exact username, exact discord id, numeric user id.
-  const byName = adminLogUsers.filter((u) => u.username === q);
-  if (byName.length === 1) return { id: byName[0].id };
-  const byDiscord = adminLogUsers.find((u) => u.discord_id === q);
-  if (byDiscord) return { id: byDiscord.id };
-  if (/^\d+$/.test(q)) {
-    const byId = adminLogUsers.find((u) => String(u.id) === q);
-    if (byId) return { id: byId.id };
-  }
+  // Collect all exact interpretations before deciding whether the input is
+  // safe to use as a canonical source_user_id.
+  addCandidates(exactByName);
+  addCandidates(exactByDiscord);
+  addCandidates(exactByID);
+
+  if (candidateIDs.size > 1) return ambiguous();
+  if (candidateIDs.size === 1) return { id: candidateIDs.values().next().value };
   return { error: T('adminLogsUserNotFound').replace("{name}", q) };
 }
 
@@ -1550,6 +1600,10 @@ async function onExportLogs() {
   const params = new URLSearchParams();
   const userEl = $("#alf-user");
   const resolved = userEl ? resolveLogUserFilter(userEl.value) : { id: null };
+  if (resolved.error) {
+    toast(resolved.error, 3000);
+    return;
+  }
   if (resolved.id !== null) params.set("user_id", String(resolved.id));
   const svc = $("#alf-service").value; if (svc) params.set("service", svc);
   const model = $("#alf-model").value.trim(); if (model) params.set("model", model);
@@ -2304,7 +2358,11 @@ function applyDonationFilters() {
   }
   if (userText) {
     const resolved = resolveLogUserFilter(userText);
-    if (!resolved.error && resolved.id !== null) {
+    if (resolved.error) {
+      // Invalid or ambiguous identities must never broaden the filter back
+      // to the full donation list.
+      list = [];
+    } else if (resolved.id !== null) {
       const uid = resolved.id;
       list = list.filter((d) => d.source_user_id === uid);
     }
@@ -2495,6 +2553,11 @@ async function onDonationSubmit(e) {
   const srcEl = $("#don-source-user");
   const userText = srcEl ? srcEl.value.trim() : "";
   const resolvedSourceUser = userText ? resolveLogUserFilter(userText) : { id: null };
+  const note = $("#don-note");
+  if (resolvedSourceUser.ambiguous) {
+    note.innerHTML = `<div class="note err">${esc(resolvedSourceUser.error)}</div>`;
+    return;
+  }
   const sourceUserId = resolvedSourceUser.id !== null && resolvedSourceUser.id !== undefined
     ? resolvedSourceUser.id
     : null;
@@ -2515,7 +2578,6 @@ async function onDonationSubmit(e) {
     rpm_limit: rpmLimit,
     note: f.note.value.trim(),
   };
-  const note = $("#don-note");
   note.innerHTML = `<p class="muted">${T('loading')}</p>`;
   try {
     await api(coAdminPath("/api/admin/donations"), { method: "POST", body });
