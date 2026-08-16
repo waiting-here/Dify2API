@@ -14,6 +14,11 @@ Dify2API 将每位用户自己的 **Dify Workflow App** 暴露为统一的
 > Dify、OpenAI、Claude、Discord、SillyTavern、Gemini 等名称归各自权利人所有，
 > 此处仅用于描述兼容性。
 
+## 项目状态
+
+v1.4.1 是本项目计划中的最后版本，完成最后的维护修复后，仓库将停止功能开发并进入归档状态。
+除该版本范围外，不再承诺新增功能。
+
 ## 架构
 
 ```text
