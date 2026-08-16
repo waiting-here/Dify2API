@@ -902,6 +902,23 @@ func (g *Gateway) charityStreaming(w http.ResponseWriter, client *dify.Client, w
 			}
 		default:
 		}
+		if ctx.Err() != nil {
+			g.charityCommitAccounting(reservation)
+			g.logRequestDonation(userID, modelName, service, startedAt, "error", "client_canceled", statusClientClosedRequest,
+				ctx.Err().Error(), donation.ID, reservation.Price, "")
+			return
+		}
+		// HTTP 200 with no SSE event is an upstream/proxy anomaly.  The
+		// response headers are not committed yet, so return a normal JSON
+		// gateway error rather than a successful empty stream.  The
+		// reservation was already dispatched, therefore settle it
+		// conservatively; this path must not count class B or class A.
+		g.charityCommitAccounting(reservation)
+		g.logRequestDonation(userID, modelName, service, startedAt, "error", "upstream_empty_stream", http.StatusBadGateway,
+			"upstream returned an empty stream", donation.ID, reservation.Price, "")
+		g.writeError(w, http.StatusBadGateway, "upstream_error",
+			t(lang, "上游 Dify 服务返回空响应，请稍后重试", "Upstream Dify returned an empty response. Please try again later."))
+		return
 	}
 
 	if ctx.Err() != nil {
@@ -1016,6 +1033,17 @@ loop:
 		flusher.Flush()
 		status, code = "error", "upstream_error"
 		detail = streamErr.Error()
+	case !conv.Done():
+		// The upstream closed cleanly before workflow_finished.  Partial
+		// content may already have been relayed, so surface an in-stream
+		// error and never synthesize a stop chunk or [DONE].  The call was
+		// already dispatched and class B was recorded above; only class A
+		// is withheld for the incomplete transfer.
+		log.Printf("[ERROR] dify charity stream (user %d): stream ended before workflow_finished", userID)
+		fmt.Fprint(w, translator.FormatSSEErrorFrame("[Dify] upstream stream ended unexpectedly"))
+		flusher.Flush()
+		status, code = "error", "upstream_stream_cut"
+		detail = "stream ended before workflow_finished"
 	default:
 		for _, msg := range conv.Finalize() {
 			fmt.Fprint(w, msg.Data)
