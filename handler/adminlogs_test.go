@@ -527,9 +527,69 @@ func TestSafeCSVCell_AllExportFields(t *testing.T) {
 			})
 		}
 	}
-	for _, safe := range []string{"", "plain", "  =leading-space", "123"} {
-		if got := safeCSVCell(safe); got != safe {
-			t.Errorf("safeCSVCell(%q) = %q, want unchanged", safe, got)
+	cases := []struct {
+		name, input, want string
+	}{
+		{name: "empty", input: "", want: ""},
+		{name: "plain", input: "plain", want: "plain"},
+		{name: "leading spaces without formula", input: "  plain", want: "  plain"},
+		{name: "leading tab without formula", input: "\tplain", want: "\tplain"},
+		{name: "leading BOM without formula", input: "\ufeffplain", want: "\ufeffplain"},
+		{name: "leading tab", input: "\t=dangerous()", want: "'\t=dangerous()"},
+		{name: "leading CR", input: "\r+dangerous()", want: "'\r+dangerous()"},
+		{name: "leading LF", input: "\n-dangerous()", want: "'\n-dangerous()"},
+		{name: "leading BOM", input: "\ufeff@dangerous()", want: "'\ufeff@dangerous()"},
+		{name: "leading NBSP", input: "\u00a0=dangerous()", want: "'\u00a0=dangerous()"},
+		{name: "leading EM space", input: "\u2003+dangerous()", want: "'\u2003+dangerous()"},
+		{name: "mixed prefixes", input: "\ufeff \t\r@dangerous()", want: "'\ufeff \t\r@dangerous()"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := safeCSVCell(tc.input); got != tc.want {
+				t.Errorf("safeCSVCell(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAdminLogs_CSVFormulaPrefixesAcrossColumns(t *testing.T) {
+	gw, store := setupAuthGateway(t, "s3cret")
+	adminCookie := loginCookie(t, gw, "root", "s3cret")
+	u, err := store.CreateUser("\t=discord", "\u00a0+username", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().Add(-time.Minute)
+	if _, err := store.AddRequestLogFull(u.ID, "\u2003-model", "\n@service", started, started.Add(time.Second),
+		"\r=status", "\ufeff=error", -418, "\t+detail,\"quoted\"\r\nnext", 0, -7, "\u00a0-anti"); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := adminGet(gw, adminCookie, "/api/admin/logs/export?format=csv")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	rows, err := csv.NewReader(strings.NewReader(rec.Body.String())).ReadAll()
+	if err != nil {
+		t.Fatalf("parse CSV: %v", err)
+	}
+	if len(rows) != 2 || len(rows[1]) != 15 {
+		t.Fatalf("CSV shape = %d rows / %d columns; body=%q", len(rows), len(rows[1]), rec.Body.String())
+	}
+	wantSafe := map[int]string{
+		2:  "\u00a0+username",
+		3:  "\u2003-model",
+		4:  "\n@service",
+		7:  "\r=status",
+		8:  "\ufeff=error",
+		9:  "-418",
+		10: "\t+detail,\"quoted\"\nnext",
+		12: "-7",
+		13: "\u00a0-anti",
+	}
+	for index, input := range wantSafe {
+		if got, want := rows[1][index], "'"+input; got != want {
+			t.Errorf("column %s = %q, want %q", rows[0][index], got, want)
 		}
 	}
 }

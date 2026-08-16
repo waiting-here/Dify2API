@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"dify2api/db"
 )
@@ -244,19 +245,27 @@ func (g *Gateway) handleAdminExportLogs(w http.ResponseWriter, r *http.Request) 
 }
 
 // safeCSVCell prevents spreadsheet programs from interpreting exported data
-// as a formula. The leading apostrophe is the broadly compatible text marker
-// used by Excel, LibreOffice, and similar applications; encoding/csv still
-// handles commas, quotes, and newlines independently.
+// as a formula. Spreadsheet applications also recognize a formula marker after
+// leading whitespace or control characters, so inspect the first non-prefix
+// rune. A leading apostrophe is the broadly compatible text marker used by
+// Excel, LibreOffice, and similar applications; encoding/csv still handles
+// commas, quotes, and newlines independently.
 func safeCSVCell(value string) string {
 	if value == "" {
 		return value
 	}
-	switch value[0] {
-	case '=', '+', '-', '@':
-		return "'" + value
-	default:
-		return value
+	for _, r := range value {
+		if r == '\ufeff' || unicode.IsSpace(r) || unicode.IsControl(r) {
+			continue
+		}
+		switch r {
+		case '=', '+', '-', '@':
+			return "'" + value
+		default:
+			return value
+		}
 	}
+	return value
 }
 
 // handleAdminLogStats serves GET /api/admin/logs/stats with hourly aggregates
