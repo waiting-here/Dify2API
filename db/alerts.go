@@ -17,11 +17,12 @@ const (
 // AdminAlert records an operational event that requires administrator
 // attention (F6: admin alert center).
 type AdminAlert struct {
-	ID           int64  `json:"id"`
-	Type         string `json:"type"`
-	Message      string `json:"message"`
-	RequestLogID *int64 `json:"request_log_id"`
-	DonationID   *int64 `json:"donation_id"`
+	ID            int64  `json:"id"`
+	Type          string `json:"type"`
+	Message       string `json:"message"`
+	RequestLogID  *int64 `json:"request_log_id"`
+	DonationID    *int64 `json:"donation_id"`
+	SubjectUserID *int64 `json:"subject_user_id,omitempty"`
 	// UserID is the owner of the linked request log, resolved via LEFT JOIN
 	// in ListAdminAlerts (nil when the alert has no request_log_id or the
 	// log/user no longer exists).
@@ -31,8 +32,8 @@ type AdminAlert struct {
 
 func scanAdminAlert(row interface{ Scan(...interface{}) error }) (*AdminAlert, error) {
 	var a AdminAlert
-	var reqLogID, donationID, userID sql.NullInt64
-	if err := row.Scan(&a.ID, &a.Type, &a.Message, &reqLogID, &donationID, &a.CreatedAt, &userID); err != nil {
+	var reqLogID, donationID, subjectUserID, userID sql.NullInt64
+	if err := row.Scan(&a.ID, &a.Type, &a.Message, &reqLogID, &donationID, &subjectUserID, &a.CreatedAt, &userID); err != nil {
 		return nil, err
 	}
 	if reqLogID.Valid {
@@ -40,6 +41,9 @@ func scanAdminAlert(row interface{ Scan(...interface{}) error }) (*AdminAlert, e
 	}
 	if donationID.Valid {
 		a.DonationID = &donationID.Int64
+	}
+	if subjectUserID.Valid {
+		a.SubjectUserID = &subjectUserID.Int64
 	}
 	if userID.Valid {
 		a.UserID = &userID.Int64
@@ -57,17 +61,20 @@ func (s *Store) AddAdminAlert(a *AdminAlert) error {
 	if !s.IsAlertShownInCenter(a.Type) {
 		return nil
 	}
-	var reqLogID, donationID interface{}
+	var reqLogID, donationID, subjectUserID interface{}
 	if a.RequestLogID != nil {
 		reqLogID = *a.RequestLogID
 	}
 	if a.DonationID != nil {
 		donationID = *a.DonationID
 	}
+	if a.SubjectUserID != nil {
+		subjectUserID = *a.SubjectUserID
+	}
 	now := time.Now().Unix()
 	_, err := s.db.Exec(
-		`INSERT INTO admin_alerts (type, message, request_log_id, donation_id, created_at) VALUES (?,?,?,?,?)`,
-		a.Type, diagnostic.Bound(a.Message), reqLogID, donationID, now,
+		`INSERT INTO admin_alerts (type, message, request_log_id, donation_id, subject_user_id, created_at) VALUES (?,?,?,?,?,?)`,
+		a.Type, diagnostic.Bound(a.Message), reqLogID, donationID, subjectUserID, now,
 	)
 	return err
 }
@@ -230,7 +237,7 @@ func (s *Store) ListAdminAlerts(limit, offset int) ([]*AdminAlert, int, error) {
 		offset = 0
 	}
 	rows, err := s.db.Query(
-		`SELECT a.id, a.type, a.message, a.request_log_id, a.donation_id, a.created_at, rl.user_id
+		`SELECT a.id, a.type, a.message, a.request_log_id, a.donation_id, a.subject_user_id, a.created_at, rl.user_id
 		 FROM admin_alerts a
 		 LEFT JOIN request_logs rl ON rl.id = a.request_log_id
 		 ORDER BY a.created_at DESC LIMIT ? OFFSET ?`,

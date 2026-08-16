@@ -21,7 +21,7 @@ type Mailer struct {
 	enabled      bool
 	coolMinutes  func() int // dynamic getter for the aggregation window
 	emailEnabled func(EventType) bool
-	record       func(EventType, string) // optional alert-center sink
+	record       func(EventType, string, *int64) // optional alert-center sink
 	mu           sync.Mutex
 	coolers      map[EventType]*cooler
 	sendFunc     func(context.Context, config.SMTPConfig, string, string) error // injectable for tests
@@ -39,7 +39,7 @@ type Options struct {
 	EmailEnabled func(EventType) bool
 	// Record, when set, is invoked for every event so the gateway can
 	// write an alert-center record (subject to its own show_in_center gate).
-	Record func(EventType, string)
+	Record func(EventType, string, *int64)
 }
 
 // New creates a Mailer or returns nil when SMTP_HOST is empty.
@@ -96,7 +96,7 @@ func (m *Mailer) UserAutoBanned(username string, userID int64, banUntil time.Tim
 	}
 	summary := fmt.Sprintf("%s（ID：%d）因 %d 次超限被自动封禁 %d 小时，至 %s",
 		username, userID, violations, banHours, banUntil.Format("15:04:05"))
-	m.queue(EventUserAutoBanned, summary)
+	m.queue(EventUserAutoBanned, summary, &userID)
 }
 
 // DonationInactive queues a notification for donation auto-inactivation.
@@ -106,7 +106,7 @@ func (m *Mailer) DonationInactive(service, model string, donationID int64, conse
 	}
 	summary := fmt.Sprintf("捐赠条目 %d（服务 %s，模型 %s）连续 %d 次失败后自动转为未激活",
 		donationID, service, model, consecutiveFailures)
-	m.queue(EventDonationInactive, summary)
+	m.queue(EventDonationInactive, summary, nil)
 }
 
 // PricingMissing queues a notification when a charity request finds pricing
@@ -116,7 +116,7 @@ func (m *Mailer) PricingMissing(service, model string) {
 		return
 	}
 	summary := fmt.Sprintf("公益模型 (%s, %s) 存在捐赠条目但缺少定价配置", service, model)
-	m.queue(EventPricingMissing, summary)
+	m.queue(EventPricingMissing, summary, nil)
 }
 
 // DebugAbuse queues a notification for user debug abuse detection.
@@ -126,7 +126,7 @@ func (m *Mailer) DebugAbuse(username string, userID int64, sessionCount int, win
 	}
 	summary := fmt.Sprintf("%s（ID：%d）在 %d 分钟内开启了 %d 次 Debug session",
 		username, userID, windowMinutes, sessionCount)
-	m.queue(EventDebugAbuse, summary)
+	m.queue(EventDebugAbuse, summary, &userID)
 }
 
 // AdminLoginLocked queues a notification for admin login lockout.
@@ -136,10 +136,10 @@ func (m *Mailer) AdminLoginLocked(ip string, lockUntil time.Time) {
 	}
 	summary := fmt.Sprintf("IP %s 因登录失败次数过多被锁定，至 %s",
 		ip, lockUntil.Format("15:04:05"))
-	m.queue(EventAdminLoginLocked, summary)
+	m.queue(EventAdminLoginLocked, summary, nil)
 }
 
-func (m *Mailer) queue(et EventType, summary string) {
+func (m *Mailer) queue(et EventType, summary string, subjectUserID *int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.stopped {
@@ -147,7 +147,7 @@ func (m *Mailer) queue(et EventType, summary string) {
 	}
 	// Alert-center record (its own show_in_center gate lives in the store).
 	if m.record != nil {
-		m.record(et, summary)
+		m.record(et, summary, subjectUserID)
 	}
 	// The email gate is independent of alert-center recording.
 	if m.emailEnabled != nil && !m.emailEnabled(et) {

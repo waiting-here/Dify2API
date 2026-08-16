@@ -114,8 +114,8 @@ func NewGateway(cfg *config.Config, store *db.Store) *Gateway {
 			},
 			// Mirror every event into the alert center; the store's
 			// show_in_center gate decides whether a record is written.
-			Record: func(et mailer.EventType, summary string) {
-				if err := store.AddAdminAlert(&db.AdminAlert{Type: string(et), Message: summary}); err != nil {
+			Record: func(et mailer.EventType, summary string, subjectUserID *int64) {
+				if err := store.AddAdminAlert(&db.AdminAlert{Type: string(et), Message: summary, SubjectUserID: subjectUserID}); err != nil {
 					log.Printf("[ERROR] record mailer alert %s: %v", et, err)
 				}
 			},

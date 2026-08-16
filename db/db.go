@@ -181,6 +181,7 @@ CREATE TABLE IF NOT EXISTS admin_alerts (
 	message        TEXT NOT NULL DEFAULT '',
 	request_log_id INTEGER,
 	donation_id    INTEGER,
+	subject_user_id INTEGER,
 	created_at     INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_admin_alerts_created ON admin_alerts(created_at);
@@ -402,6 +403,20 @@ func Open(path, keyPath string) (*Store, error) {
 			sqldb.Close()
 			return nil, fmt.Errorf("migrate site_activity_daily.game_active: %w", err)
 		}
+	}
+	// R05 subject alerts: fresh schemas include the column above, while
+	// v1.4.0 databases need the idempotent forward migration. The index is
+	// deliberately created only after ALTER so an old schema never sees an
+	// index expression that references a column it does not have yet.
+	if _, err := sqldb.Exec(`ALTER TABLE admin_alerts ADD COLUMN subject_user_id INTEGER`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			sqldb.Close()
+			return nil, fmt.Errorf("migrate admin_alerts.subject_user_id: %w", err)
+		}
+	}
+	if _, err := sqldb.Exec(`CREATE INDEX IF NOT EXISTS idx_admin_alerts_subject_user ON admin_alerts(subject_user_id)`); err != nil {
+		sqldb.Close()
+		return nil, fmt.Errorf("create admin_alerts subject index: %w", err)
 	}
 
 	store := &Store{db: sqldb, key: key}

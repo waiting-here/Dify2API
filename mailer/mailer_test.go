@@ -3,6 +3,7 @@ package mailer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -415,9 +416,13 @@ func TestRecordCallback_InvokedPerQueuedEvent(t *testing.T) {
 	var recorded []string
 	var recMu sync.Mutex
 	m := New(cfg, Options{
-		Record: func(et EventType, summary string) {
+		Record: func(et EventType, summary string, subjectUserID *int64) {
 			recMu.Lock()
-			recorded = append(recorded, string(et)+"|"+summary)
+			subject := ""
+			if subjectUserID != nil {
+				subject = fmt.Sprintf("|subject=%d", *subjectUserID)
+			}
+			recorded = append(recorded, string(et)+"|"+summary+subject)
 			recMu.Unlock()
 		},
 	})
@@ -436,6 +441,42 @@ func TestRecordCallback_InvokedPerQueuedEvent(t *testing.T) {
 	if !strings.Contains(recorded[0], "user_auto_banned|") {
 		t.Errorf("record = %q, want user_auto_banned prefix", recorded[0])
 	}
+	if !strings.Contains(recorded[0], "|subject=2") {
+		t.Errorf("record = %q, want subject user 2", recorded[0])
+	}
+}
+
+func TestRecordCallback_SubjectOnlyUserEvents(t *testing.T) {
+	cfg := testSMTPConfig()
+	var subjects map[EventType]*int64
+	m := New(cfg, Options{
+		EmailEnabled: func(EventType) bool { return false },
+		Record: func(et EventType, _ string, subjectUserID *int64) {
+			if subjects == nil {
+				subjects = make(map[EventType]*int64)
+			}
+			subjects[et] = subjectUserID
+		},
+	})
+	if m == nil {
+		t.Fatal("expected non-nil mailer")
+	}
+	m.UserAutoBanned("subject", 11, time.Now(), 1, 1)
+	m.DebugAbuse("subject", 11, 6, 10)
+	m.DonationInactive("general", "model", 42, 3)
+	m.PricingMissing("general", "model")
+	m.AdminLoginLocked("127.0.0.1", time.Now())
+
+	for _, et := range []EventType{EventUserAutoBanned, EventDebugAbuse} {
+		if subjects[et] == nil || *subjects[et] != 11 {
+			t.Errorf("%s subject=%v, want 11", et, subjects[et])
+		}
+	}
+	for _, et := range []EventType{EventDonationInactive, EventPricingMissing, EventAdminLoginLocked} {
+		if subjects[et] != nil {
+			t.Errorf("%s subject=%v, want nil", et, subjects[et])
+		}
+	}
 }
 
 func TestAlertCenterAndEmailGatesAreIndependent(t *testing.T) {
@@ -443,7 +484,7 @@ func TestAlertCenterAndEmailGatesAreIndependent(t *testing.T) {
 	var recorded int
 	m := New(cfg, Options{
 		EmailEnabled: func(EventType) bool { return false },
-		Record: func(EventType, string) {
+		Record: func(EventType, string, *int64) {
 			recorded++
 		},
 	})
@@ -462,7 +503,7 @@ func TestAlertCenterAndEmailGatesAreIndependent(t *testing.T) {
 	ms := &mockSender{}
 	m = New(cfg, Options{
 		EmailEnabled: func(EventType) bool { return true },
-		Record:       func(EventType, string) {},
+		Record:       func(EventType, string, *int64) {},
 		CoolMinutes:  func() int { return 0 },
 	})
 	origCoolWindow := coolWindow
@@ -486,7 +527,7 @@ func TestCoolMinutesGetter_UsedForWindow(t *testing.T) {
 	if m == nil {
 		t.Fatal("expected non-nil mailer")
 	}
-	m.queue(EventUserAutoBanned, "x")
+	m.queue(EventUserAutoBanned, "x", nil)
 	m.mu.Lock()
 	c := m.coolers[EventUserAutoBanned]
 	m.mu.Unlock()

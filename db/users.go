@@ -485,6 +485,44 @@ func (s *Store) deleteUserAt(id int64, now time.Time) error {
 	if isAdmin {
 		return fmt.Errorf("delete user: administrator cannot be deleted")
 	}
+	// Subject alerts can survive without a request log. Remove the new
+	// explicit link first, then parse only the two legacy mailer categories
+	// whose old messages carried the fixed event-specific body separator.
+	if _, err := tx.Exec(`DELETE FROM admin_alerts WHERE subject_user_id=?`, id); err != nil {
+		return fmt.Errorf("delete user subject alerts: %w", err)
+	}
+	rows, err := tx.Query(
+		`SELECT id, type, message FROM admin_alerts
+		 WHERE subject_user_id IS NULL
+		   AND type IN ('user_auto_banned', 'debug_abuse')`,
+	)
+	if err != nil {
+		return fmt.Errorf("find user legacy subject alerts: %w", err)
+	}
+	var legacyAlertIDs []int64
+	for rows.Next() {
+		var alertID int64
+		var alertType, message string
+		if err := rows.Scan(&alertID, &alertType, &message); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan user legacy subject alert: %w", err)
+		}
+		if subjectID, ok := legacyAlertSubjectID(alertType, message); ok && subjectID == id {
+			legacyAlertIDs = append(legacyAlertIDs, alertID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("read user legacy subject alerts: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close user legacy subject alerts: %w", err)
+	}
+	for _, alertID := range legacyAlertIDs {
+		if _, err := tx.Exec(`DELETE FROM admin_alerts WHERE id=? AND subject_user_id IS NULL`, alertID); err != nil {
+			return fmt.Errorf("delete user legacy subject alert: %w", err)
+		}
+	}
 	var disabled int
 	var createdAt int64
 	if err := tx.QueryRow(`SELECT disabled,created_at FROM users WHERE id=?`, id).Scan(&disabled, &createdAt); err != nil {
