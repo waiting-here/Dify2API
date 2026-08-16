@@ -72,9 +72,21 @@ func (s *Store) AddAdminAlert(a *AdminAlert) error {
 		subjectUserID = *a.SubjectUserID
 	}
 	now := time.Now().Unix()
+	message := diagnostic.Bound(a.Message)
+	if a.SubjectUserID != nil {
+		// A late callback for a deleted user is a normal suppressed event. The
+		// user existence check and INSERT must be one statement so it cannot
+		// be separated by DeleteUser's commit.
+		_, err := s.db.Exec(
+			`INSERT INTO admin_alerts (type, message, request_log_id, donation_id, subject_user_id, created_at)
+			 SELECT ?, ?, ?, ?, ?, ? FROM users WHERE id=?`,
+			a.Type, message, reqLogID, donationID, subjectUserID, now, *a.SubjectUserID,
+		)
+		return err
+	}
 	_, err := s.db.Exec(
 		`INSERT INTO admin_alerts (type, message, request_log_id, donation_id, subject_user_id, created_at) VALUES (?,?,?,?,?,?)`,
-		a.Type, diagnostic.Bound(a.Message), reqLogID, donationID, subjectUserID, now,
+		a.Type, message, reqLogID, donationID, subjectUserID, now,
 	)
 	return err
 }

@@ -283,3 +283,65 @@ func TestR05DeleteUserSubjectAlertsRollBack(t *testing.T) {
 		t.Fatalf("user after rollback=%+v err=%v", got, err)
 	}
 }
+
+func TestR05SubjectAlertInsertRequiresExistingUser(t *testing.T) {
+	st, _ := openTemp(t)
+	u, err := st.CreateUser("r05m1-subject", "subject", "")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	subjectID := u.ID
+	if err := st.AddAdminAlert(&AdminAlert{
+		Type:          "debug_abuse",
+		Message:       "subject exists",
+		SubjectUserID: &subjectID,
+	}); err != nil {
+		t.Fatalf("insert existing subject: %v", err)
+	}
+	alerts, total, err := st.ListAdminAlerts(100, 0)
+	if err != nil || total != 1 || len(alerts) != 1 || alerts[0].SubjectUserID == nil || *alerts[0].SubjectUserID != subjectID {
+		t.Fatalf("existing subject alert total=%d alerts=%+v err=%v", total, alerts, err)
+	}
+	if err := st.DeleteUser(subjectID); err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+	if err := st.AddAdminAlert(&AdminAlert{
+		Type:          "debug_abuse",
+		Message:       "late subject suppressed",
+		SubjectUserID: &subjectID,
+	}); err != nil {
+		t.Fatalf("insert missing subject: %v", err)
+	}
+	if _, total, err := st.ListAdminAlerts(100, 0); err != nil || total != 0 {
+		t.Fatalf("late subject total=%d err=%v, want 0", total, err)
+	}
+	if err := st.AddAdminAlert(&AdminAlert{Type: "operator_notice", Message: "null subject retained"}); err != nil {
+		t.Fatalf("insert null subject: %v", err)
+	}
+	alerts, total, err = st.ListAdminAlerts(100, 0)
+	if err != nil || total != 1 || len(alerts) != 1 || alerts[0].SubjectUserID != nil {
+		t.Fatalf("null subject alert total=%d alerts=%+v err=%v", total, alerts, err)
+	}
+
+	other, err := st.CreateUser("r05m1-gated", "gated", "")
+	if err != nil {
+		t.Fatalf("CreateUser gated: %v", err)
+	}
+	if err := st.EnsureAlertPrefs([]string{"gated_subject"}); err != nil {
+		t.Fatalf("EnsureAlertPrefs: %v", err)
+	}
+	if err := st.SetAlertPref("gated_subject", false, true); err != nil {
+		t.Fatalf("SetAlertPref: %v", err)
+	}
+	gatedID := other.ID
+	if err := st.AddAdminAlert(&AdminAlert{
+		Type:          "gated_subject",
+		Message:       "subject gate",
+		SubjectUserID: &gatedID,
+	}); err != nil {
+		t.Fatalf("insert gated subject: %v", err)
+	}
+	if _, total, err := st.ListAdminAlerts(100, 0); err != nil || total != 1 {
+		t.Fatalf("gated subject total=%d err=%v, want 1", total, err)
+	}
+}
