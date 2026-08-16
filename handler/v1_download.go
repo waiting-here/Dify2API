@@ -23,6 +23,8 @@ const templateDownloadLimitPerUser = 3
 // Overridable in tests.
 var marketplaceManifestURL = "https://marketplace.dify.ai/api/v1/dist/plugins/manifest.json"
 
+const marketplaceCanonicalHost = "marketplace.dify.ai"
+
 // marketplaceMaxBytes caps the manifest response body (5 MiB).
 const marketplaceMaxBytes = 5 << 20
 
@@ -233,16 +235,8 @@ func (g *Gateway) checkDonationRegeneration(userID int64, service string, confir
 // alert-center record is written (the daily task never retries mid-run).
 func (g *Gateway) marketplaceSyncOnce(now time.Time) {
 	client := &http.Client{
-		Timeout: 30 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 3 {
-				return fmt.Errorf("too many redirects")
-			}
-			if req.URL.Host != "marketplace.dify.ai" {
-				return fmt.Errorf("redirect to non-marketplace host %q", req.URL.Host)
-			}
-			return nil
-		},
+		Timeout:       30 * time.Second,
+		CheckRedirect: validateMarketplaceRedirect,
 	}
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, marketplaceManifestURL, nil)
 	if err != nil {
@@ -290,6 +284,31 @@ func (g *Gateway) marketplaceSyncOnce(now time.Time) {
 	if updated > 0 {
 		log.Printf("[MARKETPLACE] updated %d model config dependency pins", updated)
 	}
+}
+
+// validateMarketplaceRedirect keeps every redirect on the canonical secure
+// marketplace origin. The initial request remains configurable for tests and
+// preserves its existing semantics; this policy applies only to redirect
+// hops. A canonical explicit :443 is equivalent to the default HTTPS port.
+func validateMarketplaceRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 3 {
+		return fmt.Errorf("too many redirects")
+	}
+	if req == nil || req.URL == nil {
+		return fmt.Errorf("redirect missing URL")
+	}
+	u := req.URL
+	if !strings.EqualFold(u.Scheme, "https") {
+		return fmt.Errorf("redirect must use https")
+	}
+	if u.User != nil {
+		return fmt.Errorf("redirect must not include userinfo")
+	}
+	if !strings.EqualFold(u.Host, marketplaceCanonicalHost) &&
+		!strings.EqualFold(u.Host, marketplaceCanonicalHost+":443") {
+		return fmt.Errorf("redirect to non-canonical marketplace URL %q", u.Host)
+	}
+	return nil
 }
 
 // marketplacePlugin matches the live dist manifest contract. The current

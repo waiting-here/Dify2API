@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -28,6 +29,39 @@ func TestMarketplacePluginDependencyPin(t *testing.T) {
 		if plugin != tc.plugin || version != tc.version || hash != tc.hash || ok != tc.ok {
 			t.Errorf("%s = (%q,%q,%q,%v)", tc.name, plugin, version, hash, ok)
 		}
+	}
+}
+
+func TestValidateMarketplaceRedirect(t *testing.T) {
+	cases := []struct {
+		name     string
+		location string
+		via      int
+		wantErr  bool
+	}{
+		{name: "canonical HTTPS", location: "https://marketplace.dify.ai/path"},
+		{name: "case-insensitive canonical HTTPS", location: "HTTPS://MARKETPLACE.DIFY.AI/path"},
+		{name: "explicit default port", location: "https://marketplace.dify.ai:443/path"},
+		{name: "HTTPS downgrade", location: "http://marketplace.dify.ai/path", wantErr: true},
+		{name: "abnormal port", location: "https://marketplace.dify.ai:8443/path", wantErr: true},
+		{name: "HTTP port", location: "https://marketplace.dify.ai:80/path", wantErr: true},
+		{name: "trailing dot", location: "https://marketplace.dify.ai./path", wantErr: true},
+		{name: "userinfo", location: "https://user:pass@marketplace.dify.ai/path", wantErr: true},
+		{name: "other host", location: "https://evil.example/path", wantErr: true},
+		{name: "hop limit allows prior hops", location: "https://marketplace.dify.ai/path", via: 2},
+		{name: "hop limit", location: "https://marketplace.dify.ai/path", via: 3, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			u, err := url.Parse(tc.location)
+			if err != nil {
+				t.Fatalf("parse location: %v", err)
+			}
+			err = validateMarketplaceRedirect(&http.Request{URL: u}, make([]*http.Request, tc.via))
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("validateMarketplaceRedirect(%q, via=%d) error = %v, wantErr=%v", tc.location, tc.via, err, tc.wantErr)
+			}
+		})
 	}
 }
 
