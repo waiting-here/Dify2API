@@ -166,6 +166,65 @@ func TestBlocking_UpstreamError_PassesThrough4xx(t *testing.T) {
 	}
 }
 
+func TestStreaming_EmptyStream_LoggedAsError(t *testing.T) {
+	// HTTP 200 with zero SSE events (empty body, proxy error page) must be
+	// recorded as an error, not as a fake success.
+	srv := mockDifySSE(t, nil)
+	defer srv.Close()
+	gw, key, userID := setupRoutedUser(t, srv.URL, "[general]x")
+
+	rec := streamChatRequest(gw, key)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 for empty upstream stream; body: %s", rec.Code, rec.Body.String())
+	}
+	logs, err := gw.Store.ListRequestLogs(userID, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("log rows = %d, want 1", len(logs))
+	}
+	if logs[0].Status != "error" || logs[0].ErrorCode != "upstream_empty_stream" {
+		t.Fatalf("log status=%s code=%s, want error/upstream_empty_stream", logs[0].Status, logs[0].ErrorCode)
+	}
+	if logs[0].HTTPStatus != http.StatusBadGateway {
+		t.Fatalf("log http_status = %d, want 502", logs[0].HTTPStatus)
+	}
+}
+
+func TestStreaming_MidStreamCut_LoggedAsError(t *testing.T) {
+	// Upstream closes the stream before workflow_finished (timeout
+	// truncation): content may already be relayed, but the log must show an
+	// error with a distinct code instead of a silent success.
+	srv := mockDifySSE(t, []string{
+		`{"event":"text_chunk","data":{"text":"partial"}}`,
+	})
+	defer srv.Close()
+	gw, key, userID := setupRoutedUser(t, srv.URL, "[general]x")
+
+	rec := streamChatRequest(gw, key)
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (SSE headers committed), want 200; body: %s", rec.Code, body)
+	}
+	if !strings.Contains(body, "upstream stream ended unexpectedly") {
+		t.Errorf("cut stream must emit an error frame: %s", body)
+	}
+	if strings.Contains(body, "data: [DONE]") {
+		t.Errorf("cut stream must not emit [DONE]: %s", body)
+	}
+	logs, err := gw.Store.ListRequestLogs(userID, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("log rows = %d, want 1", len(logs))
+	}
+	if logs[0].Status != "error" || logs[0].ErrorCode != "upstream_stream_cut" {
+		t.Fatalf("log status=%s code=%s, want error/upstream_stream_cut", logs[0].Status, logs[0].ErrorCode)
+	}
+}
+
 func TestBlocking_Failed200_WritesLinkedAlert(t *testing.T) {
 	// A blocking call that returns HTTP 200 with workflow status "failed"
 	// must write an admin alert LINKED to the request log row, so the alert

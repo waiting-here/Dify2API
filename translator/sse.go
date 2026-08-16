@@ -117,6 +117,11 @@ func (c *StreamConverter) Convert(evt dify.StreamEvent) *SSEMessage {
 	}
 }
 
+// Done reports whether the stream reached a terminal state (workflow_finished
+// or an upstream error event). False means the upstream closed the stream
+// mid-way without a normal finish — the handler treats that as an error.
+func (c *StreamConverter) Done() bool { return c.done }
+
 // Finalize returns the final stop chunk if the stream ended without
 // a workflow_finished event (safety net).
 func (c *StreamConverter) Finalize() []SSEMessage {

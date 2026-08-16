@@ -1056,6 +1056,13 @@ func (g *Gateway) handleStreaming(w http.ResponseWriter, client *dify.Client, wf
 			}
 		default:
 		}
+		// HTTP 200 but no SSE event at all: an upstream/proxy anomaly (empty
+		// body, error page with 200). Headers are not committed yet, so this
+		// is reported as a real JSON error, not a fake successful stream.
+		g.logRequest(userID, modelName, service, startedAt, "error", "upstream_empty_stream", http.StatusBadGateway, "upstream returned an empty stream", "")
+		g.writeError(w, http.StatusBadGateway, "upstream_error",
+			t(lang, "上游 Dify 服务返回空响应，请稍后重试", "Upstream Dify returned an empty response. Please try again later."))
+		return
 	}
 
 	if ctx.Err() != nil {
@@ -1157,6 +1164,16 @@ loop:
 		flusher.Flush()
 		status, code = "error", "upstream_error"
 		detail = streamErr.Error()
+	case !conv.Done():
+		// The upstream closed the connection before workflow_finished
+		// (timeout truncation, mid-stream drop). Some content may already
+		// have been relayed; surface the anomaly as an error frame and log
+		// it as an error instead of a silent success.
+		log.Printf("[ERROR] dify stream (user %d): stream ended before workflow_finished", userID)
+		fmt.Fprint(w, translator.FormatSSEErrorFrame("[Dify] upstream stream ended unexpectedly"))
+		flusher.Flush()
+		status, code = "error", "upstream_stream_cut"
+		detail = "stream ended before workflow_finished"
 	default:
 		for _, msg := range conv.Finalize() {
 			fmt.Fprint(w, msg.Data)
