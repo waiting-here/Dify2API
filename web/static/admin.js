@@ -2494,14 +2494,12 @@ async function onDonationSubmit(e) {
   // site co-admin form has no source-user picker).
   const srcEl = $("#don-source-user");
   const userText = srcEl ? srcEl.value.trim() : "";
-  let sourceUserId = null;
-  if (userText) {
-    const m = userText.match(/^(.*)（([^（）]*)）$/);
-    if (m) {
-      const hit = adminLogUsers.find((u) => u.username === m[1] && u.discord_id === m[2]);
-      if (hit) sourceUserId = hit.id;
-    }
-  }
+  const resolvedSourceUser = userText ? resolveLogUserFilter(userText) : { id: null };
+  const sourceUserId = resolvedSourceUser.id !== null && resolvedSourceUser.id !== undefined
+    ? resolvedSourceUser.id
+    : null;
+  const explicitSourceText = f.source_text.value.trim();
+  const sourceText = explicitSourceText || (userText && sourceUserId === null ? userText : "");
   // Convert datetime-local to unix seconds.
   const deadline = f.deadline.value ? Math.floor(new Date(f.deadline.value).getTime() / 1000) : 0;
   const rpmLimit = parseInt(f.rpm_limit.value, 10) || 0;
@@ -2511,7 +2509,7 @@ async function onDonationSubmit(e) {
     dify_base_url: f.dify_base_url.value.trim(),
     dify_api_key: f.dify_api_key.value.trim(),
     source_user_id: sourceUserId,
-    source_text: f.source_text.value.trim(),
+    source_text: sourceText,
     deadline,
     total_count: parseInt(f.total_count.value, 10),
     rpm_limit: rpmLimit,
