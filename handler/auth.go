@@ -123,7 +123,7 @@ func (g *Gateway) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 	if req.Username != g.Config.Admin.Username || !auth.VerifyPassword(g.Config.Admin.Password, req.Password) {
 		if justLocked := g.loginThrottle.fail(key, now); justLocked {
 			lockUntil := now.Add(g.loginThrottle.lockDur)
-			log.Printf("[AUTH] admin login locked for %s until %v (too many failures)", key, lockUntil)
+			log.Printf("[AUTH] admin login locked for key=%q until %v (too many failures)", key, lockUntil)
 			if g.mailer != nil {
 				g.mailer.AdminLoginLocked(g.clientIP(r), lockUntil)
 			}

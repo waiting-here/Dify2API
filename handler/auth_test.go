@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -536,5 +538,54 @@ func TestAdminLogin_HugeUsernameBoundedInThrottleKey(t *testing.T) {
 		if len(key) > len(prefix)+maxLoginUsernameLen {
 			t.Fatalf("throttle key %d bytes exceeds bound %d", len(key), len(prefix)+maxLoginUsernameLen)
 		}
+	}
+}
+
+func TestAdminLogin_LockLogQuotesControlCharacters(t *testing.T) {
+	for _, username := range []string{
+		"anonymous\rforged",
+		"anonymous\n[AUTH] forged-success",
+		"anonymous\r\nforged",
+		"anonymous\tforged",
+	} {
+		t.Run(fmt.Sprintf("%q", username), func(t *testing.T) {
+			gw, _ := setupAuthGateway(t, "s3cret")
+			mux := http.NewServeMux()
+			gw.RegisterRoutes(mux)
+
+			oldWriter := log.Writer()
+			var logs bytes.Buffer
+			log.SetOutput(&logs)
+			defer log.SetOutput(oldWriter)
+
+			post := func() *httptest.ResponseRecorder {
+				body := fmt.Sprintf(`{"username":%q,"password":"wrong"}`, username)
+				req := httptest.NewRequest(http.MethodPost, "/api/auth/admin/login", strings.NewReader(body))
+				rec := httptest.NewRecorder()
+				mux.ServeHTTP(rec, req)
+				return rec
+			}
+			for i := 0; i < gw.loginThrottle.maxFailures; i++ {
+				if rec := post(); rec.Code != http.StatusUnauthorized && rec.Code != http.StatusForbidden {
+					t.Fatalf("attempt %d: status = %d, want auth failure", i+1, rec.Code)
+				}
+			}
+
+			got := logs.String()
+			if strings.ContainsAny(got, "\r\t") {
+				t.Fatalf("lock log contains raw CR/TAB: %q", got)
+			}
+			if lines := strings.Split(got, "\n"); len(lines) != 2 {
+				t.Fatalf("lock log contains unexpected raw LF/control line: %q", got)
+			}
+			if strings.Contains(got, "\n[AUTH] forged-success") {
+				t.Fatalf("lock log contains forged standalone line: %q", got)
+			}
+			quoted := fmt.Sprintf("%q", username)
+			quoted = quoted[1 : len(quoted)-1]
+			if !strings.Contains(got, quoted) {
+				t.Fatalf("lock log does not contain quoted username %q: %q", quoted, got)
+			}
+		})
 	}
 }
